@@ -4,19 +4,14 @@
 
 #define PIN_DCX    GPIO_PINS_13
 #define PORT_DCX   GPIOC
-
 #define PIN_RESET  GPIO_PINS_14
 #define PORT_RESET GPIOC
-
 #define PIN_SDA    GPIO_PINS_5
 #define PORT_SDA   GPIOB
-
 #define PIN_SCK    GPIO_PINS_3
 #define PORT_SCK   GPIOB
-
 #define PIN_CS     GPIO_PINS_15
 #define PORT_CS    GPIOA
-
 #define PIN_BL     GPIO_PINS_4
 #define PORT_BL    GPIOA
 
@@ -29,7 +24,6 @@ static void gpio_pin_init(gpio_type *port, uint16_t pin)
     crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
     crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
-
     gpio_default_para_init(&g);
     g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
     g.gpio_out_type  = GPIO_OUTPUT_PUSH_PULL;
@@ -61,22 +55,42 @@ static void spi_write_byte(uint8_t data)
     }
 }
 
-static void write_cmd(uint8_t cmd)
+void st7789_write_cmd(uint8_t cmd)
 {
     PIN_CLR(PORT_DCX, PIN_DCX);
     spi_write_byte(cmd);
 }
 
-static void write_data(uint8_t data)
+void st7789_write_data(uint8_t data)
 {
     PIN_SET(PORT_DCX, PIN_DCX);
     spi_write_byte(data);
 }
 
-static void write_data16(uint16_t data)
+void st7789_write_data16(uint16_t data)
 {
-    write_data(data >> 8);
-    write_data(data & 0xFF);
+    st7789_write_data(data >> 8);
+    st7789_write_data(data & 0xFF);
+}
+
+void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
+{
+    st7789_write_cmd(0x2A);
+    st7789_write_data16(x);
+    st7789_write_data16(x + w - 1);
+    st7789_write_cmd(0x2B);
+    st7789_write_data16(y);
+    st7789_write_data16(y + h - 1);
+    st7789_write_cmd(0x2C);
+}
+
+void st7789_start_pixels(void)
+{
+    PIN_SET(PORT_DCX, PIN_DCX);
+}
+
+void st7789_end_pixels(void)
+{
 }
 
 void st7789_init(void)
@@ -96,31 +110,31 @@ void st7789_init(void)
     st7789_reset();
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x01); /* SWRESET */
+    st7789_write_cmd(0x01);
     PIN_SET(PORT_CS, PIN_CS);
     rt880_delay_ms(150);
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x11); /* SLPOUT */
+    st7789_write_cmd(0x11);
     PIN_SET(PORT_CS, PIN_CS);
     rt880_delay_ms(120);
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x3A); /* COLMOD */
-    write_data(0x55);
+    st7789_write_cmd(0x3A);
+    st7789_write_data(0x55);
     PIN_SET(PORT_CS, PIN_CS);
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x36); /* MADCTL */
-    write_data(0x00);
+    st7789_write_cmd(0x36);
+    st7789_write_data(0x00);
     PIN_SET(PORT_CS, PIN_CS);
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x13); /* NORON */
+    st7789_write_cmd(0x13);
     PIN_SET(PORT_CS, PIN_CS);
 
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x29); /* DISPON */
+    st7789_write_cmd(0x29);
     PIN_SET(PORT_CS, PIN_CS);
     rt880_delay_ms(50);
 
@@ -138,27 +152,11 @@ void st7789_reset(void)
 void st7789_flush(uint16_t color)
 {
     PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x2A); /* CASET */
-    write_data16(0);
-    write_data16(ST7789_WIDTH - 1);
-    PIN_SET(PORT_CS, PIN_CS);
-
-    PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x2B); /* RASET */
-    write_data16(0);
-    write_data16(ST7789_HEIGHT - 1);
-    PIN_SET(PORT_CS, PIN_CS);
-
-    PIN_CLR(PORT_CS, PIN_CS);
-    write_cmd(0x2C); /* RAMWR */
-    PIN_SET(PORT_DCX, PIN_DCX);
-
-    uint32_t pixels = (uint32_t)ST7789_WIDTH * ST7789_HEIGHT;
-    for (uint32_t i = 0; i < pixels; i++)
-    {
-        spi_write_byte(color >> 8);
-        spi_write_byte(color & 0xFF);
-    }
-
+    st7789_set_addr_window(0, 0, ST7789_WIDTH, ST7789_HEIGHT);
+    st7789_start_pixels();
+    uint32_t n = (uint32_t)ST7789_WIDTH * ST7789_HEIGHT;
+    for (uint32_t i = 0; i < n; i++)
+        st7789_write_data16(color);
+    st7789_end_pixels();
     PIN_SET(PORT_CS, PIN_CS);
 }
