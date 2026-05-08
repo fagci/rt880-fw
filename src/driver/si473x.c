@@ -164,9 +164,6 @@ void SI47XX_Init(void)
     g.gpio_pins = PIN_SCL | PIN_SDA;
     g.gpio_pull = GPIO_PULL_UP;
     gpio_init(PORT_SCL, &g);
-
-    PIN_SET(PORT_SCL, PIN_SCL);
-    PIN_SET(PORT_SDA, PIN_SDA);
 }
 
 void SI47XX_PowerUp(void)

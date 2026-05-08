@@ -29,6 +29,7 @@ DECLARE_RS(MIC,         0x7D, 0, 0xF, 1);
 
 enum BK4819_REGISTER_t {
     BK4819_REG_00 = 0x00,
+    BK4819_REG_01 = 0x01,
     BK4819_REG_02 = 0x02,
     BK4819_REG_06 = 0x06,
     BK4819_REG_07 = 0x07,

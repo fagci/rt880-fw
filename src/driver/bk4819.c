@@ -29,7 +29,8 @@ static struct {
 
 static void bk_delay(void)
 {
-    __NOP(); __NOP();
+    volatile uint32_t i;
+    for (i = 0; i < 6; i++);
 }
 
 static void gpio_set_output(gpio_type *port, uint16_t pin)
@@ -89,11 +90,12 @@ void BK4819_SelectChip(uint8_t chip)
 static void write_u8(uint8_t data)
 {
     for (int i = 0; i < 8; i++) {
-        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
         if (data & 0x80)
             PIN_SET(g_bk.sda_port, g_bk.sda_pin);
         else
             PIN_CLR(g_bk.sda_port, g_bk.sda_pin);
+        bk_delay();
+        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
         bk_delay();
         PIN_SET(g_bk.sck_port, g_bk.sck_pin);
         bk_delay();
@@ -104,11 +106,12 @@ static void write_u8(uint8_t data)
 static void write_u16(uint16_t data)
 {
     for (int i = 0; i < 16; i++) {
-        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
         if (data & 0x8000)
             PIN_SET(g_bk.sda_port, g_bk.sda_pin);
         else
             PIN_CLR(g_bk.sda_port, g_bk.sda_pin);
+        bk_delay();
+        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
         bk_delay();
         PIN_SET(g_bk.sck_port, g_bk.sck_pin);
         bk_delay();
@@ -121,13 +124,13 @@ static uint16_t read_u16(void)
     sda_input();
     uint16_t v = 0;
     for (int i = 0; i < 16; i++) {
-        v <<= 1;
-        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
-        bk_delay();
-        if (PIN_GET(g_bk.sda_port, g_bk.sda_pin))
-            v |= 1;
         PIN_SET(g_bk.sck_port, g_bk.sck_pin);
         bk_delay();
+        PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+        bk_delay();
+        v <<= 1;
+        if (PIN_GET(g_bk.sda_port, g_bk.sda_pin))
+            v |= 1;
     }
     sda_output();
     return v;
@@ -136,7 +139,7 @@ static uint16_t read_u16(void)
 void BK4819_WriteRegister(uint8_t reg, uint16_t data)
 {
     PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-    PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+    PIN_SET(g_bk.sck_port, g_bk.sck_pin);
     bk_delay();
     PIN_CLR(g_bk.scn_port, g_bk.scn_pin);
     write_u8(reg);
@@ -150,7 +153,7 @@ void BK4819_WriteRegister(uint8_t reg, uint16_t data)
 uint16_t BK4819_ReadRegister(uint8_t reg)
 {
     PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-    PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+    PIN_SET(g_bk.sck_port, g_bk.sck_pin);
     bk_delay();
     PIN_CLR(g_bk.scn_port, g_bk.scn_pin);
     write_u8(reg | 0x80);
@@ -225,12 +228,7 @@ void BK4819_Init(void)
     BK4819_ToggleGpioOut(BK4819_GPIO1_PIN29_PA_ENABLE, false);
     BK4819_SetupPowerAmplifier(0, 0);
 
-    uint32_t timeout = 100000;
-    while (BK4819_ReadRegister(BK4819_REG_0C) & 1U) {
-        BK4819_WriteRegister(BK4819_REG_02, 0);
-        for (volatile uint32_t i = 0; i < 1000; i++);
-        if (--timeout == 0) break;
-    }
+    rt880_delay_ms(10);
     BK4819_WriteRegister(BK4819_REG_3F, 0);
     BK4819_WriteRegister(BK4819_REG_7D, 0xE94F | 10);
     BK4819_DisableDTMF();
@@ -388,12 +386,13 @@ void BK4819_SetupPowerAmplifier(uint8_t power, uint32_t freq)
     if (power == 0) {
         BK4819_WriteRegister(BK4819_REG_36, 0x0000);
         BK4819_WriteRegister(BK4819_REG_37, 0x1F0F);
-        BK4819_WriteRegister(BK4819_REG_30,
-            BK4819_REG_30_ENABLE_RX_LINK |
-            BK4819_REG_30_ENABLE_AF_DAC |
-            BK4819_REG_30_ENABLE_DISC_MODE |
-            BK4819_REG_30_ENABLE_PLL_VCO |
-            BK4819_REG_30_ENABLE_RX_DSP);
+    BK4819_WriteRegister(BK4819_REG_30,
+        BK4819_REG_30_ENABLE_RX_LINK |
+        BK4819_REG_30_ENABLE_AF_DAC |
+        BK4819_REG_30_ENABLE_DISC_MODE |
+        (0xF << 15) |                    /* VCO cal + unknown */
+        BK4819_REG_30_ENABLE_PLL_VCO |
+        BK4819_REG_30_ENABLE_RX_DSP);
     }
 }
 
