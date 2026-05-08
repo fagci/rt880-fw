@@ -7,6 +7,7 @@
 
 #define BK4819_F_MIN 1588000U
 #define BK4819_F_MAX 134000000U
+#define AUTO_GAIN_INDEX 0
 
 typedef enum {
     MOD_FM, MOD_AM, MOD_LSB, MOD_USB, MOD_BYP, MOD_RAW, MOD_WFM
