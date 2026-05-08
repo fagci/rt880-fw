@@ -2,7 +2,6 @@
 #include "board.h"
 #include "at32f423.h"
 
-/* === Pin Definitions === */
 #define PIN_DCX    GPIO_PINS_13
 #define PORT_DCX   GPIOC
 
@@ -21,7 +20,9 @@
 #define PIN_BL     GPIO_PINS_4
 #define PORT_BL    GPIOA
 
-/* === Low-level GPIO helpers === */
+#define PIN_SET(port, pin)   ((port)->scr = (pin))
+#define PIN_CLR(port, pin)   ((port)->clr = (pin))
+
 static void gpio_pin_init(gpio_type *port, uint16_t pin)
 {
     gpio_init_type g;
@@ -38,8 +39,11 @@ static void gpio_pin_init(gpio_type *port, uint16_t pin)
     gpio_init(port, &g);
 }
 
-#define PIN_SET(port, pin)   ((port)->scr = (pin))
-#define PIN_CLR(port, pin)   ((port)->clr = (pin))
+static void delay_cycle(void)
+{
+    __NOP(); __NOP(); __NOP(); __NOP();
+    __NOP(); __NOP(); __NOP(); __NOP();
+}
 
 static void spi_write_byte(uint8_t data)
 {
@@ -50,48 +54,31 @@ static void spi_write_byte(uint8_t data)
             PIN_SET(PORT_SDA, PIN_SDA);
         else
             PIN_CLR(PORT_SDA, PIN_SDA);
-        __NOP();
+        delay_cycle();
         PIN_SET(PORT_SCK, PIN_SCK);
-        __NOP();
+        delay_cycle();
         data <<= 1;
     }
 }
 
-static void send_cmd(uint8_t cmd)
+static void write_cmd(uint8_t cmd)
 {
     PIN_CLR(PORT_DCX, PIN_DCX);
-    PIN_CLR(PORT_CS, PIN_CS);
     spi_write_byte(cmd);
-    PIN_SET(PORT_CS, PIN_CS);
 }
 
-static void send_data(uint8_t data)
+static void write_data(uint8_t data)
 {
     PIN_SET(PORT_DCX, PIN_DCX);
-    PIN_CLR(PORT_CS, PIN_CS);
     spi_write_byte(data);
-    PIN_SET(PORT_CS, PIN_CS);
 }
 
-static void send_data16(uint16_t data)
+static void write_data16(uint16_t data)
 {
-    send_data(data >> 8);
-    send_data(data & 0xFF);
+    write_data(data >> 8);
+    write_data(data & 0xFF);
 }
 
-/* === ST7789 Commands === */
-#define SWRESET   0x01
-#define SLPOUT    0x11
-#define NORON     0x13
-#define INVOFF    0x20
-#define DISPON    0x29
-#define CASET     0x2A
-#define RASET     0x2B
-#define RAMWR     0x2C
-#define COLMOD    0x3A
-#define MADCTL    0x36
-
-/* === Public API === */
 void st7789_init(void)
 {
     gpio_pin_init(PORT_DCX, PIN_DCX);
@@ -101,25 +88,42 @@ void st7789_init(void)
     gpio_pin_init(PORT_CS, PIN_CS);
     gpio_pin_init(PORT_BL, PIN_BL);
 
+    PIN_SET(PORT_CS, PIN_CS);
+    PIN_SET(PORT_DCX, PIN_DCX);
+    PIN_SET(PORT_RESET, PIN_RESET);
+    PIN_CLR(PORT_BL, PIN_BL);
+
     st7789_reset();
 
-    send_cmd(SLPOUT);
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x01); /* SWRESET */
+    PIN_SET(PORT_CS, PIN_CS);
+    rt880_delay_ms(150);
+
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x11); /* SLPOUT */
+    PIN_SET(PORT_CS, PIN_CS);
     rt880_delay_ms(120);
 
-    send_cmd(COLMOD);
-    send_data(0x55); /* 16-bit color */
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x3A); /* COLMOD */
+    write_data(0x55);
+    PIN_SET(PORT_CS, PIN_CS);
 
-    send_cmd(MADCTL);
-    send_data(0x00);
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x36); /* MADCTL */
+    write_data(0x00);
+    PIN_SET(PORT_CS, PIN_CS);
 
-    send_cmd(INVOFF);
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x13); /* NORON */
+    PIN_SET(PORT_CS, PIN_CS);
 
-    send_cmd(NORON);
-
-    send_cmd(DISPON);
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x29); /* DISPON */
+    PIN_SET(PORT_CS, PIN_CS);
     rt880_delay_ms(50);
 
-    /* backlight on */
     PIN_SET(PORT_BL, PIN_BL);
 }
 
@@ -133,17 +137,21 @@ void st7789_reset(void)
 
 void st7789_flush(uint16_t color)
 {
-    send_cmd(CASET);
-    send_data16(0);
-    send_data16(ST7789_WIDTH - 1);
-
-    send_cmd(RASET);
-    send_data16(0);
-    send_data16(ST7789_HEIGHT - 1);
-
-    send_cmd(RAMWR);
-    PIN_SET(PORT_DCX, PIN_DCX);
     PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x2A); /* CASET */
+    write_data16(0);
+    write_data16(ST7789_WIDTH - 1);
+    PIN_SET(PORT_CS, PIN_CS);
+
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x2B); /* RASET */
+    write_data16(0);
+    write_data16(ST7789_HEIGHT - 1);
+    PIN_SET(PORT_CS, PIN_CS);
+
+    PIN_CLR(PORT_CS, PIN_CS);
+    write_cmd(0x2C); /* RAMWR */
+    PIN_SET(PORT_DCX, PIN_DCX);
 
     uint32_t pixels = (uint32_t)ST7789_WIDTH * ST7789_HEIGHT;
     for (uint32_t i = 0; i < pixels; i++)

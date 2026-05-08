@@ -13,7 +13,6 @@ int main(void)
 
     while (1)
     {
-        rt880_led_toggle();
-        rt880_delay_ms(500);
+        __WFI();
     }
 }
