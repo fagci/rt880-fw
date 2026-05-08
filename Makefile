@@ -24,16 +24,14 @@ ASFLAGS := $(MCUFLAGS) -x assembler-with-cpp -g3 $(C_DEFS) $(C_INCLUDES)
 LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs --specs=nosys.specs
 LIBS := -lc -lm -lnosys
 
-SRCS_C := \
-  src/main.c \
-  src/driver/board.c \
-  src/external/cmsis/cm4/device_support/system_at32f423.c \
-  src/external/drivers/src/at32f423_crm.c \
-  src/external/drivers/src/at32f423_gpio.c \
-  src/external/drivers/src/at32f423_misc.c
+SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
+  -o -name '*.c' -path '*/external/drivers/src/at32f423_gpio.c' \
+  -o -name '*.c' -path '*/external/drivers/src/at32f423_crm.c' \
+  -o -name '*.c' -path '*/external/drivers/src/at32f423_misc.c' \
+  -o -name '*.c' -path '*/external/cmsis/cm4/device_support/system_at32f423.c' \
+  | sort)
 
-SRCS_S := \
-  src/helper/startup_at32f423.s
+SRCS_S := $(shell find src -name '*.s' ! -path '*/external/*' | sort)
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C)) \
         $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S))
