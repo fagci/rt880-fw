@@ -7,11 +7,11 @@
 static void setup_bk(uint8_t chip, uint32_t freq) {
   BK4819_SelectChip(chip);
   BK4819_Init();
-  BK4819_SetModulation(MOD_FM);
-  BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
-  BK4819_SetAGC(true, 0);
-  BK4819_TuneTo(freq, true);
   BK4819_RX_TurnOn();
+
+  BK4819_SetAFC(0);
+  BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
+  BK4819_TuneTo(freq, true);
 }
 
 void Spectrum_DrawBars(int x0, int y_bottom, int bar_w, int gap, int count,
@@ -45,7 +45,6 @@ void testScan(void) {
   BK4819_RX_TurnOn();
 
   BK4819_SetAFC(0);
-  // BK4819_SetAGC(true, 1);
   BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
 
   uint32_t stp = 25 * KHZ;
@@ -98,6 +97,8 @@ void testScan(void) {
     uint32_t peakFreq = s + (uint32_t)peakX * stp;
     PrintfEx(LCD_WIDTH - 1, 14, POS_R, C_BLUE, "%ddBm %u.%03uM", peakDBm,
              peakFreq / MHZ, (peakFreq % MHZ) / KHZ);
+    setup_bk(1, peakFreq);
+    BK4819_SelectChip(0);
   }
 }
 
@@ -115,7 +116,7 @@ int main(void) {
 
   // setup_bk(0, 17230000);
 
-  rt880_audio_path_set(0);
+  rt880_audio_path_set(1);
   AF_MUTE_PORT->scr = AF_MUTE_PIN;
 
   // rt880_ant_sw(true);
