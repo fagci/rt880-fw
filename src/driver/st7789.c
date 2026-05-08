@@ -33,54 +33,24 @@ static void gpio_pin_init(gpio_type *port, uint16_t pin)
     gpio_init(port, &g);
 }
 
-static void spi_hw_init(void)
-{
-    crm_periph_clock_enable(CRM_SPI1_PERIPH_CLOCK, TRUE);
-
-    gpio_init_type g;
-    gpio_default_para_init(&g);
-    g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-
-    /* PB3 = SPI1_SCK, PB5 = SPI1_MOSI — alternate function push-pull */
-    g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-    g.gpio_mode = GPIO_MODE_MUX;
-    g.gpio_pins = GPIO_PINS_3 | GPIO_PINS_5;
-    g.gpio_pull = GPIO_PULL_NONE;
-    gpio_init(GPIOB, &g);
-    gpio_pin_mux_config(GPIOB, GPIO_PINS_SOURCE3, GPIO_MUX_1);
-    gpio_pin_mux_config(GPIOB, GPIO_PINS_SOURCE5, GPIO_MUX_1);
-
-    spi_init_type s;
-    spi_default_para_init(&s);
-    s.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
-    s.master_slave_mode = SPI_MODE_MASTER;
-    s.mclk_freq_division = SPI_MCLK_DIV_4;
-    s.first_bit_transmission = SPI_FIRST_BIT_MSB;
-    s.frame_bit_num = SPI_FRAME_8BIT;
-    s.clock_polarity = SPI_CLOCK_POLARITY_LOW;
-    s.clock_phase = SPI_CLOCK_PHASE_1EDGE;
-    s.cs_mode_selection = SPI_CS_SOFTWARE_MODE;
-    spi_init(SPI1, &s);
-    spi_enable(SPI1, TRUE);
-}
-
 static void spi_write_byte(uint8_t data)
 {
-    while (spi_i2s_flag_get(SPI1, SPI_I2S_RDBF_FLAG) == RESET);
-    spi_i2s_data_transmit(SPI1, data);
-    while (spi_i2s_flag_get(SPI1, SPI_I2S_RDBF_FLAG) == RESET);
-    spi_i2s_data_receive(SPI1);
+    for (int i = 0; i < 8; i++)
+    {
+        PIN_CLR(PORT_SCK, PIN_SCK);
+        if (data & 0x80)
+            PIN_SET(PORT_SDA, PIN_SDA);
+        else
+            PIN_CLR(PORT_SDA, PIN_SDA);
+        __NOP(); __NOP();
+        PIN_SET(PORT_SCK, PIN_SCK);
+        __NOP(); __NOP();
+        data <<= 1;
+    }
 }
 
-void st7789_cs_low(void)
-{
-    PIN_CLR(PORT_CS, PIN_CS);
-}
-
-void st7789_cs_high(void)
-{
-    PIN_SET(PORT_CS, PIN_CS);
-}
+void st7789_cs_low(void)  { PIN_CLR(PORT_CS, PIN_CS); }
+void st7789_cs_high(void) { PIN_SET(PORT_CS, PIN_CS); }
 
 void st7789_write_cmd(uint8_t cmd)
 {
@@ -120,10 +90,10 @@ void st7789_init(void)
 {
     gpio_pin_init(PORT_DCX, PIN_DCX);
     gpio_pin_init(PORT_RESET, PIN_RESET);
+    gpio_pin_init(PORT_SDA, PIN_SDA);
+    gpio_pin_init(PORT_SCK, PIN_SCK);
     gpio_pin_init(PORT_CS, PIN_CS);
     gpio_pin_init(PORT_BL, PIN_BL);
-
-    spi_hw_init();
 
     st7789_cs_high();
     PIN_SET(PORT_DCX, PIN_DCX);
