@@ -233,8 +233,16 @@ void st7789_init(void) {
   rt880_delay_ms(50);
 }
 
-void st7789_flush(uint16_t color) {
-  uint32_t left = (uint32_t)ST7789_WIDTH * ST7789_HEIGHT;
+void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                          uint16_t color) {
+  if (x >= ST7789_WIDTH || y >= ST7789_HEIGHT || w == 0 || h == 0)
+    return;
+  if (x + w > ST7789_WIDTH)
+    w = ST7789_WIDTH - x;
+  if (y + h > ST7789_HEIGHT)
+    h = ST7789_HEIGHT - y;
+
+  uint32_t left = (uint32_t)w * h;
 
   for (uint32_t i = 0; i < ST7789_DMA_PIXELS_PER_CHUNK; i++) {
     st7789_dma_buf[i * 2 + 0] = (uint8_t)(color >> 8);
@@ -244,12 +252,12 @@ void st7789_flush(uint16_t color) {
   st7789_cs_low();
 
   st7789_write_cmd(0x2A);
-  st7789_write_data16(0);
-  st7789_write_data16(ST7789_WIDTH - 1);
+  st7789_write_data16(x);
+  st7789_write_data16(x + w - 1);
 
   st7789_write_cmd(0x2B);
-  st7789_write_data16(0);
-  st7789_write_data16(ST7789_HEIGHT - 1);
+  st7789_write_data16(y);
+  st7789_write_data16(y + h - 1);
 
   st7789_write_cmd(0x2C);
   PIN_SET(PORT_DCX, PIN_DCX);
@@ -263,4 +271,8 @@ void st7789_flush(uint16_t color) {
   }
 
   st7789_cs_high();
+}
+
+void st7789_flush(uint16_t color) {
+  st7789_fill_rect_dma(0, 0, ST7789_WIDTH, ST7789_HEIGHT, color);
 }

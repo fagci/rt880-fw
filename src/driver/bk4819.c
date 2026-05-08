@@ -169,13 +169,8 @@ static uint32_t gLastFrequency = 0;
 static ModulationType gLastModulation = 255;
 
 static const uint16_t MOD_TYPE_REG47_VALUES[] = {
-    [MOD_FM]  = 0,
-    [MOD_AM]  = 4,
-    [MOD_LSB] = 3,
-    [MOD_USB] = 3,
-    [MOD_BYP] = 8,
-    [MOD_RAW] = 5,
-    [MOD_WFM] = 0,
+    [MOD_FM] = 0,  [MOD_AM] = 4,  [MOD_LSB] = 3, [MOD_USB] = 3,
+    [MOD_BYP] = 8, [MOD_RAW] = 5, [MOD_WFM] = 0,
 };
 
 static const uint8_t sqTypeValues[4] = {0x88, 0xAA, 0xCC, 0xFF};
@@ -207,7 +202,7 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_00, 0x0000);
   BK4819_WriteRegister(BK4819_REG_37, 0x1D0F);
 
-  gGpioOutState = 0b111111;
+  gGpioOutState = 1 << 4;
   BK4819_WriteRegister(BK4819_REG_33, gGpioOutState);
 
   BK4819_SetupPowerAmplifier(0, 0);
@@ -224,7 +219,7 @@ void BK4819_Init(void) {
     BK4819_WriteRegister(0x09, (i << 12) | DTMF_COEFFS[i]);
 
   BK4819_WriteRegister(BK4819_REG_48,
-    (11u << 12) | (0 << 10) | (58 << 4) | (8 << 0));
+                       (11u << 12) | (0 << 10) | (58 << 4) | (8 << 0));
 
   rt880_delay_ms(10);
   BK4819_WriteRegister(BK4819_REG_3F, 0);
@@ -243,9 +238,9 @@ void BK4819_SetAGC(bool useDefault, uint8_t gainIndex) {
   const bool enableAgc = (gainIndex == AUTO_GAIN_INDEX);
   uint16_t regVal = BK4819_ReadRegister(BK4819_REG_7E);
 
-  BK4819_WriteRegister(BK4819_REG_7E,
-    (regVal & ~(1 << 15) & ~(0b111 << 12)) |
-      (!enableAgc << 15) | (3u << 12) | (5u << 3) | (6u << 0));
+  BK4819_WriteRegister(BK4819_REG_7E, (regVal & ~(1 << 15) & ~(0b111 << 12)) |
+                                          (!enableAgc << 15) | (3u << 12) |
+                                          (5u << 3) | (6u << 0));
 
   if (enableAgc)
     BK4819_WriteRegister(BK4819_REG_13, 0x03BE);
@@ -300,12 +295,12 @@ void BK4819_RX_TurnOn(void) {
   BK4819_WriteRegister(BK4819_REG_30, 0x0200);
 
   BK4819_WriteRegister(
-    BK4819_REG_30,
-    BK4819_REG_30_ENABLE_VCO_CALIB | BK4819_REG_30_DISABLE_UNKNOWN |
-      BK4819_REG_30_ENABLE_RX_LINK | BK4819_REG_30_ENABLE_AF_DAC |
-      BK4819_REG_30_ENABLE_DISC_MODE | BK4819_REG_30_ENABLE_PLL_VCO |
-      BK4819_REG_30_DISABLE_PA_GAIN | BK4819_REG_30_DISABLE_MIC_ADC |
-      BK4819_REG_30_DISABLE_TX_DSP | BK4819_REG_30_ENABLE_RX_DSP);
+      BK4819_REG_30,
+      BK4819_REG_30_ENABLE_VCO_CALIB | BK4819_REG_30_DISABLE_UNKNOWN |
+          BK4819_REG_30_ENABLE_RX_LINK | BK4819_REG_30_ENABLE_AF_DAC |
+          BK4819_REG_30_ENABLE_DISC_MODE | BK4819_REG_30_ENABLE_PLL_VCO |
+          BK4819_REG_30_DISABLE_PA_GAIN | BK4819_REG_30_DISABLE_MIC_ADC |
+          BK4819_REG_30_DISABLE_TX_DSP | BK4819_REG_30_ENABLE_RX_DSP);
 }
 
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
@@ -348,7 +343,8 @@ void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
 }
 
 void BK4819_SetModulation(ModulationType mod) {
-  BK4819_WriteRegister(BK4819_REG_47, 0x6040 | (MOD_TYPE_REG47_VALUES[mod] << 8));
+  BK4819_WriteRegister(BK4819_REG_47,
+                       0x6040 | (MOD_TYPE_REG47_VALUES[mod] << 8));
 }
 
 void BK4819_SquelchType(SquelchType t) {
