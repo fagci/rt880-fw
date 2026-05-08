@@ -9,6 +9,15 @@
 #define RT880_LED_PORT          GPIOA
 #define RT880_LED_CRM_CLK       CRM_GPIOA_PERIPH_CLOCK
 
+#define AF_MUTE_PIN    GPIO_PINS_8
+#define AF_MUTE_PORT   GPIOF
+#define ANC_PWR_PIN    GPIO_PINS_3
+#define ANC_PWR_PORT   GPIOC
+#define AUDIO_PWR_PIN  GPIO_PINS_4
+#define AUDIO_PWR_PORT GPIOC
+#define FM_PWR_PIN     GPIO_PINS_5
+#define FM_PWR_PORT    GPIOC
+
 void rt880_led_init(void);
 void rt880_led_on(void);
 void rt880_led_off(void);
@@ -16,5 +25,8 @@ void rt880_led_toggle(void);
 
 void rt880_delay_init(void);
 void rt880_delay_ms(uint32_t ms);
+
+void rt880_audio_init(void);
+void rt880_audio_path_set(uint8_t source); /* 0=BK1, 1=BK2 */
 
 #endif

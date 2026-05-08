@@ -4,15 +4,15 @@ static uint32_t fac_ms;
 
 static void gpio_output_init(gpio_type *port, uint16_t pin, crm_periph_clock_type clk)
 {
-    gpio_init_type gpio_init_struct;
+    gpio_init_type g;
     crm_periph_clock_enable(clk, TRUE);
-    gpio_default_para_init(&gpio_init_struct);
-    gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-    gpio_init_struct.gpio_out_type  = GPIO_OUTPUT_PUSH_PULL;
-    gpio_init_struct.gpio_mode = GPIO_MODE_OUTPUT;
-    gpio_init_struct.gpio_pins = pin;
-    gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
-    gpio_init(port, &gpio_init_struct);
+    gpio_default_para_init(&g);
+    g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+    g.gpio_out_type  = GPIO_OUTPUT_PUSH_PULL;
+    g.gpio_mode = GPIO_MODE_OUTPUT;
+    g.gpio_pins = pin;
+    g.gpio_pull = GPIO_PULL_NONE;
+    gpio_init(port, &g);
 }
 
 void rt880_led_init(void)
@@ -55,4 +55,26 @@ void rt880_delay_ms(uint32_t ms)
     } while ((temp & 0x01) && !(temp & (1 << 16)));
     SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
     SysTick->VAL = 0x00;
+}
+
+void rt880_audio_init(void)
+{
+    gpio_output_init(AF_MUTE_PORT, AF_MUTE_PIN, CRM_GPIOF_PERIPH_CLOCK);
+    gpio_output_init(ANC_PWR_PORT, ANC_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
+    gpio_output_init(AUDIO_PWR_PORT, AUDIO_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
+    gpio_output_init(FM_PWR_PORT, FM_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
+
+    AF_MUTE_PORT->clr = AF_MUTE_PIN;
+    ANC_PWR_PORT->clr = ANC_PWR_PIN;
+    AUDIO_PWR_PORT->clr = AUDIO_PWR_PIN;
+    FM_PWR_PORT->clr = FM_PWR_PIN;
+}
+
+void rt880_audio_path_set(uint8_t source)
+{
+    if (source == 0) {
+        ANC_PWR_PORT->clr = ANC_PWR_PIN;
+    } else {
+        ANC_PWR_PORT->scr = ANC_PWR_PIN;
+    }
 }

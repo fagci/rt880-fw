@@ -222,7 +222,7 @@ void BK4819_Init(void)
     BK4819_WriteRegister(BK4819_REG_1F, 0x5454);
     BK4819_WriteRegister(BK4819_REG_3E, 0xA037);
     gGpioOutState = 0x9000;
-    BK4819_WriteRegister(BK4819_REG_33, 0x9000);
+    BK4819_WriteRegister(BK4819_REG_33, 0x9001);
     BK4819_WriteRegister(BK4819_REG_3F, 0);
 
     BK4819_ToggleGpioOut(BK4819_GPIO1_PIN29_PA_ENABLE, false);

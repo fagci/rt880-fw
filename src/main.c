@@ -4,44 +4,62 @@
 #include "driver/bk4819.h"
 #include "ui/graphics.h"
 
+static void setup_bk(uint8_t chip, uint32_t freq)
+{
+    BK4819_SelectChip(chip);
+    BK4819_Init();
+    BK4819_SetModulation(MOD_FM);
+    BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
+    BK4819_SetAGC(true, 0);
+    BK4819_TuneTo(freq, true);
+    BK4819_RX_TurnOn();
+    BK4819_ToggleAFDAC(true);
+    BK4819_ToggleAFBit(true);
+    BK4819_WriteRegister(0x31, BK4819_ReadRegister(0x31) | 3);
+}
+
 int main(void)
 {
     rt880_led_init();
     rt880_delay_init();
+    rt880_audio_init();
 
     st7789_init();
     UI_ClearScreen(C_BLACK);
 
-    BK4819_SelectChip(0);
-    BK4819_Init();
+    setup_bk(0, 17230000);
+    setup_bk(1, 44600000);
 
-    uint16_t id0 = BK4819_ReadRegister(0);
-    uint16_t id1 = BK4819_ReadRegister(1);
+    rt880_audio_path_set(0);
+    AF_MUTE_PORT->scr = AF_MUTE_PIN;
+    AUDIO_PWR_PORT->scr = AUDIO_PWR_PIN;
+    FM_PWR_PORT->scr = FM_PWR_PIN;
 
-    BK4819_WriteRegister(0x02, 0x5AA5);
-    uint16_t rb02 = BK4819_ReadRegister(0x02);
-
-    uint32_t wanted = 17230000;
-    BK4819_WriteRegister(0x38, wanted & 0xFFFF);
-    BK4819_WriteRegister(0x39, (wanted >> 16) & 0xFFFF);
-
-    uint32_t rbl = BK4819_ReadRegister(0x38);
-    uint32_t rbh = BK4819_ReadRegister(0x39);
-    uint32_t rb_freq = (rbh << 16) | rbl;
-
-    uint16_t rb38b = BK4819_ReadRegister(0x38);
-    uint16_t rb39b = BK4819_ReadRegister(0x39);
-
-    PrintfEx(5, 10, POS_L, C_WHITE, "REG00: 0x%04X  REG01: 0x%04X", id0, id1);
-    PrintfEx(5, 25, POS_L, C_WHITE, "Wrote 0x5AA5 to REG02");
-    PrintfEx(5, 35, POS_L, C_YELLOW, "Read REG02: 0x%04X", rb02);
-
-    PrintfEx(5, 50, POS_L, C_CYAN, "Wrote 17230000 to 38/39");
-    PrintfEx(5, 60, POS_L, C_CYAN, "Read  38:0x%04X 39:0x%04X", rb38b, rb39b);
-    PrintfEx(5, 70, POS_L, C_GREEN, "Readback: %u", rb_freq);
+    PrintfEx(5, 10, POS_L, C_WHITE, "BK1: 172.300 MHz");
+    PrintfEx(5, 25, POS_L, C_WHITE, "BK2: 446.000 MHz");
+    PrintfEx(5, 40, POS_L, C_CYAN, "Audio: BK1");
 
     while (1)
     {
-        rt880_delay_ms(1000);
+        BK4819_SelectChip(0);
+        uint16_t r1 = BK4819_GetRSSI();
+        uint16_t s1 = BK4819_GetSNR();
+
+        BK4819_SelectChip(1);
+        uint16_t r2 = BK4819_GetRSSI();
+        uint16_t s2 = BK4819_GetSNR();
+
+        PrintfEx(230, 10, POS_R, C_YELLOW, "RSSI:%3u SNR:%3u", r1, s1);
+        PrintfEx(230, 25, POS_R, C_YELLOW, "RSSI:%3u SNR:%3u", r2, s2);
+
+        uint16_t bar1 = (r1 * 150) / 255;
+        if (bar1 > 150) bar1 = 150;
+        if (r1 > 5) FillRect(5, 55, bar1, 6, C_GREEN);
+
+        uint16_t bar2 = (r2 * 150) / 255;
+        if (bar2 > 150) bar2 = 150;
+        if (r2 > 5) FillRect(5, 70, bar2, 6, C_GREEN);
+
+        rt880_delay_ms(100);
     }
 }
