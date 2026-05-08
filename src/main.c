@@ -39,8 +39,9 @@ void Spectrum_DrawBars(int x0, int y_bottom, int bar_w, int gap, int count,
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
 void testScan(void) {
+  BK4819_SelectChip(0);
   BK4819_Init();
-  BK4819_ToggleGpioOut(BK4819_GPIO0_PIN28_RX_ENABLE, true);
+  // BK4819_ToggleGpioOut(BK4819_GPIO0_PIN28_RX_ENABLE, true);
   BK4819_RX_TurnOn();
 
   BK4819_SetAFC(0);
@@ -111,12 +112,14 @@ int main(void) {
   st7789_backlight_on();
 
   // AUDIO_PWR_PORT->scr = AUDIO_PWR_PIN;
-  FM_PWR_PORT->scr = FM_PWR_PIN;
+  // FM_PWR_PORT->scr = FM_PWR_PIN;
 
-  setup_bk(0, 17230000);
+  // setup_bk(0, 17230000);
 
   rt880_audio_path_set(0);
   AF_MUTE_PORT->scr = AF_MUTE_PIN;
+
+  // rt880_ant_sw(true);
 
   testScan();
 }
