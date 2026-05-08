@@ -12,8 +12,6 @@ static void setup_bk(uint8_t chip, uint32_t freq) {
   BK4819_SetAGC(true, 0);
   BK4819_TuneTo(freq, true);
   BK4819_RX_TurnOn();
-  BK4819_ToggleAFDAC(true);
-  BK4819_ToggleAFBit(true);
 }
 
 void Spectrum_DrawBars(int x0, int y_bottom, int bar_w, int gap, int count,
@@ -38,14 +36,16 @@ void Spectrum_DrawBars(int x0, int y_bottom, int bar_w, int gap, int count,
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
 
+#define START_Y 16
+#define END_Y LCD_HEIGHT / 4
+
 void testScan(void) {
   BK4819_SelectChip(0);
   BK4819_Init();
-  // BK4819_ToggleGpioOut(BK4819_GPIO0_PIN28_RX_ENABLE, true);
   BK4819_RX_TurnOn();
 
   BK4819_SetAFC(0);
-  BK4819_SetAGC(true, 1);
+  // BK4819_SetAGC(true, 1);
   BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
 
   uint32_t stp = 25 * KHZ;
@@ -61,7 +61,7 @@ void testScan(void) {
   UI_ClearScreen(C_BLACK);
 
   for (uint8_t g = 0; g < ARRAY_SIZE(kGrid); g++) {
-    int16_t gy = ConvertDomain(kGrid[g], -140, -50, LCD_HEIGHT, 8);
+    int16_t gy = ConvertDomain(kGrid[g], -140, -50, END_Y, START_Y);
     Printf(0, gy, "%d", kGrid[g]);
   }
 
@@ -81,17 +81,16 @@ void testScan(void) {
       i++;
     }
 
-    FillRect(0, 0, LCD_WIDTH, LCD_HEIGHT,
-             C_BLACK); // временно так, но лучше не весь экран
+    FillRect(0, 0, LCD_WIDTH, END_Y, C_BLACK);
     for (uint8_t g = 0; g < ARRAY_SIZE(kGrid); g++) {
-      int16_t gy = ConvertDomain(kGrid[g], -140, -50, LCD_HEIGHT, 8);
+      int16_t gy = ConvertDomain(kGrid[g], -140, -50, END_Y, START_Y);
       Printf(0, gy, "%d", kGrid[g]);
     }
 
     for (uint8_t x = 0; x < LCD_WIDTH; x++) {
       int16_t dBm = Rssi2DBm(v[x]);
-      uint32_t y = ConvertDomain(dBm, -140, -50, LCD_HEIGHT, 8);
-      DrawVLine(x, y, LCD_HEIGHT - y, C_YELLOW);
+      uint32_t y = ConvertDomain(dBm, -140, -50, END_Y, START_Y);
+      DrawVLine(x, y, END_Y - y, C_YELLOW);
     }
 
     FillRect(120, 0, 120, 16, C_BLACK);

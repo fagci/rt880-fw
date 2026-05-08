@@ -304,42 +304,25 @@ void BK4819_RX_TurnOn(void) {
 }
 
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
-  uint16_t val;
-  switch (bw) {
-  case BK4819_FILTER_BW_6k:
-    val = 0x2B1;
-    break;
-  case BK4819_FILTER_BW_7k:
-    val = 0x280;
-    break;
-  case BK4819_FILTER_BW_9k:
-    val = 0x24B;
-    break;
-  case BK4819_FILTER_BW_10k:
-    val = 0x210;
-    break;
-  case BK4819_FILTER_BW_12k:
-    val = 0x1B6;
-    break;
-  case BK4819_FILTER_BW_14k:
-    val = 0x173;
-    break;
-  case BK4819_FILTER_BW_17k:
-    val = 0x136;
-    break;
-  case BK4819_FILTER_BW_20k:
-    val = 0x100;
-    break;
-  case BK4819_FILTER_BW_23k:
-    val = 0x0E5;
-    break;
-  case BK4819_FILTER_BW_26k:
-    val = 0x0C6;
-    break;
-  default:
+  if (bw > 9)
     return;
-  }
-  BK4819_WriteRegister(BK4819_REG_43, val);
+
+  static const uint8_t rf[] = {0, 1, 1, 3, 1, 2, 3, 4, 5, 7};
+  static const uint8_t wb[] = {0, 0, 1, 2, 1, 2, 2, 3, 4, 6};
+  static const uint8_t af[] = {1, 2, 0, 3, 0, 0, 7, 6, 5, 4};
+  static const uint8_t bs[] = {1, 1, 0, 0, 2, 2, 2, 2, 2, 2};
+
+  const uint16_t value = //
+      (0u << 15)         //
+      | (rf[bw] << 12)   //
+      | (wb[bw] << 9)    // weak
+      | (af[bw] << 6)    //
+      | (bs[bw] << 4)    //
+      | (1u << 3)        //
+      | (0u << 2)        //
+      | (0u << 0);       //
+
+  BK4819_WriteRegister(BK4819_REG_43, value);
 }
 
 void BK4819_SetModulation(ModulationType mod) {
