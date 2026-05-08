@@ -137,6 +137,10 @@ static void spi1_tx_dma(const uint8_t *buf, uint16_t len) {
     ;
 }
 
+void st7789_backlight_off() { PIN_CLR(PORT_BL, PIN_BL); }
+
+void st7789_backlight_on() { PIN_SET(PORT_BL, PIN_BL); }
+
 void st7789_cs_low(void) { PIN_CLR(PORT_CS, PIN_CS); }
 
 void st7789_cs_high(void) { PIN_SET(PORT_CS, PIN_CS); }
@@ -195,7 +199,7 @@ void st7789_init(void) {
   st7789_cs_high();
   PIN_SET(PORT_DCX, PIN_DCX);
   PIN_SET(PORT_RESET, PIN_RESET);
-  PIN_CLR(PORT_BL, PIN_BL);
+  st7789_backlight_off();
 
   st7789_reset();
 
@@ -227,8 +231,6 @@ void st7789_init(void) {
   st7789_write_cmd(0x29);
   st7789_cs_high();
   rt880_delay_ms(50);
-
-  PIN_SET(PORT_BL, PIN_BL);
 }
 
 void st7789_flush(uint16_t color) {

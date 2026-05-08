@@ -20,9 +20,10 @@ int main(void) {
   rt880_led_init();
   rt880_delay_init();
   rt880_audio_init();
-
   st7789_init();
+
   UI_ClearScreen(C_BLACK);
+  st7789_backlight_on();
 
   // AUDIO_PWR_PORT->scr = AUDIO_PWR_PIN;
   // FM_PWR_PORT->scr = FM_PWR_PIN;
