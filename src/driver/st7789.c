@@ -126,7 +126,7 @@ void st7789_init(void)
 
     PIN_CLR(PORT_CS, PIN_CS);
     st7789_write_cmd(0x36);
-    st7789_write_data(0x00);
+    st7789_write_data(0x08); /* MADCTL: BGR */
     PIN_SET(PORT_CS, PIN_CS);
 
     PIN_CLR(PORT_CS, PIN_CS);
