@@ -1,4 +1,4 @@
-#include "rt880_board.h"
+#include "board.h"
 
 static uint32_t fac_ms;
 

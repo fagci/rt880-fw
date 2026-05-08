@@ -26,7 +26,7 @@ LIBS := -lc -lm -lnosys
 
 SRCS_C := \
   src/main.c \
-  src/driver/rt880_board.c \
+  src/driver/board.c \
   src/external/cmsis/cm4/device_support/system_at32f423.c \
   src/external/drivers/src/at32f423_crm.c \
   src/external/drivers/src/at32f423_gpio.c \

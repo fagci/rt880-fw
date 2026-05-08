@@ -1,5 +1,5 @@
 #include "at32f423.h"
-#include "rt880_board.h"
+#include "driver/board.h"
 
 int main(void)
 {
