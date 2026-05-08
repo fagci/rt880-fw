@@ -44,15 +44,23 @@ static void spi_write_byte(uint8_t data)
     for (int i = 0; i < 8; i++)
     {
         PIN_CLR(PORT_SCK, PIN_SCK);
-        if (data & 0x80)
-            PIN_SET(PORT_SDA, PIN_SDA);
-        else
-            PIN_CLR(PORT_SDA, PIN_SDA);
+        if (data & 0x80) PIN_SET(PORT_SDA, PIN_SDA);
+        else             PIN_CLR(PORT_SDA, PIN_SDA);
         delay_cycle();
         PIN_SET(PORT_SCK, PIN_SCK);
         delay_cycle();
         data <<= 1;
     }
+}
+
+void st7789_cs_low(void)
+{
+    PIN_CLR(PORT_CS, PIN_CS);
+}
+
+void st7789_cs_high(void)
+{
+    PIN_SET(PORT_CS, PIN_CS);
 }
 
 void st7789_write_cmd(uint8_t cmd)
@@ -75,6 +83,7 @@ void st7789_write_data16(uint16_t data)
 
 void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
 {
+    st7789_cs_low();
     st7789_write_cmd(0x2A);
     st7789_write_data16(x);
     st7789_write_data16(x + w - 1);
@@ -82,16 +91,11 @@ void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h)
     st7789_write_data16(y);
     st7789_write_data16(y + h - 1);
     st7789_write_cmd(0x2C);
+    st7789_cs_high();
 }
 
-void st7789_start_pixels(void)
-{
-    PIN_SET(PORT_DCX, PIN_DCX);
-}
-
-void st7789_end_pixels(void)
-{
-}
+void st7789_start_pixels(void) {}
+void st7789_end_pixels(void) {}
 
 void st7789_init(void)
 {
@@ -102,40 +106,40 @@ void st7789_init(void)
     gpio_pin_init(PORT_CS, PIN_CS);
     gpio_pin_init(PORT_BL, PIN_BL);
 
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
     PIN_SET(PORT_DCX, PIN_DCX);
     PIN_SET(PORT_RESET, PIN_RESET);
     PIN_CLR(PORT_BL, PIN_BL);
 
     st7789_reset();
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x01);
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
     rt880_delay_ms(150);
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x11);
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
     rt880_delay_ms(120);
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x3A);
     st7789_write_data(0x55);
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x36);
-    st7789_write_data(0x08); /* MADCTL: BGR */
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_write_data(0x00);
+    st7789_cs_high();
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x13);
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
 
-    PIN_CLR(PORT_CS, PIN_CS);
+    st7789_cs_low();
     st7789_write_cmd(0x29);
-    PIN_SET(PORT_CS, PIN_CS);
+    st7789_cs_high();
     rt880_delay_ms(50);
 
     PIN_SET(PORT_BL, PIN_BL);
@@ -151,12 +155,17 @@ void st7789_reset(void)
 
 void st7789_flush(uint16_t color)
 {
-    PIN_CLR(PORT_CS, PIN_CS);
-    st7789_set_addr_window(0, 0, ST7789_WIDTH, ST7789_HEIGHT);
-    st7789_start_pixels();
+    st7789_cs_low();
+    st7789_write_cmd(0x2A);
+    st7789_write_data16(0); st7789_write_data16(ST7789_WIDTH - 1);
+    st7789_write_cmd(0x2B);
+    st7789_write_data16(0); st7789_write_data16(ST7789_HEIGHT - 1);
+    st7789_write_cmd(0x2C);
+    PIN_SET(PORT_DCX, PIN_DCX);
     uint32_t n = (uint32_t)ST7789_WIDTH * ST7789_HEIGHT;
-    for (uint32_t i = 0; i < n; i++)
-        st7789_write_data16(color);
-    st7789_end_pixels();
-    PIN_SET(PORT_CS, PIN_CS);
+    for (uint32_t i = 0; i < n; i++) {
+        spi_write_byte(color >> 8);
+        spi_write_byte(color & 0xFF);
+    }
+    st7789_cs_high();
 }

@@ -7,9 +7,7 @@
 #define FB_W ST7789_WIDTH
 #define FB_H ST7789_HEIGHT
 
-/* Строчный буфер для ClearScreen / FillRect */
-static uint16_t line_buf[FB_W];
-
+/* Прямая запись пикселя на дисплей (однопиксельное окно) */
 static int16_t clip_x(int16_t x)
 {
     if (x < 0) return 0;
@@ -28,47 +26,15 @@ void PutPixel(int16_t x, int16_t y, Color c)
 {
     x = clip_x(x); y = clip_y(y);
     st7789_set_addr_window(x, y, 1, 1);
+    st7789_cs_low();
     st7789_start_pixels();
     st7789_write_data16(c);
-    st7789_end_pixels();
-}
-
-void FB_Clear(Color c)
-{
-    for (int i = 0; i < FB_W; i++)
-        line_buf[i] = c;
-}
-
-void FB_Flush(void)
-{
-    static uint16_t prev[FB_W];
-    static int dirty = 1;
-    for (int i = 0; i < FB_W; i++)
-        if (line_buf[i] != prev[i]) { dirty = 1; break; }
-    if (!dirty) return;
-    memcpy(prev, line_buf, sizeof(line_buf));
-    st7789_set_addr_window(0, 0, FB_W, 1);
-    st7789_start_pixels();
-    for (int i = 0; i < FB_W; i++)
-        st7789_write_data16(line_buf[i]);
-    st7789_end_pixels();
-}
-
-static void fb_flush_full(void)
-{
-    for (int y = 0; y < FB_H; y++) {
-        st7789_set_addr_window(0, y, FB_W, 1);
-        st7789_start_pixels();
-        for (int x = 0; x < FB_W; x++)
-            st7789_write_data16(line_buf[x]);
-        st7789_end_pixels();
-    }
+    st7789_cs_high();
 }
 
 void UI_ClearScreen(Color bg)
 {
-    FB_Clear(bg);
-    fb_flush_full();
+    st7789_flush(bg);
 }
 
 void DrawHLine(int16_t x, int16_t y, int16_t w, Color c)
@@ -78,9 +44,10 @@ void DrawHLine(int16_t x, int16_t y, int16_t w, Color c)
     if (x + w > FB_W) w = FB_W - x;
     if (w <= 0) return;
     st7789_set_addr_window(x, y, w, 1);
+    st7789_cs_low();
     st7789_start_pixels();
     for (int i = 0; i < w; i++) st7789_write_data16(c);
-    st7789_end_pixels();
+    st7789_cs_high();
 }
 
 void DrawVLine(int16_t x, int16_t y, int16_t h, Color c)
@@ -90,9 +57,10 @@ void DrawVLine(int16_t x, int16_t y, int16_t h, Color c)
     if (y + h > FB_H) h = FB_H - y;
     if (h <= 0) return;
     st7789_set_addr_window(x, y, 1, h);
+    st7789_cs_low();
     st7789_start_pixels();
     for (int i = 0; i < h; i++) st7789_write_data16(c);
-    st7789_end_pixels();
+    st7789_cs_high();
 }
 
 static void draw_aline(int16_t x0, int16_t y0, int16_t x1, int16_t y1, Color c)
@@ -143,10 +111,11 @@ void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c)
     if (y + h > FB_H) h = FB_H - y;
     if (w <= 0 || h <= 0) return;
     st7789_set_addr_window(x, y, w, h);
+    st7789_cs_low();
     st7789_start_pixels();
     uint32_t n = (uint32_t)w * h;
     for (uint32_t i = 0; i < n; i++) st7789_write_data16(c);
-    st7789_end_pixels();
+    st7789_cs_high();
 }
 
 void FillCircle(int16_t x0, int16_t y0, int16_t r, Color c)
@@ -166,7 +135,7 @@ void FillCircle(int16_t x0, int16_t y0, int16_t r, Color c)
 }
 
 /* ─── Font rendering ─── */
-static void putchar(int16_t x, int16_t y, uint8_t c, Color col, const GFXfont *f)
+static void putchar(int16_t *x, int16_t y, uint8_t c, Color col, const GFXfont *f)
 {
     if (c < f->first || c > f->last) return;
     const GFXglyph *g = &f->glyph[c - f->first];
@@ -178,9 +147,10 @@ static void putchar(int16_t x, int16_t y, uint8_t c, Color col, const GFXfont *f
         for (uint8_t xx = 0; xx < w; xx++, bits <<= 1) {
             if (!(bit++ & 7)) bits = *b++;
             if (bits & 0x80)
-                PutPixel(x + xo + xx, y + yo + yy, col);
+                PutPixel(*x + xo + xx, y + yo + yy, col);
         }
     }
+    *x += g->xAdvance;
 }
 
 static int16_t text_width(const char *s, const GFXfont *f)
@@ -219,5 +189,5 @@ void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt, ...
     }
 
     for (char *p = buf; *p; p++)
-        putchar(sx, y, *p, c, f);
+        putchar(&sx, y, *p, c, f);
 }

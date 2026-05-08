@@ -24,7 +24,4 @@ void FillCircle(int16_t x, int16_t y, int16_t r, Color c);
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...);
 void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt, ...);
 
-void FB_Clear(Color c);
-void FB_Flush(void);
-
 #endif

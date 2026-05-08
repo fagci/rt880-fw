@@ -26,6 +26,8 @@ void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 void st7789_write_cmd(uint8_t cmd);
 void st7789_write_data(uint8_t data);
 void st7789_write_data16(uint16_t data);
+void st7789_cs_low(void);
+void st7789_cs_high(void);
 void st7789_start_pixels(void);
 void st7789_end_pixels(void);
 
