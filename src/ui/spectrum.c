@@ -17,7 +17,7 @@ static uint32_t bw;
 
 static FRange range;
 
-static DBmRange dBmRange = {-150, -40};
+static DBmRange dBmRange = {-110, -40};
 
 static bool ticksRendered = false;
 
@@ -28,7 +28,7 @@ static uint16_t osy[SP_MAX_POINTS] = {0};
     0x2000, 0x3000, 0x5000, 0x9000, 0xfc44, 0xffbf, 0x7bf, 0x1b5f,
     0x1b5f, 0x1f,   0x1f,   0x18,   0x13,   0xe,    0x9,
 }; */
-static const uint16_t GRADIENT_PALETTE[] = {
+/* static const uint16_t GRADIENT_PALETTE[] = {
     0x0000, // black
     0x0002, // almost black blue
     0x0006, // very dark blue
@@ -44,6 +44,23 @@ static const uint16_t GRADIENT_PALETTE[] = {
     0xBFFF, // very light cyan
     0xDFFF, // near white with blue tint
     0xEFFF, // almost white
+}; */
+static const uint16_t GRADIENT_PALETTE[] = {
+    0x0000, // black
+    0x000A, // almost black blue
+    0x0016, // very dark blue
+    0x001F, // blue
+    0x05BF, // cyan-blue
+    0x07F9, // cyan
+    0x06E0, // green
+    0xA7E0, // yellow-green
+    0xFFE0, // yellow
+    0xFC60, // orange
+    0xF8E0, // red-orange
+    0xF800, // red
+    0xFB2C, // light red
+    0xFE59, // near white
+    0xFFFF, // white
 };
 
 static uint8_t getPalIndex(uint16_t rssi) {
@@ -143,12 +160,12 @@ static Seg seg_from_f(uint32_t f, uint16_t v) {
 
 static void drawTicks(uint8_t y, uint32_t fs, uint32_t fe, uint32_t div,
                       uint8_t h, uint16_t c) {
-    const uint8_t th = 4;
+  const uint8_t th = 4;
 
-    for (uint32_t f = fs - (fs % div) + div; f < fe; f += div) {
-        uint8_t tx = f2x(f);
-        st7789_fill_rect_dma(tx, y + h - th, 1, th, c);
-    }
+  for (uint32_t f = fs - (fs % div) + div; f < fe; f += div) {
+    uint8_t tx = f2x(f);
+    st7789_fill_rect_dma(tx, y + h - th, 1, th, c);
+  }
 }
 
 static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
@@ -190,9 +207,9 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   const uint16_t noiseFloor = SP_GetNoiseFloor();
   const uint16_t rssiMax = Max(rssiHistory, filledPoints);
 
-  const uint16_t vMin = rssiMin - 1;
-  const uint16_t vMax =
-      rssiMax + ((rssiMax - noiseFloor) < 40 ? (rssiMax - noiseFloor) : 40);
+  const uint16_t vMin = (dBmRange.min + 160) * 2; // rssiMin - 1;
+  const uint16_t vMax = (dBmRange.max + 160) * 2;
+  // rssiMax + ((rssiMax - noiseFloor) < 60 ? (rssiMax - noiseFloor) : 60);
 
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
@@ -221,7 +238,7 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
     if (newv > oldv) {
       uint8_t top = sy + (sh - newv);
       uint8_t h = newv - oldv;
-      st7789_fill_rect_dma(x, top, 1, h, C_WHITE);
+      st7789_fill_rect_dma(x, top, 1, h, C_CYAN);
     } else {
       uint8_t top = sy + (sh - oldv);
       uint8_t h = oldv - newv;

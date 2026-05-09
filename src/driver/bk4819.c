@@ -21,14 +21,28 @@
 #define PIN_CLR(port, pin) ((port)->clr = (pin))
 #define PIN_GET(port, pin) ((port)->idt & (pin))
 
-static struct {
+typedef struct {
   gpio_type *scn_port;
   uint16_t scn_pin;
   gpio_type *sda_port;
   uint16_t sda_pin;
   gpio_type *sck_port;
   uint16_t sck_pin;
-} g_bk = {0};
+  uint16_t gpioOutState;
+  uint8_t selectedFilter;
+  uint32_t freqCacheLow;
+  uint32_t freqCacheHigh;
+  ModulationType lastModulation;
+} BK4819_Chip;
+
+static BK4819_Chip g_chips[2] = {
+    [0] = {.gpioOutState = 0x9000, .selectedFilter = 255,
+           .freqCacheLow = 0, .freqCacheHigh = 0, .lastModulation = 255},
+    [1] = {.gpioOutState = 0x9000, .selectedFilter = 255,
+           .freqCacheLow = 0, .freqCacheHigh = 0, .lastModulation = 255},
+};
+
+static BK4819_Chip *g_bk = &g_chips[0];
 
 static void bk_delay(void) {
   volatile uint32_t i;
@@ -53,53 +67,49 @@ static void sda_input(void) {
   g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
   g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
   g.gpio_mode = GPIO_MODE_INPUT;
-  g.gpio_pins = g_bk.sda_pin;
+  g.gpio_pins = g_bk->sda_pin;
   g.gpio_pull = GPIO_PULL_NONE;
-  gpio_init(g_bk.sda_port, &g);
+  gpio_init(g_bk->sda_port, &g);
 }
 
-static void sda_output(void) { gpio_set_output(g_bk.sda_port, g_bk.sda_pin); }
+static void sda_output(void) { gpio_set_output(g_bk->sda_port, g_bk->sda_pin); }
 
 void BK4819_SelectChip(uint8_t chip) {
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_GPIOF_PERIPH_CLOCK, TRUE);
 
+  g_bk = &g_chips[chip ? 1 : 0];
+
   if (chip == 0) {
-    g_bk.scn_port = BK1_SCN_PORT;
-    g_bk.scn_pin = BK1_SCN_PIN;
-    g_bk.sda_port = BK1_SDA_PORT;
-    g_bk.sda_pin = BK1_SDA_PIN;
-    g_bk.sck_port = BK1_SCK_PORT;
-    g_bk.sck_pin = BK1_SCK_PIN;
+    g_bk->scn_port = BK1_SCN_PORT; g_bk->scn_pin = BK1_SCN_PIN;
+    g_bk->sda_port = BK1_SDA_PORT; g_bk->sda_pin = BK1_SDA_PIN;
+    g_bk->sck_port = BK1_SCK_PORT; g_bk->sck_pin = BK1_SCK_PIN;
   } else {
-    g_bk.scn_port = BK2_SCN_PORT;
-    g_bk.scn_pin = BK2_SCN_PIN;
-    g_bk.sda_port = BK2_SDA_PORT;
-    g_bk.sda_pin = BK2_SDA_PIN;
-    g_bk.sck_port = BK2_SCK_PORT;
-    g_bk.sck_pin = BK2_SCK_PIN;
+    g_bk->scn_port = BK2_SCN_PORT; g_bk->scn_pin = BK2_SCN_PIN;
+    g_bk->sda_port = BK2_SDA_PORT; g_bk->sda_pin = BK2_SDA_PIN;
+    g_bk->sck_port = BK2_SCK_PORT; g_bk->sck_pin = BK2_SCK_PIN;
   }
 
-  gpio_set_output(g_bk.scn_port, g_bk.scn_pin);
-  gpio_set_output(g_bk.sda_port, g_bk.sda_pin);
-  gpio_set_output(g_bk.sck_port, g_bk.sck_pin);
+  gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
+  gpio_set_output(g_bk->sda_port, g_bk->sda_pin);
+  gpio_set_output(g_bk->sck_port, g_bk->sck_pin);
 
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-  PIN_SET(g_bk.sda_port, g_bk.sda_pin);
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
+  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
 }
 
 static void write_u8(uint8_t data) {
   for (int i = 0; i < 8; i++) {
     if (data & 0x80)
-      PIN_SET(g_bk.sda_port, g_bk.sda_pin);
+      PIN_SET(g_bk->sda_port, g_bk->sda_pin);
     else
-      PIN_CLR(g_bk.sda_port, g_bk.sda_pin);
+      PIN_CLR(g_bk->sda_port, g_bk->sda_pin);
     bk_delay();
-    PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
-    PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
     data <<= 1;
   }
@@ -108,13 +118,13 @@ static void write_u8(uint8_t data) {
 static void write_u16(uint16_t data) {
   for (int i = 0; i < 16; i++) {
     if (data & 0x8000)
-      PIN_SET(g_bk.sda_port, g_bk.sda_pin);
+      PIN_SET(g_bk->sda_port, g_bk->sda_pin);
     else
-      PIN_CLR(g_bk.sda_port, g_bk.sda_pin);
+      PIN_CLR(g_bk->sda_port, g_bk->sda_pin);
     bk_delay();
-    PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
-    PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
     data <<= 1;
   }
@@ -124,12 +134,12 @@ static uint16_t read_u16(void) {
   sda_input();
   uint16_t v = 0;
   for (int i = 0; i < 16; i++) {
-    PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
-    PIN_CLR(g_bk.sck_port, g_bk.sck_pin);
+    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
     bk_delay();
     v <<= 1;
-    if (PIN_GET(g_bk.sda_port, g_bk.sda_pin))
+    if (PIN_GET(g_bk->sda_port, g_bk->sda_pin))
       v |= 1;
   }
   sda_output();
@@ -137,37 +147,33 @@ static uint16_t read_u16(void) {
 }
 
 void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   bk_delay();
-  PIN_CLR(g_bk.scn_port, g_bk.scn_pin);
+  PIN_CLR(g_bk->scn_port, g_bk->scn_pin);
   write_u8(reg);
   write_u16(data);
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   bk_delay();
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
-  PIN_SET(g_bk.sda_port, g_bk.sda_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
 }
 
 uint16_t BK4819_ReadRegister(uint8_t reg) {
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   bk_delay();
-  PIN_CLR(g_bk.scn_port, g_bk.scn_pin);
+  PIN_CLR(g_bk->scn_port, g_bk->scn_pin);
   write_u8(reg | 0x80);
   uint16_t v = read_u16();
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   bk_delay();
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
-  PIN_SET(g_bk.sda_port, g_bk.sda_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
   return v;
 }
 
-static uint16_t gGpioOutState = 0x9000;
-static uint8_t gSelectedFilter = 255;
-static uint32_t gFreqCacheLow = 0;
-static uint32_t gFreqCacheHigh = 0;
-static ModulationType gLastModulation = 255;
+
 
 static const uint16_t MOD_TYPE_REG47_VALUES[] = {
     [MOD_FM] = 0,  [MOD_AM] = 4,  [MOD_LSB] = 3, [MOD_USB] = 3,
@@ -195,16 +201,16 @@ static inline uint16_t scale_freq(const uint16_t freq) {
 void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
 void BK4819_Init(void) {
-  PIN_SET(g_bk.scn_port, g_bk.scn_pin);
-  PIN_SET(g_bk.sck_port, g_bk.sck_pin);
-  PIN_SET(g_bk.sda_port, g_bk.sda_pin);
+  PIN_SET(g_bk->scn_port, g_bk->scn_pin);
+  PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
 
   BK4819_WriteRegister(BK4819_REG_00, 0x8000);
   BK4819_WriteRegister(BK4819_REG_00, 0x0000);
   BK4819_WriteRegister(BK4819_REG_37, 0x1D0F);
 
-  gGpioOutState = 1 << 4;
-  BK4819_WriteRegister(BK4819_REG_33, gGpioOutState);
+  g_bk->gpioOutState = 1 << 4;
+  BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
 
   BK4819_SetupPowerAmplifier(0, 0);
 
@@ -279,14 +285,14 @@ void BK4819_SetFrequency(uint32_t freq) {
   uint16_t low = freq & 0xFFFF;
   uint16_t high = (freq >> 16) & 0xFFFF;
 
-  if (low != gFreqCacheLow) {
+  if (low != g_bk->freqCacheLow) {
     BK4819_WriteRegister(BK4819_REG_38, low);
-    gFreqCacheLow = low;
+    g_bk->freqCacheLow = low;
   }
 
-  if (high != gFreqCacheHigh) {
+  if (high != g_bk->freqCacheHigh) {
     BK4819_WriteRegister(BK4819_REG_39, high);
-    gFreqCacheHigh = high;
+    g_bk->freqCacheHigh = high;
   }
 }
 
