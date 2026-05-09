@@ -32,7 +32,7 @@ static struct {
 
 static void bk_delay(void) {
   volatile uint32_t i;
-  for (i = 0; i < 6; i++)
+  for (i = 0; i < 4; i++)
     ;
 }
 
@@ -165,7 +165,8 @@ uint16_t BK4819_ReadRegister(uint8_t reg) {
 
 static uint16_t gGpioOutState = 0x9000;
 static uint8_t gSelectedFilter = 255;
-static uint32_t gLastFrequency = 0;
+static uint32_t gFreqCacheLow = 0;
+static uint32_t gFreqCacheHigh = 0;
 static ModulationType gLastModulation = 255;
 
 static const uint16_t MOD_TYPE_REG47_VALUES[] = {
@@ -274,10 +275,23 @@ static void BK4819_SetVariableCaliper(int32_t var) {
   }
 }
 
+void BK4819_SetFrequency(uint32_t freq) {
+  uint16_t low = freq & 0xFFFF;
+  uint16_t high = (freq >> 16) & 0xFFFF;
+
+  if (low != gFreqCacheLow) {
+    BK4819_WriteRegister(BK4819_REG_38, low);
+    gFreqCacheLow = low;
+  }
+
+  if (high != gFreqCacheHigh) {
+    BK4819_WriteRegister(BK4819_REG_39, high);
+    gFreqCacheHigh = high;
+  }
+}
+
 void BK4819_TuneTo(uint32_t freq, bool precise) {
-  BK4819_WriteRegister(BK4819_REG_38, freq & 0xFFFF);
-  BK4819_WriteRegister(BK4819_REG_39, (freq >> 16) & 0xFFFF);
-  gLastFrequency = freq;
+  BK4819_SetFrequency(freq);
 
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
 
