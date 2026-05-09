@@ -118,55 +118,37 @@ void SP_AddPoint(Loot *msm) {
 }
 
 typedef struct {
-  uint8_t sx;
-  uint8_t w;
+  uint8_t x0;
+  uint8_t x1; // not inclusive
   uint16_t v;
-} Bar;
+} Seg;
 
-static Bar bar(uint16_t *data, uint8_t i) {
-  uint8_t sz = f2x(range.start + step) - f2x(range.start);
-  uint8_t szBw = f2x(range.start + bw) - f2x(range.start);
+static Seg seg_from_f(uint32_t f, uint16_t v) {
+  uint8_t x0 = f2x(f);
+  uint8_t x1;
 
-  if (szBw < sz)
-    sz = szBw;
-  if (sz < 2)
-    return (Bar){i, 1, data[i]};
-
-  uint8_t w = sz % 2 == 0 ? sz + 1 : sz;
-  int16_t sx = i - w / 2;
-  int16_t ex = i + w / 2;
-
-  if (sx < 0) {
-    w += sx;
-    sx = 0;
+  if (f + step <= range.end) {
+    x1 = f2x(f + step);
+    if (x1 <= x0)
+      x1 = x0 + 1;
+  } else {
+    x1 = SP_MAX_POINTS;
   }
-  if (ex > SP_MAX_POINTS)
-    w -= ex - SP_MAX_POINTS;
 
-  return (Bar){sx, w, data[i]};
-}
+  if (x1 > SP_MAX_POINTS)
+    x1 = SP_MAX_POINTS;
 
-static void renderBar(uint8_t sy, uint8_t sh, uint16_t *data, uint8_t i,
-                      bool fill) {
-  Bar b = bar(data, i);
-  if (needRedraw[i]) {
-    needRedraw[i] = false;
-    uint8_t top = sy + (sh - b.v);
-    uint8_t h = b.v;
-    st7789_fill_rect_dma(b.sx, top, b.w, h, fill ? C_WHITE : C_BLACK);
-  }
+  return (Seg){x0, x1, v};
 }
 
 static void drawTicks(uint8_t y, uint32_t fs, uint32_t fe, uint32_t div,
                       uint8_t h, uint16_t c) {
-  for (uint32_t f = fs - (fs % div) + div; f < fe; f += div) {
-    uint8_t tx = f2x(f);
-    st7789_cs_low();
-    st7789_set_addr_window_raw(tx, y, 1, h);
-    for (uint8_t yp = 0; yp < h; ++yp)
-      st7789_write_data16(yp / 2 % 2 ? c : C_BLACK);
-    st7789_cs_high();
-  }
+    const uint8_t th = 4;
+
+    for (uint32_t f = fs - (fs % div) + div; f < fe; f += div) {
+        uint8_t tx = f2x(f);
+        st7789_fill_rect_dma(tx, y + h - th, 1, th, c);
+    }
 }
 
 static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
@@ -182,20 +164,21 @@ static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
   }
 }
 
-static void renderWf(uint16_t *data, uint8_t i) {
-  Bar b = bar(data, i);
-  for (uint8_t ci = b.sx; ci < b.sx + b.w; ++ci) {
-    if (ci >= SP_MAX_POINTS)
-      break;
-    uint8_t bx = ci / 2;
+static void renderWf(uint32_t f, uint16_t val) {
+  Seg s = seg_from_f(f, val);
+  uint8_t pal = getPalIndex(s.v);
+
+  for (uint8_t x = s.x0; x < s.x1; ++x) {
+    uint8_t bx = x >> 1;
     if (bx >= WF_XN)
       break;
 
-    if (ci % 2 == 0) {
-      wf[0][bx] = getPalIndex(b.v);
+    if ((x & 1) == 0) {
+      wf[0][bx] &= 0xF0;
+      wf[0][bx] |= pal;
     } else {
       wf[0][bx] &= 0x0F;
-      wf[0][bx] |= getPalIndex(b.v) << 4;
+      wf[0][bx] |= pal << 4;
     }
   }
 }
@@ -214,17 +197,23 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
 
+  for (uint32_t x = 0; x < SP_MAX_POINTS; ++x)
+    nsy[x] = 0;
+
   for (uint32_t f = range.start; f <= range.end; f += step) {
-    uint8_t i = f2x(f);
-    nsy[i] = ConvertDomain(v(i) * 2, vMin * 2, vMax * 2, 0, sh);
+    Seg s =
+        seg_from_f(f, ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh));
+
+    if (s.v > sh)
+      s.v = sh;
+
+    for (uint8_t x = s.x0; x < s.x1; ++x)
+      nsy[x] = s.v;
   }
 
-  for (uint32_t f = range.start; f <= range.end; f += step) {
-    uint8_t i = f2x(f);
-    Bar b = bar(nsy, i);
-
-    uint16_t oldv = osy[i];
-    uint16_t newv = nsy[i];
+  for (uint8_t x = 0; x < SP_MAX_POINTS; ++x) {
+    uint16_t oldv = osy[x];
+    uint16_t newv = nsy[x];
 
     if (oldv == newv)
       continue;
@@ -232,14 +221,14 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
     if (newv > oldv) {
       uint8_t top = sy + (sh - newv);
       uint8_t h = newv - oldv;
-      st7789_fill_rect_dma(b.sx, top, b.w, h, C_WHITE);
+      st7789_fill_rect_dma(x, top, 1, h, C_WHITE);
     } else {
       uint8_t top = sy + (sh - oldv);
       uint8_t h = oldv - newv;
-      st7789_fill_rect_dma(b.sx, top, b.w, h, C_BLACK);
+      st7789_fill_rect_dma(x, top, 1, h, C_BLACK);
     }
 
-    osy[i] = newv;
+    osy[x] = newv;
   }
 
   SP_DrawTicks(sy, sh, p);
@@ -263,8 +252,10 @@ void WF_Render(uint8_t wy, bool wfDown) {
     WF_InitScroll(wy, wh);
 
   memset(wf[0], 0, WF_XN);
-  for (uint32_t f = range.start; f <= range.end; f += step)
-    renderWf(rssiHistory, f2x(f));
+  for (uint32_t f = range.start; f <= range.end; f += step) {
+    uint8_t x = f2x(f);
+    renderWf(f, rssiHistory[x]);
+  }
 
   for (uint8_t bx = 0; bx < WF_XN; ++bx) {
     uint8_t v = wf[0][bx];
