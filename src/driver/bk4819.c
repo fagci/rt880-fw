@@ -36,10 +36,16 @@ typedef struct {
 } BK4819_Chip;
 
 static BK4819_Chip g_chips[2] = {
-    [0] = {.gpioOutState = 0x9000, .selectedFilter = 255,
-           .freqCacheLow = 0, .freqCacheHigh = 0, .lastModulation = 255},
-    [1] = {.gpioOutState = 0x9000, .selectedFilter = 255,
-           .freqCacheLow = 0, .freqCacheHigh = 0, .lastModulation = 255},
+    [0] = {.gpioOutState = 0x9000,
+           .selectedFilter = 255,
+           .freqCacheLow = 0,
+           .freqCacheHigh = 0,
+           .lastModulation = 255},
+    [1] = {.gpioOutState = 0x9000,
+           .selectedFilter = 255,
+           .freqCacheLow = 0,
+           .freqCacheHigh = 0,
+           .lastModulation = 255},
 };
 
 static BK4819_Chip *g_bk = &g_chips[0];
@@ -82,13 +88,19 @@ void BK4819_SelectChip(uint8_t chip) {
   g_bk = &g_chips[chip ? 1 : 0];
 
   if (chip == 0) {
-    g_bk->scn_port = BK1_SCN_PORT; g_bk->scn_pin = BK1_SCN_PIN;
-    g_bk->sda_port = BK1_SDA_PORT; g_bk->sda_pin = BK1_SDA_PIN;
-    g_bk->sck_port = BK1_SCK_PORT; g_bk->sck_pin = BK1_SCK_PIN;
+    g_bk->scn_port = BK1_SCN_PORT;
+    g_bk->scn_pin = BK1_SCN_PIN;
+    g_bk->sda_port = BK1_SDA_PORT;
+    g_bk->sda_pin = BK1_SDA_PIN;
+    g_bk->sck_port = BK1_SCK_PORT;
+    g_bk->sck_pin = BK1_SCK_PIN;
   } else {
-    g_bk->scn_port = BK2_SCN_PORT; g_bk->scn_pin = BK2_SCN_PIN;
-    g_bk->sda_port = BK2_SDA_PORT; g_bk->sda_pin = BK2_SDA_PIN;
-    g_bk->sck_port = BK2_SCK_PORT; g_bk->sck_pin = BK2_SCK_PIN;
+    g_bk->scn_port = BK2_SCN_PORT;
+    g_bk->scn_pin = BK2_SCN_PIN;
+    g_bk->sda_port = BK2_SDA_PORT;
+    g_bk->sda_pin = BK2_SDA_PIN;
+    g_bk->sck_port = BK2_SCK_PORT;
+    g_bk->sck_pin = BK2_SCK_PIN;
   }
 
   gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
@@ -172,8 +184,6 @@ uint16_t BK4819_ReadRegister(uint8_t reg) {
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
   return v;
 }
-
-
 
 static const uint16_t MOD_TYPE_REG47_VALUES[] = {
     [MOD_FM] = 0,  [MOD_AM] = 4,  [MOD_LSB] = 3, [MOD_USB] = 3,
@@ -419,22 +429,22 @@ void BK4819_ToggleGpioOut(uint8_t pin, bool on) {
   (void)on;
 }
 
-void BK4819_ToggleAFDAC(bool on) {
-  uint16_t v = BK4819_ReadRegister(BK4819_REG_30);
-  if (on)
-    v |= BK4819_REG_30_ENABLE_AF_DAC;
-  else
-    v &= ~BK4819_REG_30_ENABLE_AF_DAC;
-  BK4819_WriteRegister(BK4819_REG_30, v);
+void BK4819_ToggleAFBit(bool enable) {
+  uint16_t reg = BK4819_ReadRegister(BK4819_REG_47);
+  reg &= ~(1 << 8);
+  if (enable) {
+    reg |= 1 << 8;
+  }
+  BK4819_WriteRegister(BK4819_REG_47, reg);
 }
 
-void BK4819_ToggleAFBit(bool on) {
-  uint16_t v = BK4819_ReadRegister(BK4819_REG_31);
-  if (on)
-    v |= 2;
-  else
-    v &= ~2;
-  BK4819_WriteRegister(BK4819_REG_31, v);
+void BK4819_ToggleAFDAC(bool enable) {
+  uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
+  reg &= ~BK4819_REG_30_ENABLE_AF_DAC;
+  if (enable) {
+    reg |= BK4819_REG_30_ENABLE_AF_DAC;
+  }
+  BK4819_WriteRegister(BK4819_REG_30, reg);
 }
 
 void BK4819_EnterSubAu(void) {

@@ -19,14 +19,16 @@ void testScan(void) {
   BK4819_RX_TurnOn();
   BK4819_SetAFC(0);
   BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
+  BK4819_ToggleAFBit(false);
+  BK4819_ToggleAFDAC(false);
 
-  BK4819_SelectChip(1);
+  /* BK4819_SelectChip(1);
   BK4819_Init();
   BK4819_RX_TurnOn();
   BK4819_SetAFC(0);
   BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
 
-  BK4819_SelectChip(0);
+  BK4819_SelectChip(0); */
 
   uint32_t stp = 25 * KHZ;
   uint32_t s = 172 * MHZ;
@@ -48,7 +50,7 @@ void testScan(void) {
     for (uint32_t i = 0; i < SP_MAX_POINTS; i++) {
       uint32_t f = s + i * stp;
 
-      BK4819_SelectChip(0);
+      // BK4819_SelectChip(0);
       BK4819_TuneTo(f, false);
       rt880_delay_ms(3);
 
@@ -76,9 +78,6 @@ void testScan(void) {
       FillRect(120, 0, 120, 16, C_BLACK);
       PrintfEx(ST7789_WIDTH - 1, 14, POS_R, C_BLUE, "%ddBm %u.%03uM", peakDBm,
                peakFreq / MHZ, (peakFreq % MHZ) / KHZ);
-
-      BK4819_SelectChip(1);
-      BK4819_TuneTo(peakFreq, false);
     }
 
     tick++;
@@ -92,7 +91,7 @@ int main(void) {
   st7789_init();
 
   st7789_backlight_on();
-  rt880_audio_path_set(1);
+  // rt880_audio_path_set(1);
   AF_MUTE_PORT->scr = AF_MUTE_PIN;
 
   testScan();
