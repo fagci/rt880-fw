@@ -276,3 +276,50 @@ void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 void st7789_flush(uint16_t color) {
   st7789_fill_rect_dma(0, 0, ST7789_WIDTH, ST7789_HEIGHT, color);
 }
+
+void st7789_set_addr_window_raw(uint16_t x, uint16_t y, uint16_t w,
+                                uint16_t h) {
+  st7789_write_cmd(0x2A);
+  st7789_write_data16(x);
+  st7789_write_data16(x + w - 1);
+
+  st7789_write_cmd(0x2B);
+  st7789_write_data16(y);
+  st7789_write_data16(y + h - 1);
+
+  st7789_write_cmd(0x2C);
+  PIN_SET(PORT_DCX, PIN_DCX);
+}
+
+void st7789_write_pixels_dma(const uint16_t *pixels, uint32_t count) {
+  while (count) {
+    uint32_t chunk = count;
+    if (chunk > ST7789_DMA_PIXELS_PER_CHUNK)
+      chunk = ST7789_DMA_PIXELS_PER_CHUNK;
+
+    for (uint32_t i = 0; i < chunk; i++) {
+      st7789_dma_buf[i * 2 + 0] = (uint8_t)(pixels[i] >> 8);
+      st7789_dma_buf[i * 2 + 1] = (uint8_t)(pixels[i] & 0xFF);
+    }
+
+    spi1_tx_dma(st7789_dma_buf, chunk * 2);
+    pixels += chunk;
+    count -= chunk;
+  }
+}
+
+void st7789_set_vscroll_area(uint16_t tfa, uint16_t vsa, uint16_t bfa) {
+  st7789_cs_low();
+  st7789_write_cmd(0x33); // VSCRDEF
+  st7789_write_data16(tfa);
+  st7789_write_data16(vsa);
+  st7789_write_data16(bfa);
+  st7789_cs_high();
+}
+
+void st7789_set_vscroll_start(uint16_t vsp) {
+  st7789_cs_low();
+  st7789_write_cmd(0x37); // VSCRSADD
+  st7789_write_data16(vsp);
+  st7789_cs_high();
+}
