@@ -89,8 +89,8 @@ static inline uint32_t fps_tick(FpsCounter *f, uint32_t now_ms) {
   return 0;
 }
 const uint32_t stp = 25 * KHZ;
-const uint32_t s = 171 * MHZ;
-const uint32_t e = s + stp * LCD_WIDTH;
+const uint32_t s = 172 * MHZ;
+const uint32_t e = s + stp * LCD_WIDTH / 2;
 
 FRange range = {.start = s, .end = e};
 
@@ -133,16 +133,8 @@ void testScan(void) {
       SP_AddPoint(&msm);
     }
 
-    uint32_t t0, t1, t2, t3;
-
-    t0 = rt880_dwt_ms();
     SP_Render(&range, SPECTRUM_BAR_Y, SPECTRUM_BAR_H);
-    t1 = rt880_dwt_ms();
     WF_Render(WATERFALL_Y, tick > 0);
-    t2 = rt880_dwt_ms();
-
-    PrintfEx(0, 22 + 18, POS_L, C_WHITE, C_BLACK, "sp=%u", t1 - t0);
-    PrintfEx(0, 22 + 18 * 2, POS_L, C_WHITE, C_BLACK, "wf=%u", t2 - t1);
 
     static int16_t last_dbm = 0;
     static uint32_t last_freq = 0;
