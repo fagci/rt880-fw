@@ -204,35 +204,75 @@ static uint16_t nsy[SP_MAX_POINTS] = {0};
 
 static uint8_t spDirty[SP_MAX_POINTS];
 
+// Буфер для одной строки спектра: 240 пикселей × 2 байта = 480 байт
+static uint16_t sp_line_buf[SP_MAX_POINTS];
+
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   const uint16_t vMin = (dBmRange.min + 160) * 2;
   const uint16_t vMax = (dBmRange.max + 160) * 2;
-
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
 
+  // 1. Вычисляем новые высоты (nsy) — как в оригинале
   memset(nsy, 0, sizeof(nsy));
-
   for (uint32_t f = range.start; f <= range.end; f += step) {
     uint16_t hv = ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh);
     Seg s = seg_from_f(f, hv);
-    if (s.v > sh) s.v = sh;
-    for (uint8_t x = s.x0; x < s.x1; ++x)
+    if (s.v > sh)
+      s.v = sh;
+    for (uint8_t x = s.x0; x < s.x1; x++)
       nsy[x] = s.v;
   }
 
-  for (uint8_t x = 0; x < SP_MAX_POINTS; ++x) {
-    uint16_t newv = nsy[x];
-    uint16_t oldv = osy[x];
-    int16_t dh = (int16_t)newv - (int16_t)oldv;
-    osy[x] = newv;
+  // 2. Перерисовываем каждую изменившуюся строку целиком одним DMA-вызовом
+  //    Ключевая идея: группируем по высоте строки, а не по X
+  //    Но строки у каждого столбца разные — поэтому рисуем горизонтальные
+  //    полосы по всей ширине SP_MAX_POINTS
 
-    if (dh > 0) {
-      st7789_fill_rect_dma(x, sy + (sh - newv), 1, dh, C_CYAN);
-    } else if (dh < 0) {
-      st7789_fill_rect_dma(x, sy + (sh - oldv), 1, -dh, C_BLACK);
+  // Нам нужно за один проход по всем строкам (y) нарисовать
+  // горизонтальный срез всего спектра
+
+  // Определяем диапазон изменений
+  uint8_t min_changed_y = sh;
+  uint8_t max_changed_y = 0;
+  bool any_changed = false;
+
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+    if (nsy[x] != osy[x]) {
+      uint8_t lo = (nsy[x] < osy[x]) ? nsy[x] : osy[x];
+      uint8_t hi = (nsy[x] > osy[x]) ? nsy[x] : osy[x];
+      if (lo < min_changed_y)
+        min_changed_y = lo;
+      if (hi > max_changed_y)
+        max_changed_y = hi;
+      any_changed = true;
     }
   }
+
+  if (!any_changed) {
+    SP_DrawTicks(sy, sh, p);
+    return;
+  }
+
+  // Рисуем построчно только изменившийся диапазон [min_y .. max_y]
+  // Каждая строка — один setAddrWindow + DMA на SP_MAX_POINTS пикселей
+  st7789_cs_low();
+  for (uint8_t row = min_changed_y; row <= max_changed_y; row++) {
+    // row=0 — дно спектра, row=sh-1 — верх
+    // экранная Y = sy + sh - 1 - row
+    uint16_t screen_y = sy + sh - 1 - row;
+
+    for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+      sp_line_buf[x] = (row < nsy[x]) ? C_CYAN : C_BLACK;
+    }
+
+    st7789_set_addr_window_raw(0, screen_y, SP_MAX_POINTS, 1);
+    st7789_write_pixels_dma(sp_line_buf, SP_MAX_POINTS);
+  }
+  st7789_cs_high();
+
+  // Обновляем osy
+  memcpy(osy, nsy, sizeof(nsy));
 
   SP_DrawTicks(sy, sh, p);
 }
