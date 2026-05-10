@@ -125,7 +125,6 @@ void rt880_audio_path_set(uint8_t source) {
 }
 
 void rt880_init(void) {
-  SCB->VTOR = FLASH_BASE | 0x2800;
   system_clock_config();
   rt880_dwt_init();  // DWT должен быть до первого delay
   rt880_tick_init(); // SysTick: 1 мс прерывание

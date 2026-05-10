@@ -147,6 +147,7 @@ Reset_Handler:
     cmp     r0, r1
     blo     .Lzero_loop
 
+    bl      SystemInit
     bl      main
     b       .
 
