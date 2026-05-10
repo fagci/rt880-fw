@@ -4,33 +4,126 @@
 #include "driver/keyboard.h"
 #include "driver/st7789.h"
 #include "helper/measurements.h"
+#include "misc.h"
 #include "ui/graphics.h"
 #include "ui/spectrum.h"
 
-static const char *KEY_NAMES[] = {
-    [KEY_NONE] = "NONE", //
-    [KEY_1] = "1",       //
-    [KEY_2] = "2",       //
-    [KEY_3] = "3",       //
-    [KEY_4] = "4",       //
-    [KEY_5] = "5",       //
-    [KEY_6] = "6",       //
-    [KEY_7] = "7",       //
-    [KEY_8] = "8",       //
-    [KEY_9] = "9",       //
-    [KEY_0] = "0",       //
-    [KEY_MENU] = "MENU", //
-    [KEY_UP] = "UP",     //
-    [KEY_DOWN] = "DOWN", //
-    [KEY_EXIT] = "EXIT", //
-    [KEY_STAR] = "STAR", //
-    [KEY_HASH] = "HASH", //
+typedef enum {
+  RADIO_BK4819A,
+  RADIO_BK4819B,
+  RADIO_SI4732,
+} Radio;
 
-    [KEY_PTT] = "PTT",     /* PB6  */
-    [KEY_SIDE1] = "SIDE1", /* PC0  */
-    [KEY_SIDE2] = "SIDE2", /* PC1  */
-    [KEY_ALARM] = "ALARM", /* PC2  */
+typedef enum {
+  OFFSET_NONE,
+  OFFSET_PLUS,
+  OFFSET_MINUS,
+  OFFSET_FREQ,
+} OffsetDirection;
+
+typedef enum {
+  TX_POW_ULOW,
+  TX_POW_LOW,
+  TX_POW_MID,
+  TX_POW_HIGH,
+} TXOutputPower;
+
+typedef enum {
+  STEP_0_02kHz,
+  STEP_0_05kHz,
+  STEP_0_5kHz,
+  STEP_1_0kHz,
+
+  STEP_2_5kHz,
+  STEP_5_0kHz,
+  STEP_6_25kHz,
+  STEP_8_33kHz,
+  STEP_9_0kHz,
+  STEP_10_0kHz,
+  STEP_12_5kHz,
+  STEP_25_0kHz,
+  STEP_50_0kHz,
+  STEP_100_0kHz,
+  STEP_500_0kHz,
+
+  STEP_COUNT,
+} Step;
+
+typedef struct {
+  uint8_t value;
+  uint8_t type : 4;
+} Code;
+
+typedef struct {
+  Code rx;
+  Code tx;
+} CodeRXTX;
+
+typedef struct {
+  uint8_t value : 4;
+  uint8_t type : 2;
+} Squelch;
+
+typedef struct {
+  uint16_t scanlists;
+  uint16_t channel;
+  char name[10];
+  uint32_t rxF : 27;
+  int32_t ppm : 5;
+  uint32_t txF : 27;
+  OffsetDirection offsetDir : 2;
+  bool allowTx : 1;
+  uint8_t reserved2 : 2;
+  Step step : 4;
+  uint8_t modulation : 4;
+  uint8_t bw : 4;
+  Radio radio : 2;
+  TXOutputPower power : 2;
+  uint8_t mic : 4; // Mic gain (0-15)
+  uint8_t scrambler : 4;
+  Squelch squelch;
+  CodeRXTX code;
+  bool fixedBoundsMode : 1;
+  bool isChMode : 1;
+  uint8_t gainIndex : 5;
+  uint8_t deviation; // Deviation setting (0-255, stored as value*10 when used)
+  uint32_t upconverter; // Upconverter frequency shift (full 32-bit)
+} __attribute__((packed)) VFO;
+
+VFO vfos[3] = {
+    (VFO){
+        .radio = RADIO_BK4819A,
+        .rxF = 17230000,
+        .step = STEP_25_0kHz,
+        .modulation = MOD_FM,
+        .bw = BK4819_FILTER_BW_12k,
+    },
+    (VFO){
+        .radio = RADIO_BK4819B,
+        .rxF = 43392500,
+        .step = STEP_25_0kHz,
+        .modulation = MOD_FM,
+        .bw = BK4819_FILTER_BW_12k,
+    },
+    (VFO){
+        .radio = RADIO_SI4732,
+        .rxF = 10480000,
+        .step = STEP_100_0kHz,
+        .modulation = MOD_WFM,
+        .bw = BK4819_FILTER_BW_12k,
+    },
 };
+
+static const uint8_t VFO_H = 64;
+void renderVFO(VFO *vfo, uint8_t i) {
+  uint16_t sy = 24 + i * VFO_H;
+
+  FillRect(0, sy, LCD_WIDTH, VFO_H, C_BLACK);
+  DrawRect(0, sy, LCD_WIDTH, VFO_H, C_GRAY);
+  PrintfEx(8, sy + 4 + 7, POS_L, C_YELLOW, C_BLACK, F_SM, "VFO%u", i + 1);
+  PrintfEx(8, sy + 4 + 7 + 2 + 18, POS_L, C_YELLOW, C_BLACK, F_NORM, "%u.%03u",
+           vfo->rxF / MHZ, vfo->rxF % MHZ / KHZ);
+}
 
 int main(void) {
   board_init();
@@ -50,18 +143,8 @@ int main(void) {
 
   gpio_pin_set(&PIN_AF_MUTE);
 
-  for (;;) {
-    key_event_t evt;
-    while (keyboard_get_event(&evt)) {
-      UI_ClearScreen(C_BLACK);
-      PrintfEx(0, 18 * 1, POS_L, C_WHITE, C_BLACK, "Code %u", evt.code);
-      PrintfEx(0, 18 * 2, POS_L, C_WHITE, C_BLACK, "Name %s",
-               KEY_NAMES[evt.key]);
-    }
-
-    uint16_t adc = rt880_adc_read_keyin();
-    PrintfEx(0, 18 * 3, POS_L, C_WHITE, C_BLACK, "ADC: %u   ", adc);
-
-    delay_ms(250);
+  for (uint8_t i = 0; i < 3; ++i) {
+    VFO *vfo = &vfos[i];
+    renderVFO(vfo, i);
   }
 }

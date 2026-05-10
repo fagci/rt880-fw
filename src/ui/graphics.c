@@ -1,6 +1,6 @@
 #include "graphics.h"
 #include "driver/st7789.h"
-#include "fonts/FreeSans12pt7b.h"
+#include "gfxfont.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -263,19 +263,18 @@ static int16_t text_width(const char *s, const GFXfont *f) {
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
-  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, fmt, a);
+  PrintfExV(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
   va_end(a);
 }
 
 void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color col, Color bg,
-              const char *fmt, ...) {
+              const GFXfont *f, const char *fmt, ...) {
   char s[64];
   va_list a;
   va_start(a, fmt);
   vsnprintf(s, sizeof(s), fmt, a);
   va_end(a);
 
-  const GFXfont *f = &FreeSans12pt7b;
   int16_t sx = x;
   if (align == POS_C)
     sx = x - (text_width(s, f) >> 1);
