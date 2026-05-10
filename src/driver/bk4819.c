@@ -1,6 +1,10 @@
 #include "bk4819.h"
 #include "at32f423.h"
 
+#define PIN_SET(port, pin) ((port)->scr = (pin))
+#define PIN_CLR(port, pin) ((port)->clr = (pin))
+#define PIN_GET(port, pin) ((port)->idt & (pin))
+
 /* BK4819 #1: SCN PA8, SDA PC9, SCK PF6 */
 #define BK1_SCN_PIN GPIO_PINS_8
 #define BK1_SCN_PORT GPIOA
@@ -17,10 +21,6 @@
 #define BK2_SCK_PIN GPIO_PINS_8
 #define BK2_SCK_PORT GPIOC
 
-#define PIN_SET(port, pin) ((port)->scr = (pin))
-#define PIN_CLR(port, pin) ((port)->clr = (pin))
-#define PIN_GET(port, pin) ((port)->idt & (pin))
-
 typedef struct {
   gpio_type *scn_port;
   uint16_t scn_pin;
@@ -33,6 +33,8 @@ typedef struct {
   uint32_t freqCacheLow;
   uint32_t freqCacheHigh;
   ModulationType lastModulation;
+  bool reg30_cached;
+  uint16_t reg30_cache;
 } BK4819_Chip;
 
 static BK4819_Chip g_chips[2] = {
@@ -40,12 +42,16 @@ static BK4819_Chip g_chips[2] = {
            .selectedFilter = 255,
            .freqCacheLow = 0,
            .freqCacheHigh = 0,
-           .lastModulation = 255},
+           .lastModulation = 255,
+           .reg30_cached = false,
+           .reg30_cache = 0},
     [1] = {.gpioOutState = 0x9000,
            .selectedFilter = 255,
            .freqCacheLow = 0,
            .freqCacheHigh = 0,
-           .lastModulation = 255},
+           .lastModulation = 255,
+           .reg30_cached = false,
+           .reg30_cache = 0},
 };
 
 static BK4819_Chip *g_bk = &g_chips[0];
@@ -103,13 +109,15 @@ void BK4819_SelectChip(uint8_t chip) {
     g_bk->sck_pin = BK2_SCK_PIN;
   }
 
+  g_bk->reg30_cached = false;
+
   gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
   gpio_set_output(g_bk->sda_port, g_bk->sda_pin);
   gpio_set_output(g_bk->sck_port, g_bk->sck_pin);
 
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
-  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+  PIN_SET(g_bk->sda_port, g_bk->sda_pin);
 }
 
 static void write_u8(uint8_t data) {
@@ -159,6 +167,14 @@ static uint16_t read_u16(void) {
 }
 
 void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
+  if (reg == BK4819_REG_30) {
+    g_bk->reg30_cache = data;
+    g_bk->reg30_cached = true;
+  }
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   bk_delay();
@@ -169,9 +185,17 @@ void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
   bk_delay();
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
+
+  __set_PRIMASK(primask);
 }
 
 uint16_t BK4819_ReadRegister(uint8_t reg) {
+  if (reg == BK4819_REG_30 && g_bk->reg30_cached)
+    return g_bk->reg30_cache;
+
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   bk_delay();
@@ -182,6 +206,8 @@ uint16_t BK4819_ReadRegister(uint8_t reg) {
   bk_delay();
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
+
+  __set_PRIMASK(primask);
   return v;
 }
 
@@ -211,6 +237,8 @@ static inline uint16_t scale_freq(const uint16_t freq) {
 void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
 void BK4819_Init(void) {
+  g_bk->reg30_cached = false;
+
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
