@@ -149,7 +149,7 @@ void SI47XX_SetProperty(uint16_t prop, uint16_t value)
     wait_cts();
     uint8_t cmd[6] = {CMD_SET_PROPERTY, 0, prop >> 8, prop & 0xFF, value >> 8, value & 0xFF};
     SI47XX_WriteBuffer(cmd, 6);
-    rt880_delay_ms(8);
+    delay_ms(8);
 }
 
 void SI47XX_Init(void)
@@ -172,7 +172,7 @@ void SI47XX_PowerUp(void)
     uint8_t cmd[3] = {CMD_POWER_UP, 0x10 | mode, OUT_ANALOG};
     wait_cts();
     SI47XX_WriteBuffer(cmd, 3);
-    rt880_delay_ms(500);
+    delay_ms(500);
     isSi4732On = true;
     SI47XX_SetVolume(63);
 }
@@ -182,7 +182,7 @@ void SI47XX_PowerDown(void)
     uint8_t cmd[1] = {CMD_POWER_DOWN};
     wait_cts();
     SI47XX_WriteBuffer(cmd, 1);
-    rt880_delay_ms(10);
+    delay_ms(10);
     isSi4732On = false;
 }
 

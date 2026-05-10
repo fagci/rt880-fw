@@ -8,7 +8,7 @@
 #include "ui/spectrum.h"
 
 int main(void) {
-  rt880_init();
+  board_init();
 
   st7789_init();
   st7789_backlight_on();
@@ -33,6 +33,6 @@ int main(void) {
     }
     PrintfEx(0, 18 * 2, POS_L, C_WHITE, C_BLACK, "Lalala");
 
-    rt880_delay_ms(250);
+    delay_ms(250);
   }
 }

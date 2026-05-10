@@ -202,9 +202,9 @@ void st7789_end_pixels(void) {}
 
 void st7789_reset(void) {
   PIN_CLR(PORT_RESET, PIN_RESET);
-  rt880_delay_ms(10);
+  delay_ms(10);
   PIN_SET(PORT_RESET, PIN_RESET);
-  rt880_delay_ms(120);
+  delay_ms(120);
 }
 
 void st7789_init(void) {
@@ -226,12 +226,12 @@ void st7789_init(void) {
   st7789_cs_low();
   st7789_write_cmd(0x01);
   st7789_cs_high();
-  rt880_delay_ms(150);
+  delay_ms(150);
 
   st7789_cs_low();
   st7789_write_cmd(0x11);
   st7789_cs_high();
-  rt880_delay_ms(120);
+  delay_ms(120);
 
   st7789_cs_low();
   st7789_write_cmd(0x3A);
@@ -250,7 +250,7 @@ void st7789_init(void) {
   st7789_cs_low();
   st7789_write_cmd(0x29);
   st7789_cs_high();
-  rt880_delay_ms(50);
+  delay_ms(50);
 }
 
 void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,

@@ -364,7 +364,7 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_48,
                        (11u << 12) | (0 << 10) | (58 << 4) | (8 << 0));
 
-  rt880_delay_ms(10);
+  delay_ms(10);
   BK4819_WriteRegister(BK4819_REG_3F, 0);
 
   BK4819_WriteRegister(BK4819_REG_19, 0x1041);
