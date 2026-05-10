@@ -35,6 +35,10 @@ typedef struct {
   ModulationType lastModulation;
   bool reg30_cached;
   uint16_t reg30_cache;
+  uint16_t reg_cache_43;
+  uint16_t reg_cache_47;
+  uint16_t reg_cache_7E;
+  uint16_t reg_cache_73;
 } BK4819_Chip;
 
 static BK4819_Chip g_chips[2] = {
@@ -44,22 +48,35 @@ static BK4819_Chip g_chips[2] = {
            .freqCacheHigh = 0,
            .lastModulation = 255,
            .reg30_cached = false,
-           .reg30_cache = 0},
+           .reg30_cache = 0,
+           .reg_cache_43 = 0xFFFF,
+           .reg_cache_47 = 0xFFFF,
+           .reg_cache_7E = 0xFFFF,
+           .reg_cache_73 = 0xFFFF},
     [1] = {.gpioOutState = 0x9000,
            .selectedFilter = 255,
            .freqCacheLow = 0,
            .freqCacheHigh = 0,
            .lastModulation = 255,
            .reg30_cached = false,
-           .reg30_cache = 0},
+           .reg30_cache = 0,
+           .reg_cache_43 = 0xFFFF,
+           .reg_cache_47 = 0xFFFF,
+           .reg_cache_7E = 0xFFFF,
+           .reg_cache_73 = 0xFFFF},
 };
 
 static BK4819_Chip *g_bk = &g_chips[0];
 
 static void bk_delay(void) {
-  volatile uint32_t i;
-  for (i = 0; i < 4; i++)
-    ;
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
 }
 
 static void gpio_set_output(gpio_type *port, uint16_t pin) {
@@ -110,6 +127,10 @@ void BK4819_SelectChip(uint8_t chip) {
   }
 
   g_bk->reg30_cached = false;
+  g_bk->reg_cache_43 = 0xFFFF;
+  g_bk->reg_cache_47 = 0xFFFF;
+  g_bk->reg_cache_7E = 0xFFFF;
+  g_bk->reg_cache_73 = 0xFFFF;
 
   gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
   gpio_set_output(g_bk->sda_port, g_bk->sda_pin);
@@ -166,11 +187,48 @@ static uint16_t read_u16(void) {
   return v;
 }
 
-void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
-  if (reg == BK4819_REG_30) {
+static inline void regcache_write(uint8_t reg, uint16_t data) {
+  switch (reg) {
+  case BK4819_REG_30:
     g_bk->reg30_cache = data;
     g_bk->reg30_cached = true;
+    return;
+  case BK4819_REG_43:
+    g_bk->reg_cache_43 = data;
+    return;
+  case BK4819_REG_47:
+    g_bk->reg_cache_47 = data;
+    return;
+  case BK4819_REG_7E:
+    g_bk->reg_cache_7E = data;
+    return;
+  case 0x73:
+    g_bk->reg_cache_73 = data;
+    return;
+  default:
+    return;
   }
+}
+
+static inline uint16_t regcache_read(uint8_t reg) {
+  switch (reg) {
+  case BK4819_REG_30:
+    return g_bk->reg30_cached ? g_bk->reg30_cache : 0xFFFF;
+  case BK4819_REG_43:
+    return g_bk->reg_cache_43;
+  case BK4819_REG_47:
+    return g_bk->reg_cache_47;
+  case BK4819_REG_7E:
+    return g_bk->reg_cache_7E;
+  case 0x73:
+    return g_bk->reg_cache_73;
+  default:
+    return 0xFFFF;
+  }
+}
+
+void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
+  regcache_write(reg, data);
 
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
@@ -190,8 +248,9 @@ void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
 }
 
 uint16_t BK4819_ReadRegister(uint8_t reg) {
-  if (reg == BK4819_REG_30 && g_bk->reg30_cached)
-    return g_bk->reg30_cache;
+  uint16_t cached = regcache_read(reg);
+  if (cached != 0xFFFF)
+    return cached;
 
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
@@ -238,6 +297,10 @@ void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
 void BK4819_Init(void) {
   g_bk->reg30_cached = false;
+  g_bk->reg_cache_43 = 0xFFFF;
+  g_bk->reg_cache_47 = 0xFFFF;
+  g_bk->reg_cache_7E = 0xFFFF;
+  g_bk->reg_cache_73 = 0xFFFF;
 
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
