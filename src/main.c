@@ -159,9 +159,10 @@ bool onKey(key_id_t key, key_evt_type_t state) {
     }
 
     switch (key) {
-    case KEY_0 ... KEY_9:
+    case KEY_1 ... KEY_0:
       FINPUT_setup(0, 1340 * MHZ, UNIT_MHZ, false);
       FINPUT_Show(tuneTo);
+      FINPUT_key(key, state);
       return true;
 
     case KEY_EXIT:
