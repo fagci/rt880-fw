@@ -5,8 +5,11 @@
 #include "driver/st7789.h"
 #include "helper/measurements.h"
 #include "misc.h"
+#include "ui/finput.h"
 #include "ui/graphics.h"
 #include "ui/spectrum.h"
+#include "ui/statusline.h"
+#include <stdint.h>
 
 typedef enum {
   RADIO_BK4819A,
@@ -114,15 +117,77 @@ VFO vfos[3] = {
     },
 };
 
+uint8_t currentVfo = 0;
+
+const uint16_t StepFrequencyTable[15] = {
+    2,   5,   50,  100,
+
+    250, 500, 625, 833, 900, 1000, 1250, 2500, 5000, 10000, 50000,
+};
+
 static const uint8_t VFO_H = 64;
 void renderVFO(VFO *vfo, uint8_t i) {
   uint16_t sy = 24 + i * VFO_H;
 
   FillRect(0, sy, LCD_WIDTH, VFO_H, C_BLACK);
-  DrawRect(0, sy, LCD_WIDTH, VFO_H, C_GRAY);
-  PrintfEx(8, sy + 4 + 7, POS_L, C_YELLOW, C_BLACK, F_SM, "VFO%u", i + 1);
-  PrintfEx(8, sy + 4 + 7 + 2 + 18, POS_L, C_YELLOW, C_BLACK, F_NORM, "%u.%03u",
+  DrawRect(0, sy, LCD_WIDTH, VFO_H, currentVfo == i ? C_GRAY : C_BLACK);
+  PrintfEx(8, sy + 4 + 9, POS_L, C_GRAY, C_BLACK, F_SM, "VFO%u", i + 1);
+  PrintfEx(8, sy + 4 + 9 + 2 + 18, POS_L, C_YELLOW, C_BLACK, F_NORM, "%u.%03u",
            vfo->rxF / MHZ, vfo->rxF % MHZ / KHZ);
+}
+
+void renderVFOs() {
+  for (uint8_t i = 0; i < 3; ++i) {
+    VFO *vfo = &vfos[i];
+    renderVFO(vfo, i);
+  }
+}
+
+void tuneTo(uint32_t f, uint32_t _) {
+  (void)_;
+  vfos[currentVfo].rxF = f;
+  if (currentVfo != 3) {
+    BK4819_SelectChip(currentVfo);
+    BK4819_TuneTo(vfos[currentVfo].rxF, false);
+  }
+}
+
+bool onKey(key_id_t key, key_evt_type_t state) {
+  if (state == KEY_EVT_RELEASE) {
+    if (gFInputActive) {
+      return FINPUT_key(key, state);
+    }
+
+    switch (key) {
+    case KEY_0 ... KEY_9:
+      FINPUT_setup(0, 1340 * MHZ, UNIT_MHZ, false);
+      FINPUT_Show(tuneTo);
+      return true;
+
+    case KEY_EXIT:
+      currentVfo = (currentVfo + 1) % 3;
+      return true;
+    case KEY_UP:
+    case KEY_DOWN:
+      vfos[currentVfo].rxF +=
+          StepFrequencyTable[vfos[currentVfo].step] * (key == KEY_UP ? 1 : -1);
+      if (currentVfo != 3) {
+        BK4819_SelectChip(currentVfo);
+        BK4819_TuneTo(vfos[currentVfo].rxF, false);
+      }
+
+      return true;
+    }
+  }
+  return false;
+}
+
+void render() {
+  STATUSLINE_render();
+  renderVFOs();
+  if (gFInputActive) {
+    FINPUT_render();
+  }
 }
 
 int main(void) {
@@ -131,6 +196,8 @@ int main(void) {
   st7789_init();
   st7789_backlight_on();
   gpio_pin_set(&PIN_KEYBOARD_BACKLIGHT);
+
+  UI_ClearScreen(C_BLACK);
 
   BK4819_SelectChip(0);
   BK4819_Init();
@@ -143,8 +210,18 @@ int main(void) {
 
   gpio_pin_set(&PIN_AF_MUTE);
 
-  for (uint8_t i = 0; i < 3; ++i) {
-    VFO *vfo = &vfos[i];
-    renderVFO(vfo, i);
+  render();
+
+  for (;;) {
+    key_event_t evt;
+    while (keyboard_get_event(&evt)) {
+      if (onKey(evt.key, evt.type)) {
+        render();
+      }
+    }
+    if (gRedrawScreen) {
+      render();
+      gRedrawScreen = false;
+    }
   }
 }

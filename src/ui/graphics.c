@@ -263,7 +263,7 @@ static int16_t text_width(const char *s, const GFXfont *f) {
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
-  PrintfExV(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
+  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
   va_end(a);
 }
 

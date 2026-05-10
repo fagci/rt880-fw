@@ -4,6 +4,7 @@
 #include "gfxfont.h"
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define LCD_WIDTH ST7789_WIDTH
 #define LCD_HEIGHT ST7789_HEIGHT
@@ -12,13 +13,18 @@
 #include "fonts/FreeSans18pt7b.h"
 #include "fonts/FreeSans9pt7b.h"
 #include "fonts/TomThumb.h"
+#include "fonts/symbols.h"
 
+#define F_LG (&FreeSans18pt7b)
 #define F_SS (&TomThumb)
 #define F_SM (&FreeSans9pt7b)
 #define F_NORM (&FreeSans12pt7b)
+#define F_SYM (&Symbols)
 
 typedef enum { POS_L, POS_C, POS_R } TextPos;
 typedef uint16_t Color;
+
+static bool gRedrawScreen;
 
 void UI_ClearScreen(Color bg);
 

@@ -1,0 +1,252 @@
+#include "menu.h"
+#include "../driver/st7789.h"
+#include "../misc.h"
+#include "../ui/graphics.h"
+#include "../ui/statusline.h"
+#include "measurements.h"
+#include <stdbool.h>
+#include <string.h>
+
+#define MENU_STACK_DEPTH 3
+
+static Menu *menu_stack[MENU_STACK_DEPTH];
+static uint8_t menu_stack_top = 0;
+
+static Menu *active_menu = NULL;
+
+static void (*renderFn)(uint8_t x, uint8_t y, TextPos align, Color col,
+                        Color bg, const GFXfont *font, const char *fmt, ...);
+
+// Вспомогательная функция для вычисления правой границы
+static inline uint8_t getMenuRightEdge(void) {
+  return active_menu->x + active_menu->width;
+}
+
+static void renderItem(uint16_t index, uint8_t i) {
+  const MenuItem *item = &active_menu->items[index];
+  const uint8_t ex = getMenuRightEdge();
+  const uint8_t y = active_menu->y + i * active_menu->itemHeight;
+  const uint8_t by = y + active_menu->itemHeight -
+                     (active_menu->itemHeight >= MENU_ITEM_H ? 3 : 2);
+
+  renderFn(3, by, POS_L, C_WHITE, C_BLACK, F_SM, "%s %c", item->name,
+           item->submenu ? '>' : ' ');
+
+  if (item->get_value_text) {
+    char value_buf[32];
+    item->get_value_text(item, value_buf, sizeof(value_buf));
+    PrintfEx(ex - 7, by, POS_R, C_WHITE, C_BLACK, F_SM, "%s", value_buf);
+  }
+}
+
+static void init() {
+  if (strlen(active_menu->title)) {
+    STATUSLINE_SetText(active_menu->title);
+  }
+
+  if (active_menu->y < MENU_Y)
+    active_menu->y = MENU_Y;
+
+  if (!active_menu->width)
+    active_menu->width = LCD_WIDTH;
+
+  if (!active_menu->height)
+    active_menu->height = LCD_HEIGHT - active_menu->y;
+
+  if (!active_menu->itemHeight)
+    active_menu->itemHeight = MENU_ITEM_H;
+
+  if (active_menu->on_enter)
+    active_menu->on_enter();
+
+  if (!active_menu->render_item) {
+    active_menu->render_item = renderItem;
+  }
+
+  // renderFn = active_menu->itemHeight >= MENU_ITEM_H ? PrintMedium :
+  // PrintSmall;
+  renderFn = PrintfEx;
+}
+
+void MENU_Init(Menu *main_menu) {
+  // Log("[MENU] Init");
+  active_menu = main_menu;
+  menu_stack_top = 0;
+
+  if (active_menu->i >= active_menu->num_items) {
+    active_menu->i = 0;
+  }
+
+  init();
+}
+
+void MENU_Deinit() { active_menu = NULL; }
+
+void MENU_Render(void) {
+  if (!active_menu)
+    return;
+
+  uint8_t itemsShow = active_menu->height / active_menu->itemHeight;
+
+  const uint16_t offset = (active_menu->i >= 2) ? active_menu->i - 2 : 0;
+  const uint16_t visible = MIN(active_menu->num_items, itemsShow);
+
+  const uint8_t ex = getMenuRightEdge();
+  const uint8_t ey = active_menu->y + active_menu->height;
+
+  FillRect(active_menu->x, active_menu->y, active_menu->width,
+           active_menu->height, C_BLACK);
+
+  for (uint16_t i = 0; i < visible; ++i) {
+    uint16_t idx = i + offset;
+    if (idx >= active_menu->num_items)
+      break;
+
+    const bool isActive = idx == active_menu->i;
+    const uint8_t y = active_menu->y + i * active_menu->itemHeight;
+
+    if (isActive) {
+      FillRect(active_menu->x, y, ex - 4, active_menu->itemHeight, C_GRAY);
+    }
+    active_menu->render_item(idx, i);
+  }
+
+  // scrollbar
+  const uint8_t y = ConvertDomain(active_menu->i, 0, active_menu->num_items - 1,
+                                  active_menu->y, ey - 3);
+
+  DrawVLine(ex - 2, active_menu->y, active_menu->height, C_WHITE);
+
+  FillRect(ex - 3, y, 3, 3, C_WHITE);
+}
+
+static void setMenuIndex(uint16_t i) { active_menu->i = i - 1; }
+
+/* static bool handleNumNav(KEY_Code_t key, Key_State_t state) {
+  if (gIsNumNavInput && key == KEY_EXIT) {
+    NUMNAV_Deinit();
+    return true;
+  }
+  if (!gIsNumNavInput &&
+      ((state == KEY_LONG_PRESSED && key == KEY_STAR) ||
+       (state == KEY_RELEASED && key >= KEY_0 && key <= KEY_9))) {
+    NUMNAV_Init(active_menu->i, 0, active_menu->num_items - 1);
+    gNumNavCallback = setMenuIndex;
+    return true;
+  }
+  if (state == KEY_RELEASED) {
+    if (gIsNumNavInput) {
+      active_menu->i = NUMNAV_Input(key) - 1;
+      return true;
+    }
+  }
+  return false;
+} */
+
+// Общая функция для обработки UP/DOWN навигации
+static bool handleUpDownNavigation(KEY_Code_t key, Key_State_t state,
+                                   bool hasItems) {
+  if (key != KEY_UP && key != KEY_DOWN) {
+    return false;
+  }
+
+  // Handle only PRESS and REPEAT (auto-repeat on hold), not RELEASE
+  if (state != KEY_PRESSED && state != KEY_LONG_PRESSED &&
+      state != KEY_LONG_PRESSED_CONT) {
+    return false;
+  }
+
+  active_menu->i =
+      IncDecU(active_menu->i, 0, active_menu->num_items, key == KEY_DOWN);
+
+  // Force redraw for menus without items (like keymap submenu)
+  /* if (!hasItems) {
+    gRedrawScreen = true;
+  } */
+
+  if (!hasItems && active_menu->action) {
+    active_menu->action(active_menu->i, key, KEY_RELEASED);
+  }
+
+  return true;
+}
+
+bool MENU_IsActive() { return active_menu; }
+
+bool MENU_HandleInput(KEY_Code_t key, Key_State_t state) {
+  if (!active_menu) {
+    return false;
+  }
+
+  const bool hasItems = (active_menu->items != NULL);
+
+  // UP/DOWN навигация - обрабатываем только PRESS и REPEAT
+  if (key == KEY_UP || key == KEY_DOWN) {
+    if (handleUpDownNavigation(key, state, hasItems)) {
+      return true;
+    }
+  }
+
+  // Для меню без items
+  if (!hasItems) {
+    if (active_menu->action &&
+        active_menu->action(active_menu->i, key, state)) {
+      return true;
+    }
+    /* if (handleNumNav(key, state)) {
+      return true;
+    } */
+    return false;
+  }
+
+  // Для меню с items
+  const MenuItem *item = &active_menu->items[active_menu->i];
+
+  if (state == KEY_RELEASED || state == KEY_LONG_PRESSED_CONT) {
+    if (key == KEY_STAR || key == KEY_HASH) {
+      if (item->change_value) {
+        item->change_value(item, key == KEY_STAR);
+        return true;
+      }
+      return true;
+    }
+  }
+
+  if (state == KEY_RELEASED) {
+    switch (key) {
+    case KEY_MENU:
+      if (item->submenu) {
+        if (menu_stack_top < MENU_STACK_DEPTH) {
+          menu_stack[menu_stack_top++] = active_menu;
+          active_menu = item->submenu;
+          active_menu->i = 0;
+          init();
+        }
+        return true;
+      }
+      break;
+    case KEY_EXIT:
+      return MENU_Back();
+    default:
+      break;
+    }
+  }
+
+  if (item->action && item->action(item, key, state)) {
+    return true;
+  }
+  /* if (handleNumNav(key, state)) {
+    return true;
+  } */
+  return false;
+}
+
+bool MENU_Back() {
+  if (menu_stack_top > 0) {
+    active_menu = menu_stack[--menu_stack_top];
+    init();
+    return true;
+  }
+  active_menu = NULL;
+  return false;
+}

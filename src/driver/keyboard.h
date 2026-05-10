@@ -42,6 +42,11 @@ typedef enum {
   KEY_EVT_PRESS,
   KEY_EVT_LONG_PRESS,
   KEY_EVT_RELEASE,
+
+  KEY_PRESSED = KEY_EVT_PRESS,
+  KEY_RELEASED = KEY_EVT_RELEASE,
+  KEY_LONG_PRESSED = KEY_EVT_LONG_PRESS,
+  KEY_LONG_PRESSED_CONT = 4,
 } key_evt_type_t;
 
 typedef struct {
@@ -49,6 +54,9 @@ typedef struct {
   key_id_t key;
   key_evt_type_t type;
 } key_event_t;
+
+typedef key_id_t KEY_Code_t;
+typedef key_evt_type_t Key_State_t;
 
 void keyboard_init(void);
 void keyboard_scan_tick(void);

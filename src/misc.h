@@ -7,6 +7,12 @@
 #define KHZ 100
 #define MHZ 100000
 
+#ifndef MIN
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+#endif
+
+#define ABS(v) (v < 0 ? -v : v)
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
