@@ -1,5 +1,6 @@
 #include "bk4819.h"
 #include "at32f423.h"
+#include "bk4819-regs.h"
 #include "board.h"
 
 #define PIN_SET(port, pin) ((port)->scr = (pin))
@@ -70,6 +71,7 @@ static BK4819_Chip g_chips[2] = {
 static BK4819_Chip *g_bk = &g_chips[0];
 
 static void bk_delay(void) {
+  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
   __asm volatile("nop\nnop\nnop\nnop\nnop\n");
   __asm volatile("nop\nnop\nnop\nnop\nnop\n");
   __asm volatile("nop\nnop\nnop\nnop\nnop\n");
@@ -194,7 +196,7 @@ static inline void regcache_write(uint8_t reg, uint16_t data) {
     g_bk->reg30_cache = data;
     g_bk->reg30_cached = true;
     return;
-  case BK4819_REG_43:
+  /* case BK4819_REG_43:
     g_bk->reg_cache_43 = data;
     return;
   case BK4819_REG_47:
@@ -205,7 +207,7 @@ static inline void regcache_write(uint8_t reg, uint16_t data) {
     return;
   case 0x73:
     g_bk->reg_cache_73 = data;
-    return;
+    return; */
   default:
     return;
   }
@@ -215,14 +217,14 @@ static inline uint16_t regcache_read(uint8_t reg) {
   switch (reg) {
   case BK4819_REG_30:
     return g_bk->reg30_cached ? g_bk->reg30_cache : 0xFFFF;
-  case BK4819_REG_43:
+  /* case BK4819_REG_43:
     return g_bk->reg_cache_43;
   case BK4819_REG_47:
     return g_bk->reg_cache_47;
   case BK4819_REG_7E:
     return g_bk->reg_cache_7E;
   case 0x73:
-    return g_bk->reg_cache_73;
+    return g_bk->reg_cache_73; */
   default:
     return 0xFFFF;
   }
@@ -280,14 +282,40 @@ static const uint8_t sqTypeValues[4] = {0x88, 0xAA, 0xCC, 0xFF};
 static const uint8_t DTMF_COEFFS[] = {111, 107, 103, 98, 80,  71,  58,  44,
                                       65,  55,  37,  23, 228, 203, 181, 159};
 
-const Gain gainTable[32] = {
-    {0x10, 90},  {0x1, 88},   {0x9, 87},   {0x2, 83},   {0xA, 81},
-    {0x12, 79},  {0x2A, 77},  {0x32, 75},  {0x3A, 70},  {0x20B, 68},
-    {0x213, 64}, {0x21B, 62}, {0x214, 59}, {0x21C, 56}, {0x22D, 52},
-    {0x23C, 50}, {0x23D, 48}, {0x255, 44}, {0x25D, 42}, {0x275, 39},
-    {0x295, 33}, {0x2B6, 31}, {0x354, 28}, {0x36C, 23}, {0x38C, 20},
-    {0x38D, 17}, {0x3B5, 13}, {0x3B6, 9},  {0x3D6, 8},  {0x3BF, 3},
-    {0x3DF, 2},  {0x3FF, 0},
+const Gain GAIN_TABLE[32] = {
+    {0x3ff, 0},  // AUTO
+    {0x3ff, 0},  //
+    {0x3f7, 3},  //
+    {0x3ef, 6},  //
+    {0x3e7, 8},  //
+    {0x3e6, 11}, //
+    {0x3e5, 14}, //
+    {0x3e4, 17}, //
+    {0x3d3, 20}, //
+    {0x3b3, 22}, //
+    {0x3c3, 25}, //
+    {0x3b2, 28}, //
+    {0x3c2, 31}, //
+    {0x3b1, 34}, //
+    {0x3f0, 36}, //
+    {0x3e8, 39}, //
+    {0x390, 42}, //
+    {0x3a0, 45}, //
+    {0x368, 48}, //
+    {0x360, 50}, //
+    {0x348, 53}, //
+    {0x2a0, 56}, //
+    {0x301, 59}, //
+    {0x20a, 62}, //
+    {0x248, 64}, //
+    {0x10a, 67}, //
+    {0x201, 70}, //
+    {0x109, 73}, //
+    {0x200, 76}, //
+    {0x1, 78},   //
+    {0x100, 81}, //
+    {0x0, 84},   //
+
 };
 
 static inline uint16_t scale_freq(const uint16_t freq) {
@@ -311,8 +339,12 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_00, 0x0000);
   BK4819_WriteRegister(BK4819_REG_37, 0x1D0F);
 
-  g_bk->gpioOutState = 1 << 4;
+  g_bk->gpioOutState = 0;
   BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
+
+  if (g_bk == &g_chips[0]) {
+    BK4819_ToggleGpioOut(BK4819_GPIO2_VHF_RX, true);
+  }
 
   BK4819_SetupPowerAmplifier(0, 0);
 
@@ -347,33 +379,82 @@ uint16_t BK4819_TuneToAndWaitRSSI(uint32_t freq) {
   BK4819_SetFrequency(freq);
 
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
+  // BK4819_WriteRegister(BK4819_REG_30, 0x200);
   BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
+  rt880_delay_us(300);
   BK4819_WriteRegister(BK4819_REG_30, reg);
-  rt880_delay_us(2300);
+  rt880_delay_us(2500);
 
   return BK4819_GetRSSI();
 }
 
-void BK4819_SetAGC(bool useDefault, uint8_t gainIndex) {
-  const bool enableAgc = (gainIndex == AUTO_GAIN_INDEX);
-  uint16_t regVal = BK4819_ReadRegister(BK4819_REG_7E);
+int8_t BK4819_GetAgcIndex() {
+  int8_t idx = (BK4819_ReadRegister(BK4819_REG_7E) >> 12) & 7;
+  if (idx > 3) {
+    idx -= 8;
+  }
+  return idx;
+}
 
-  BK4819_WriteRegister(BK4819_REG_7E, (regVal & ~(1 << 15) & ~(0b111 << 12)) |
-                                          (!enableAgc << 15) | (3u << 12) |
-                                          (5u << 3) | (6u << 0));
+uint8_t BK4819_GetAttenuation() {
+  uint8_t reg = BK4819_REG_13;
+  switch (BK4819_GetAgcIndex()) {
+  case 0:
+    reg = BK4819_REG_10;
+    break;
+  case 1:
+    reg = BK4819_REG_11;
+    break;
+  case 2:
+    reg = BK4819_REG_12;
+    break;
+  case 3:
+    reg = BK4819_REG_13;
+    break;
+  case -1:
+    reg = BK4819_REG_14;
+    break;
+  }
+  static const uint8_t lna_peak[4] = {19, 16, 11, 0};
+  static const uint8_t lna_gain[8] = {24, 19, 14, 9, 6, 4, 2, 0};
+  static const uint8_t mixer_gain[4] = {8, 6, 3, 0};
+  static const uint8_t pga_gain[8] = {33, 27, 21, 15, 9, 6, 3, 0};
 
-  if (enableAgc)
-    BK4819_WriteRegister(BK4819_REG_13, 0x03BE);
-  else
-    BK4819_WriteRegister(BK4819_REG_13, gainTable[gainIndex].regValue);
+  uint16_t v = BK4819_ReadRegister(reg);
+  return lna_peak[(v >> 8) & 3] + lna_gain[(v >> 5) & 7] +
+         mixer_gain[(v >> 3) & 3] + pga_gain[v & 7];
+}
 
-  BK4819_WriteRegister(0x12, (3u << 8) | (3u << 5) | (3u << 3) | (4u << 0));
-  BK4819_WriteRegister(0x11, (2u << 8) | (3u << 5) | (3u << 3) | (3u << 0));
-  BK4819_WriteRegister(0x10, (0u << 8) | (3u << 5) | (3u << 3) | (2u << 0));
-  BK4819_WriteRegister(0x14, (0u << 8) | (0u << 5) | (3u << 3) | (1u << 0));
+typedef struct {
+  uint8_t lo;
+  uint8_t low;
+  uint8_t high;
+} AgcConfig;
 
-  BK4819_WriteRegister(BK4819_REG_49, (0 << 14) | (84 << 7) | (56 << 0));
-  BK4819_WriteRegister(BK4819_REG_7B, 0x8420);
+static const AgcConfig AGC_DEFAULT = {0, 56, 84};
+static const AgcConfig AGC_FAST = {0, 32, 50};
+
+void BK4819_SetAGC(bool fm, uint8_t gainIndex) {
+  const bool enableAgc = gainIndex == AUTO_GAIN_INDEX;
+  const AgcConfig *cfg = fm ? &AGC_DEFAULT : &AGC_FAST;
+  uint16_t reg13 = enableAgc ? 0x03DF : GAIN_TABLE[gainIndex].regValue;
+  uint16_t reg14 = fm ? 0x0210 : 0x0000;
+  uint16_t reg49 =
+      fm ? 0x2AB2 : (cfg->lo << 14) | (cfg->high << 7) | (cfg->low << 0);
+
+  uint16_t reg7E = BK4819_ReadRegister(BK4819_REG_7E);
+  reg7E &= ~((1 << 15) | (0b111 << 12)); // Clear AGC and index bits
+  reg7E |= (!enableAgc << 15) |          // AGC fix mode
+           (3u << 12) |                  // AGC fix index
+           (5u << 3) |                   // Default DC
+           (6u << 0);                    // Default value
+
+  BK4819_WriteRegister(BK4819_REG_13, reg13);
+  BK4819_WriteRegister(BK4819_REG_14, reg14);
+
+  BK4819_WriteRegister(BK4819_REG_49, reg49);
+  // BK4819_WriteRegister(BK4819_REG_7B, 0x8420);
+  BK4819_WriteRegister(BK4819_REG_7E, reg7E);
 }
 
 void BK4819_SetAFC(uint8_t level) {
@@ -527,9 +608,16 @@ void BK4819_PrepareTransmit(void) {
   BK4819_WriteRegister(BK4819_REG_7B, 0x8420);
 }
 
-void BK4819_ToggleGpioOut(uint8_t pin, bool on) {
-  (void)pin;
-  (void)on;
+void BK4819_ToggleGpioOut(BK4819_GPIO_PIN_t pin, bool enable) {
+  const uint16_t pin_bit = 0x40U >> pin;
+
+  if (enable) {
+    g_bk->gpioOutState |= pin_bit;
+  } else {
+    g_bk->gpioOutState &= ~pin_bit;
+  }
+
+  BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
 }
 
 void BK4819_ToggleAFBit(bool enable) {

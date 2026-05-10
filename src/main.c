@@ -101,9 +101,10 @@ void testScan(void) {
   BK4819_Init();
   BK4819_RX_TurnOn();
   BK4819_SetAFC(0);
+  BK4819_SetAGC(true, 1);
   BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
-  BK4819_ToggleAFBit(false);
-  BK4819_ToggleAFDAC(false);
+  /* BK4819_ToggleAFBit(false);
+  BK4819_ToggleAFDAC(false); */
 
   SP_Init(&range, stp, stp);
   UI_ClearScreen(C_BLACK);
@@ -147,9 +148,9 @@ void testScan(void) {
 
     // Перерисовываем строку только если что-то изменилось
     if (peakDBm != last_dbm || peakFreq != last_freq || cur_fps != last_fps) {
-      PrintfEx(ST7789_WIDTH - 1, 22, POS_R, C_BLUE, C_BLACK,
-               "%ddBm %u.%03uM  %ufps", peakDBm, peakFreq / MHZ,
-               (peakFreq % MHZ) / KHZ, cur_fps);
+      PrintfEx(ST7789_WIDTH - 1, 22, POS_L, C_BLUE, C_BLACK, "%ddBm %u.%03uM",
+               peakDBm, peakFreq / MHZ, (peakFreq % MHZ) / KHZ);
+      PrintfEx(ST7789_WIDTH - 1, 22, POS_R, C_BLUE, C_BLACK, "%ufps", cur_fps);
       last_dbm = peakDBm;
       last_freq = peakFreq;
       last_fps = cur_fps;
@@ -168,6 +169,8 @@ int main(void) {
   st7789_init();
   st7789_backlight_on();
   AF_MUTE_PORT->scr = AF_MUTE_PIN;
+
+  // FM_PWR_PORT->scr = FM_PWR_PIN;
 
   testScan(); // не возвращается
 }

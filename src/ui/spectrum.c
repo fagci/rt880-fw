@@ -17,7 +17,7 @@ static uint32_t bw;
 
 static FRange range;
 
-static DBmRange dBmRange = {-110, -40};
+static DBmRange dBmRange = {-110, -50};
 
 static bool ticksRendered = false;
 
