@@ -1,11 +1,11 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 
-#include <stdint.h>
-#include <stdarg.h>
 #include "gfxfont.h"
+#include <stdarg.h>
+#include <stdint.h>
 
-#define LCD_WIDTH  ST7789_WIDTH
+#define LCD_WIDTH ST7789_WIDTH
 #define LCD_HEIGHT ST7789_HEIGHT
 
 typedef enum { POS_L, POS_C, POS_R } TextPos;
@@ -22,6 +22,7 @@ void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillCircle(int16_t x, int16_t y, int16_t r, Color c);
 
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...);
-void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt, ...);
+void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color col, Color bg,
+              const char *fmt, ...);
 
 #endif

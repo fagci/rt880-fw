@@ -2,6 +2,27 @@
 
 static uint32_t fac_ms;
 
+static volatile uint32_t tick_ms = 0;
+
+// SysTick_Handler — если его ещё нет в проекте
+void SysTick_Handler(void) { tick_ms++; }
+
+// Инициализация: вызвать ПОСЛЕ system_clock_config()
+void rt880_tick_init(void) {
+  // прерывание каждые 1 мс
+  SysTick_Config(SystemCoreClock / 1000);
+}
+
+uint32_t rt880_tick_ms(void) { return tick_ms; }
+
+void rt880_dwt_init(void) {
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+uint32_t rt880_dwt_ms(void) { return DWT->CYCCNT / (SystemCoreClock / 1000); }
+
 static void gpio_output_init(gpio_type *port, uint16_t pin,
                              crm_periph_clock_type clk) {
   gpio_init_type g;

@@ -161,24 +161,47 @@ void FillCircle(int16_t x0, int16_t y0, int16_t r, Color c) {
 }
 
 /* ─── Font rendering ─── */
-static void putchar(int16_t *x, int16_t y, uint8_t c, Color col,
+// graphics.c — замена putchar
+
+// Буфер одной строки символа — макс. ширина глифа ~20px
+static uint16_t glyph_line_buf[32];
+
+static void putchar(int16_t *cx, int16_t y, uint8_t c, Color col, Color bg,
                     const GFXfont *f) {
   if (c < f->first || c > f->last)
     return;
   const GFXglyph *g = &f->glyph[c - f->first];
   const uint8_t *b = f->bitmap + g->bitmapOffset;
-  uint8_t w = g->width, h = g->height, bits = 0, bit = 0;
+  uint8_t w = g->width, h = g->height;
   int8_t xo = g->xOffset, yo = g->yOffset;
 
+  // Рисуем построчно: для каждой строки глифа — один DMA-вызов
+  uint8_t bits = 0, bit = 0;
   for (uint8_t yy = 0; yy < h; yy++) {
+    int16_t screen_y = y + yo + yy;
+    if (screen_y < 0 || screen_y >= FB_H) {
+      // Всё равно читаем биты чтобы не сломать указатель b
+      for (uint8_t xx = 0; xx < w; xx++, bits <<= 1)
+        if (!(bit++ & 7))
+          bits = *b++;
+      continue;
+    }
+    int16_t screen_x = *cx + xo;
+    // Заполняем буфер строки
     for (uint8_t xx = 0; xx < w; xx++, bits <<= 1) {
       if (!(bit++ & 7))
         bits = *b++;
-      if (bits & 0x80)
-        PutPixel(*x + xo + xx, y + yo + yy, col);
+      glyph_line_buf[xx] = (bits & 0x80) ? col : bg;
+    }
+    // Один setAddrWindow + DMA на всю строку глифа
+    if (screen_x >= 0 && screen_x + w <= FB_W) {
+      st7789_cs_low();
+      st7789_set_addr_window_raw(screen_x, screen_y, w, 1);
+      st7789_write_pixels_dma(glyph_line_buf, w);
+      st7789_cs_high();
     }
   }
-  *x += g->xAdvance;
+  *cx += g->xAdvance;
 }
 
 static int16_t text_width(const char *s, const GFXfont *f) {
@@ -194,12 +217,12 @@ static int16_t text_width(const char *s, const GFXfont *f) {
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
-  PrintfEx(x, y, POS_L, C_WHITE, fmt);
+  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, fmt);
   va_end(a);
 }
 
-void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt,
-              ...) {
+void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color col, Color bg,
+              const char *fmt, ...) {
   char buf[64];
   va_list a;
   va_start(a, fmt);
@@ -208,13 +231,11 @@ void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt,
 
   const GFXfont *f = &FreeSans12pt7b;
   int16_t sx = x;
-
-  if (align == POS_C) {
+  if (align == POS_C)
     sx = x - (text_width(buf, f) >> 1);
-  } else if (align == POS_R) {
+  else if (align == POS_R)
     sx = x - text_width(buf, f);
-  }
 
   for (char *p = buf; *p; p++)
-    putchar(&sx, y, *p, c, f);
+    putchar(&sx, y, (uint8_t)*p, col, bg, f);
 }

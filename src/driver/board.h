@@ -3,6 +3,7 @@
 
 #include "at32f423.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 #define RT880_LED_RED_PIN GPIO_PINS_4
 #define RT880_LED_GREEN_PIN GPIO_PINS_13
@@ -25,6 +26,12 @@ void rt880_led_init(void);
 void rt880_led_on(void);
 void rt880_led_off(void);
 void rt880_led_toggle(void);
+
+void rt880_tick_init(void);
+uint32_t rt880_tick_ms(void);
+
+void rt880_dwt_init(void);
+uint32_t rt880_dwt_ms(void);
 
 void rt880_delay_init(void);
 void rt880_delay_ms(uint32_t ms);
