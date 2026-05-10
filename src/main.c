@@ -30,15 +30,14 @@ void testScan(void) {
 
   BK4819_SelectChip(0); */
 
-  uint32_t stp = 5 * KHZ;
-  uint32_t s = 104 * MHZ;
-  uint32_t e = 105 * MHZ;
+  uint32_t stp = 25 * KHZ;
+  uint32_t s = 172 * MHZ;
+  uint32_t e = 173 * MHZ;
 
   FRange range = {.start = s, .end = e};
   SP_Init(&range, stp, stp);
 
   UI_ClearScreen(C_BLACK);
-
   uint32_t tick = 0;
 
   for (;;) {
@@ -49,13 +48,7 @@ void testScan(void) {
 
     for (uint32_t f = s; f < e; f += stp) {
       // BK4819_SelectChip(0);
-      BK4819_TuneTo(f, false);
-      // rt880_delay_ms(3);
-
-      for (uint8_t i = 0; i < 4; i++)
-        ;
-
-      uint16_t rssi = BK4819_GetRSSI();
+      uint16_t rssi = BK4819_TuneToAndWaitRSSI(f);
       if (rssi > peakRssi) {
         peakRssi = rssi;
         peakFreq = f;

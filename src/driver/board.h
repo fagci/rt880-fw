@@ -28,6 +28,7 @@ void rt880_led_toggle(void);
 
 void rt880_delay_init(void);
 void rt880_delay_ms(uint32_t ms);
+void rt880_delay_us(uint32_t us);
 
 void rt880_audio_init(void);
 void rt880_audio_path_set(uint8_t source); /* 0=BK1, 1=BK2 */

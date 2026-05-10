@@ -202,50 +202,36 @@ static void renderWf(uint32_t f, uint16_t val) {
 
 static uint16_t nsy[SP_MAX_POINTS] = {0};
 
-void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
-  const uint16_t rssiMin = Min(rssiHistory, filledPoints);
-  const uint16_t noiseFloor = SP_GetNoiseFloor();
-  const uint16_t rssiMax = Max(rssiHistory, filledPoints);
+static uint8_t spDirty[SP_MAX_POINTS];
 
-  const uint16_t vMin = (dBmRange.min + 160) * 2; // rssiMin - 1;
+void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
+  const uint16_t vMin = (dBmRange.min + 160) * 2;
   const uint16_t vMax = (dBmRange.max + 160) * 2;
-  // rssiMax + ((rssiMax - noiseFloor) < 60 ? (rssiMax - noiseFloor) : 60);
 
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
 
-  for (uint32_t x = 0; x < SP_MAX_POINTS; ++x)
-    nsy[x] = 0;
+  memset(nsy, 0, sizeof(nsy));
 
   for (uint32_t f = range.start; f <= range.end; f += step) {
-    Seg s =
-        seg_from_f(f, ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh));
-
-    if (s.v > sh)
-      s.v = sh;
-
+    uint16_t hv = ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh);
+    Seg s = seg_from_f(f, hv);
+    if (s.v > sh) s.v = sh;
     for (uint8_t x = s.x0; x < s.x1; ++x)
       nsy[x] = s.v;
   }
 
   for (uint8_t x = 0; x < SP_MAX_POINTS; ++x) {
-    uint16_t oldv = osy[x];
     uint16_t newv = nsy[x];
-
-    if (oldv == newv)
-      continue;
-
-    if (newv > oldv) {
-      uint8_t top = sy + (sh - newv);
-      uint8_t h = newv - oldv;
-      st7789_fill_rect_dma(x, top, 1, h, C_CYAN);
-    } else {
-      uint8_t top = sy + (sh - oldv);
-      uint8_t h = oldv - newv;
-      st7789_fill_rect_dma(x, top, 1, h, C_BLACK);
-    }
-
+    uint16_t oldv = osy[x];
+    int16_t dh = (int16_t)newv - (int16_t)oldv;
     osy[x] = newv;
+
+    if (dh > 0) {
+      st7789_fill_rect_dma(x, sy + (sh - newv), 1, dh, C_CYAN);
+    } else if (dh < 0) {
+      st7789_fill_rect_dma(x, sy + (sh - oldv), 1, -dh, C_BLACK);
+    }
   }
 
   SP_DrawTicks(sy, sh, p);

@@ -61,6 +61,18 @@ void rt880_delay_ms(uint32_t ms) {
   SysTick->VAL = 0x00;
 }
 
+void rt880_delay_us(uint32_t us) {
+  uint32_t temp;
+  SysTick->LOAD = us * (fac_ms / 1000);
+  SysTick->VAL = 0x00;
+  SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
+  do {
+    temp = SysTick->CTRL;
+  } while ((temp & 0x01) && !(temp & (1 << 16)));
+  SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
+  SysTick->VAL = 0x00;
+}
+
 void rt880_audio_init(void) {
   gpio_output_init(AF_MUTE_PORT, AF_MUTE_PIN, CRM_GPIOF_PERIPH_CLOCK);
   gpio_output_init(ANC_PWR_PORT, ANC_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);

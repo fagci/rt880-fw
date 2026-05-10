@@ -1,5 +1,6 @@
 #include "bk4819.h"
 #include "at32f423.h"
+#include "board.h"
 
 #define PIN_SET(port, pin) ((port)->scr = (pin))
 #define PIN_CLR(port, pin) ((port)->clr = (pin))
@@ -342,6 +343,17 @@ void BK4819_Init(void) {
                                  (50 * 10) | (1 << 12));
 }
 
+uint16_t BK4819_TuneToAndWaitRSSI(uint32_t freq) {
+  BK4819_SetFrequency(freq);
+
+  uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
+  BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
+  BK4819_WriteRegister(BK4819_REG_30, reg);
+  rt880_delay_us(2300);
+
+  return BK4819_GetRSSI();
+}
+
 void BK4819_SetAGC(bool useDefault, uint8_t gainIndex) {
   const bool enableAgc = (gainIndex == AUTO_GAIN_INDEX);
   uint16_t regVal = BK4819_ReadRegister(BK4819_REG_7E);
@@ -400,14 +412,14 @@ void BK4819_SetFrequency(uint32_t freq) {
 void BK4819_TuneTo(uint32_t freq, bool precise) {
   BK4819_SetFrequency(freq);
 
-  uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
-
-  if (precise)
+  if (precise) {
+    uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
     BK4819_WriteRegister(BK4819_REG_30, 0x0200);
-  else
+    BK4819_WriteRegister(BK4819_REG_30, reg);
+  } else {
+    uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
     BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
-
-  BK4819_WriteRegister(BK4819_REG_30, reg);
+  }
 }
 
 void BK4819_RX_TurnOn(void) {
