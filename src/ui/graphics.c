@@ -204,6 +204,52 @@ static void putchar(int16_t *cx, int16_t y, uint8_t c, Color col, Color bg,
   *cx += g->xAdvance;
 }
 
+/* ─── Font rendering ─── */
+
+// ping-pong буферы строки текста (big-endian для SPI)
+static uint8_t txt_buf[2][ST7789_WIDTH * 2];
+
+// Заполнить одну строку буфера: bg-заливка + пиксели глифов для screen_row
+static void txt_fill_row(uint8_t *buf, int16_t screen_row, const char *s,
+                         int16_t sx, int16_t baseline, Color col, Color bg,
+                         const GFXfont *f, int16_t x0, int16_t span) {
+  uint8_t bgh = bg >> 8, bgl = bg;
+  uint8_t clh = col >> 8, cll = col;
+  for (int16_t i = 0; i < span; i++) {
+    buf[i * 2] = bgh;
+    buf[i * 2 + 1] = bgl;
+  }
+  int16_t cx = sx;
+  for (const char *p = s; *p; p++) {
+    uint8_t c = (uint8_t)*p;
+    if (c < f->first || c > f->last) {
+      cx += 0;
+      continue;
+    }
+    const GFXglyph *g = &f->glyph[c - f->first];
+    int16_t gy = screen_row - (baseline + g->yOffset);
+    if (gy >= 0 && gy < g->height) {
+      uint32_t bit0 = (uint32_t)gy * g->width;
+      const uint8_t *b = f->bitmap + g->bitmapOffset + bit0 / 8;
+      uint8_t bits = *b << (bit0 % 8);
+      uint8_t bc = 8 - (bit0 % 8);
+      int16_t px = cx + g->xOffset - x0;
+      for (uint8_t xx = 0; xx < g->width; xx++, bits <<= 1, bc--) {
+        if (!bc) {
+          bits = *++b;
+          bc = 8;
+        }
+        if ((bits & 0x80) && px >= 0 && px < span) {
+          buf[px * 2] = clh;
+          buf[px * 2 + 1] = cll;
+        }
+        px++;
+      }
+    }
+    cx += g->xAdvance;
+  }
+}
+
 static int16_t text_width(const char *s, const GFXfont *f) {
   int16_t x = 0;
   for (; *s; s++) {
@@ -217,25 +263,70 @@ static int16_t text_width(const char *s, const GFXfont *f) {
 void Printf(uint8_t x, uint8_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
-  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, fmt);
+  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, fmt, a);
   va_end(a);
 }
 
 void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color col, Color bg,
               const char *fmt, ...) {
-  char buf[64];
+  char s[64];
   va_list a;
   va_start(a, fmt);
-  vsnprintf(buf, sizeof(buf), fmt, a);
+  vsnprintf(s, sizeof(s), fmt, a);
   va_end(a);
 
   const GFXfont *f = &FreeSans12pt7b;
   int16_t sx = x;
   if (align == POS_C)
-    sx = x - (text_width(buf, f) >> 1);
+    sx = x - (text_width(s, f) >> 1);
   else if (align == POS_R)
-    sx = x - text_width(buf, f);
+    sx = x - text_width(s, f);
 
-  for (char *p = buf; *p; p++)
-    putchar(&sx, y, (uint8_t)*p, col, bg, f);
+  // Bounding box по Y
+  int16_t y_min = INT16_MAX, y_max = INT16_MIN;
+  for (char *p = s; *p; p++) {
+    uint8_t c = (uint8_t)*p;
+    if (c < f->first || c > f->last)
+      continue;
+    const GFXglyph *g = &f->glyph[c - f->first];
+    int16_t yt = y + g->yOffset;
+    int16_t yb = yt + g->height - 1;
+    if (yt < y_min)
+      y_min = yt;
+    if (yb > y_max)
+      y_max = yb;
+  }
+  if (y_min > y_max)
+    return;
+  if (y_min < 0)
+    y_min = 0;
+  if (y_max >= FB_H)
+    y_max = FB_H - 1;
+
+  // Bounding box по X
+  int16_t x0 = sx, x1 = sx + text_width(s, f);
+  if (x0 < 0)
+    x0 = 0;
+  if (x1 > FB_W)
+    x1 = FB_W;
+  if (x0 >= x1)
+    return;
+  int16_t span = x1 - x0;
+
+  st7789_cs_low();
+  st7789_set_addr_window_raw(x0, y_min, span, y_max - y_min + 1);
+
+  uint8_t cur = 0;
+  txt_fill_row(txt_buf[cur], y_min, s, sx, y, col, bg, f, x0, span);
+  st7789_dma_start(txt_buf[cur], span * 2);
+
+  for (int16_t row = y_min + 1; row <= y_max; row++) {
+    cur ^= 1;
+    txt_fill_row(txt_buf[cur], row, s, sx, y, col, bg, f, x0, span);
+    st7789_dma_wait();
+    st7789_dma_start(txt_buf[cur], span * 2);
+  }
+
+  st7789_dma_wait();
+  st7789_cs_high();
 }

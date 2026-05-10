@@ -34,6 +34,9 @@ void st7789_cs_high(void);
 void st7789_start_pixels(void);
 void st7789_end_pixels(void);
 
+void st7789_dma_start(const uint8_t *buf, uint16_t byte_count);
+void st7789_dma_wait(void);
+
 void st7789_flush(uint16_t color);
 void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                           uint16_t color);

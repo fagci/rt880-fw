@@ -207,13 +207,24 @@ static uint8_t spDirty[SP_MAX_POINTS];
 // Буфер для одной строки спектра: 240 пикселей × 2 байта = 480 байт
 static uint16_t sp_line_buf[SP_MAX_POINTS];
 
+// 2 × 240 × 2 = 960 байт — буферы уже в big-endian для SPI
+#define SP_BYTES (SP_MAX_POINTS * 2)
+static uint8_t sp_buf[2][SP_BYTES];
+
+static void fill_sp_row(uint8_t *buf, int16_t row) {
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+    uint16_t c = ((int16_t)nsy[x] > row) ? C_CYAN : C_BLACK;
+    buf[x * 2] = (uint8_t)(c >> 8);
+    buf[x * 2 + 1] = (uint8_t)(c);
+  }
+}
+
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   const uint16_t vMin = (dBmRange.min + 160) * 2;
   const uint16_t vMax = (dBmRange.max + 160) * 2;
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
 
-  // 1. Вычисляем новые высоты (nsy) — как в оригинале
   memset(nsy, 0, sizeof(nsy));
   for (uint32_t f = range.start; f <= range.end; f += step) {
     uint16_t hv = ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh);
@@ -224,59 +235,48 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
       nsy[x] = s.v;
   }
 
-  // 2. Перерисовываем каждую изменившуюся строку целиком одним DMA-вызовом
-  //    Ключевая идея: группируем по высоте строки, а не по X
-  //    Но строки у каждого столбца разные — поэтому рисуем горизонтальные
-  //    полосы по всей ширине SP_MAX_POINTS
-
-  // Нам нужно за один проход по всем строкам (y) нарисовать
-  // горизонтальный срез всего спектра
-
-  // Определяем диапазон изменений
-  uint8_t min_changed_y = sh;
-  uint8_t max_changed_y = 0;
-  bool any_changed = false;
-
+  uint8_t min_y = sh, max_y = 0;
+  bool any = false;
   for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
     if (nsy[x] != osy[x]) {
-      uint8_t lo = (nsy[x] < osy[x]) ? nsy[x] : osy[x];
-      uint8_t hi = (nsy[x] > osy[x]) ? nsy[x] : osy[x];
-      if (lo < min_changed_y)
-        min_changed_y = lo;
-      if (hi > max_changed_y)
-        max_changed_y = hi;
-      any_changed = true;
+      uint8_t lo = nsy[x] < osy[x] ? nsy[x] : osy[x];
+      uint8_t hi = nsy[x] > osy[x] ? nsy[x] : osy[x];
+      if (lo < min_y)
+        min_y = lo;
+      if (hi > max_y)
+        max_y = hi;
+      any = true;
     }
   }
 
-  if (!any_changed) {
+  if (!any) {
     SP_DrawTicks(sy, sh, p);
     return;
   }
 
-  // Рисуем построчно только изменившийся диапазон [min_y .. max_y]
-  // Каждая строка — один setAddrWindow + DMA на SP_MAX_POINTS пикселей
+  uint16_t top_y = sy + sh - 1 - max_y;
+  uint8_t rect_h = max_y - min_y + 1;
 
   st7789_cs_low();
-
-  // Один setWindow на весь диапазон строк
-  uint16_t top_y    = sy + sh - 1 - max_changed_y;
-  uint16_t rect_h   = max_changed_y - min_changed_y + 1;
   st7789_set_addr_window_raw(0, top_y, SP_MAX_POINTS, rect_h);
 
-  // Строки идут сверху вниз на экране → row убывает
-  for (int16_t row = max_changed_y; row >= (int16_t)min_changed_y; row--) {
-    for (uint8_t x = 0; x < SP_MAX_POINTS; x++)
-      sp_line_buf[x] = (row < nsy[x]) ? C_CYAN : C_BLACK;
-    st7789_write_pixels_dma(sp_line_buf, SP_MAX_POINTS);
+  // Первую строку готовим заранее и сразу стартуем DMA
+  uint8_t cur = 0;
+  fill_sp_row(sp_buf[cur], max_y);
+  st7789_dma_start(sp_buf[cur], SP_BYTES);
+
+  // Со второй строки: CPU заполняет buf[cur^1] пока DMA гонит buf[cur]
+  for (int16_t row = max_y - 1; row >= (int16_t)min_y; row--) {
+    cur ^= 1;
+    fill_sp_row(sp_buf[cur], row);
+    st7789_dma_wait();
+    st7789_dma_start(sp_buf[cur], SP_BYTES);
   }
 
+  st7789_dma_wait();
   st7789_cs_high();
 
-
-  // Обновляем osy
   memcpy(osy, nsy, sizeof(nsy));
-
   SP_DrawTicks(sy, sh, p);
 }
 

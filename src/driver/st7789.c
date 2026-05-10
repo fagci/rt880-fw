@@ -160,6 +160,26 @@ void st7789_write_data16(uint16_t data) {
   st7789_write_data((uint8_t)(data & 0xFF));
 }
 
+void st7789_dma_start(const uint8_t *buf, uint16_t byte_count) {
+  while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
+    ;
+  dma_channel_enable(ST7789_DMA_CH, FALSE);
+  dma_flag_clear(ST7789_DMA_GL_FLAG);
+  ST7789_DMA_CH->maddr = (uint32_t)buf;
+  ST7789_DMA_CH->dtcnt = byte_count;
+  dma_channel_enable(ST7789_DMA_CH, TRUE);
+  // не ждём TC
+}
+
+void st7789_dma_wait(void) {
+  while (dma_flag_get(ST7789_DMA_TC_FLAG) == RESET)
+    ;
+  dma_flag_clear(ST7789_DMA_TC_FLAG);
+  dma_channel_enable(ST7789_DMA_CH, FALSE);
+  while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
+    ;
+}
+
 void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
   st7789_cs_low();
 

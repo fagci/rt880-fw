@@ -89,8 +89,8 @@ static inline uint32_t fps_tick(FpsCounter *f, uint32_t now_ms) {
   return 0;
 }
 const uint32_t stp = 25 * KHZ;
-const uint32_t s = 172 * MHZ;
-const uint32_t e = 173 * MHZ;
+const uint32_t s = 171 * MHZ;
+const uint32_t e = s + stp * LCD_WIDTH;
 
 FRange range = {.start = s, .end = e};
 
@@ -140,12 +140,9 @@ void testScan(void) {
     t1 = rt880_dwt_ms();
     WF_Render(WATERFALL_Y, tick > 0);
     t2 = rt880_dwt_ms();
-    PrintfEx(ST7789_WIDTH - 1, 22, POS_R, C_BLUE, C_BLACK, "LALALA JUJUJU");
-    t3 = rt880_dwt_ms();
 
     PrintfEx(0, 22 + 18, POS_L, C_WHITE, C_BLACK, "sp=%u", t1 - t0);
     PrintfEx(0, 22 + 18 * 2, POS_L, C_WHITE, C_BLACK, "wf=%u", t2 - t1);
-    PrintfEx(0, 22 + 18 * 3, POS_L, C_WHITE, C_BLACK, "txt=%u", t3 - t2);
 
     static int16_t last_dbm = 0;
     static uint32_t last_freq = 0;
