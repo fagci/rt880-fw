@@ -7,6 +7,27 @@
 #include "ui/graphics.h"
 #include "ui/spectrum.h"
 
+static const char *KEY_NAMES[17] = {
+    [KEY_NONE] = "NONE", //
+    [KEY_1] = "1",       //
+    [KEY_2] = "2",       //
+    [KEY_3] = "3",       //
+    [KEY_4] = "4",       //
+    [KEY_5] = "5",       //
+    [KEY_6] = "6",       //
+    [KEY_7] = "7",       //
+    [KEY_8] = "8",       //
+    [KEY_9] = "9",       //
+    [KEY_0] = "0",       //
+    [KEY_MENU] = "MENU", //
+    [KEY_UP] = "UP",     //
+    [KEY_DOWN] = "DOWN", //
+    [KEY_EXIT] = "EXIT", //
+    [KEY_STAR] = "STAR", //
+    [KEY_HASH] = "HASH", //
+
+};
+
 int main(void) {
   board_init();
 
@@ -24,14 +45,14 @@ int main(void) {
 
   gpio_pin_set(&PIN_AF_MUTE);
 
-  UI_ClearScreen(C_BLACK);
-
   for (;;) {
     key_event_t evt;
     while (keyboard_get_event(&evt)) {
-      PrintfEx(0, 18 * 1, POS_L, C_WHITE, C_BLACK, "Key %u", evt.key);
+      UI_ClearScreen(C_BLACK);
+      PrintfEx(0, 18 * 1, POS_L, C_WHITE, C_BLACK, "Code %u", evt.code);
+      PrintfEx(0, 18 * 2, POS_L, C_WHITE, C_BLACK, "Name %s",
+               KEY_NAMES[evt.key]);
     }
-    PrintfEx(0, 18 * 2, POS_L, C_WHITE, C_BLACK, "Lalala");
 
     delay_ms(250);
   }

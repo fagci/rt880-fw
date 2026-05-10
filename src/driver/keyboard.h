@@ -27,10 +27,6 @@
  * ──────────────────────────────────────────────────────────────────────── */
 typedef enum {
   KEY_NONE = 0,
-  KEY_MENU,
-  KEY_UP,
-  KEY_DOWN,
-  KEY_EXIT,
   KEY_1,
   KEY_2,
   KEY_3,
@@ -41,6 +37,10 @@ typedef enum {
   KEY_8,
   KEY_9,
   KEY_0,
+  KEY_MENU,
+  KEY_UP,
+  KEY_DOWN,
+  KEY_EXIT,
   KEY_STAR,
   KEY_HASH,
   KEY_COUNT
@@ -53,6 +53,7 @@ typedef enum {
 } key_evt_type_t;
 
 typedef struct {
+  uint8_t code;
   key_id_t key;
   key_evt_type_t type;
 } key_event_t;

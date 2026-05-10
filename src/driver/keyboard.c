@@ -21,10 +21,22 @@ static const gpio_pin_t *const ROW[4] = {
 /* Бит = col*4 + row, порядок: col0/row0..col3/row3                      */
 /* PLACEHOLDER — скорректируй по схеме или экспериментально               */
 static const key_id_t KEY_MAP[16] = {
-    /* col0 */ KEY_MENU, KEY_1,    KEY_4,    KEY_7,
-    /* col1 */ KEY_UP,   KEY_2,    KEY_5,    KEY_8,
-    /* col2 */ KEY_DOWN, KEY_3,    KEY_6,    KEY_9,
-    /* col3 */ KEY_EXIT, KEY_STAR, KEY_HASH, KEY_0,
+    KEY_1,    // 0
+    KEY_4,    // 1
+    KEY_7,    // 2
+    KEY_STAR, // 3
+    KEY_2,    // 4
+    KEY_5,    // 5
+    KEY_8,    // 6
+    KEY_0,    // 7
+    KEY_3,    // 8
+    KEY_6,    // 9
+    KEY_9,    // 10
+    KEY_HASH, // 11
+    KEY_MENU, // 12
+    KEY_UP,   // 13
+    KEY_DOWN, // 14
+    KEY_EXIT, // 15
 };
 
 /* ── Внутреннее состояние ──────────────────────────────────────────── */
@@ -40,12 +52,13 @@ static uint8_t col_idx; /* текущая активная колонка scan  
 static key_event_t evt_queue[KEY_QUEUE_SIZE];
 static uint8_t q_head, q_tail;
 
-static void queue_push(key_id_t key, key_evt_type_t type) {
+static void queue_push(key_id_t key, key_evt_type_t type, uint8_t code) {
   uint8_t next = (q_tail + 1) & (KEY_QUEUE_SIZE - 1);
   if (next == q_head)
     return; /* очередь полна — теряем событие */
   evt_queue[q_tail].key = key;
   evt_queue[q_tail].type = type;
+  evt_queue[q_tail].code = code;
   q_tail = next;
 }
 
@@ -97,11 +110,11 @@ void keyboard_scan_tick(void) {
           key_debounced |= (1U << i);
           hold_ticks[i] = 0;
           long_sent[i] = false;
-          queue_push(KEY_MAP[i], KEY_EVT_PRESS);
+          queue_push(KEY_MAP[i], KEY_EVT_PRESS, i);
         } else {
           key_debounced &= ~(1U << i);
           hold_ticks[i] = 0;
-          queue_push(KEY_MAP[i], KEY_EVT_RELEASE);
+          queue_push(KEY_MAP[i], KEY_EVT_RELEASE, i);
         }
       }
     }
@@ -112,7 +125,7 @@ void keyboard_scan_tick(void) {
         hold_ticks[i]++;
         if (hold_ticks[i] >= KEY_LONG_PRESS_TICKS) {
           long_sent[i] = true;
-          queue_push(KEY_MAP[i], KEY_EVT_LONG_PRESS);
+          queue_push(KEY_MAP[i], KEY_EVT_LONG_PRESS, i);
         }
       }
     }
