@@ -349,7 +349,7 @@ uint16_t BK4819_TuneToAndWaitRSSI(uint32_t freq) {
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
   BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
   BK4819_WriteRegister(BK4819_REG_30, reg);
-  rt880_delay_us(2300);
+  rt880_delay_us(100);
 
   return BK4819_GetRSSI();
 }

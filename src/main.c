@@ -133,19 +133,38 @@ void testScan(void) {
       SP_AddPoint(&msm);
     }
 
-    SP_Render(&range, SPECTRUM_BAR_Y, SPECTRUM_BAR_H);
-    WF_Render(WATERFALL_Y, tick > 0);
+    uint32_t t0, t1, t2, t3;
 
-    // Обновляем счётчик (возвращает fps раз в секунду)
+    t0 = rt880_dwt_ms();
+    SP_Render(&range, SPECTRUM_BAR_Y, SPECTRUM_BAR_H);
+    t1 = rt880_dwt_ms();
+    WF_Render(WATERFALL_Y, tick > 0);
+    t2 = rt880_dwt_ms();
+    PrintfEx(ST7789_WIDTH - 1, 22, POS_R, C_BLUE, C_BLACK, "LALALA JUJUJU");
+    t3 = rt880_dwt_ms();
+
+    PrintfEx(0, 22 + 18, POS_L, C_WHITE, C_BLACK, "sp=%u", t1 - t0);
+    PrintfEx(0, 22 + 18 * 2, POS_L, C_WHITE, C_BLACK, "wf=%u", t2 - t1);
+    PrintfEx(0, 22 + 18 * 3, POS_L, C_WHITE, C_BLACK, "txt=%u", t3 - t2);
+
+    static int16_t last_dbm = 0;
+    static uint32_t last_freq = 0;
+    static uint32_t last_fps = 0;
+
     fps_tick(&fps, rt880_dwt_ms());
 
-    // Рисуем строку статуса КАЖДЫЙ кадр с последним известным fps
     int16_t peakDBm = Rssi2DBm(peakRssi);
-    PrintfEx(ST7789_WIDTH - 1, 24, POS_R, C_BLUE, C_BLACK,
-             "%ddBm %u.%03uM  %ufps", peakDBm, peakFreq / MHZ,
-             (peakFreq % MHZ) / KHZ,
-             fps.fps); // ← fps.fps обновляется внутри fps_tick раз в секунду
-                       //   но читаем его каждый кадр — всё нормально
+    uint32_t cur_fps = fps.fps;
+
+    // Перерисовываем строку только если что-то изменилось
+    if (peakDBm != last_dbm || peakFreq != last_freq || cur_fps != last_fps) {
+      PrintfEx(ST7789_WIDTH - 1, 22, POS_R, C_BLUE, C_BLACK,
+               "%ddBm %u.%03uM  %ufps", peakDBm, peakFreq / MHZ,
+               (peakFreq % MHZ) / KHZ, cur_fps);
+      last_dbm = peakDBm;
+      last_freq = peakFreq;
+      last_fps = cur_fps;
+    }
 
     tick++;
   }

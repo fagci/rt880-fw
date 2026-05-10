@@ -256,20 +256,23 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
 
   // Рисуем построчно только изменившийся диапазон [min_y .. max_y]
   // Каждая строка — один setAddrWindow + DMA на SP_MAX_POINTS пикселей
+
   st7789_cs_low();
-  for (uint8_t row = min_changed_y; row <= max_changed_y; row++) {
-    // row=0 — дно спектра, row=sh-1 — верх
-    // экранная Y = sy + sh - 1 - row
-    uint16_t screen_y = sy + sh - 1 - row;
 
-    for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+  // Один setWindow на весь диапазон строк
+  uint16_t top_y    = sy + sh - 1 - max_changed_y;
+  uint16_t rect_h   = max_changed_y - min_changed_y + 1;
+  st7789_set_addr_window_raw(0, top_y, SP_MAX_POINTS, rect_h);
+
+  // Строки идут сверху вниз на экране → row убывает
+  for (int16_t row = max_changed_y; row >= (int16_t)min_changed_y; row--) {
+    for (uint8_t x = 0; x < SP_MAX_POINTS; x++)
       sp_line_buf[x] = (row < nsy[x]) ? C_CYAN : C_BLACK;
-    }
-
-    st7789_set_addr_window_raw(0, screen_y, SP_MAX_POINTS, 1);
     st7789_write_pixels_dma(sp_line_buf, SP_MAX_POINTS);
   }
+
   st7789_cs_high();
+
 
   // Обновляем osy
   memcpy(osy, nsy, sizeof(nsy));
