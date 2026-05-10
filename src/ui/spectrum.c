@@ -281,27 +281,21 @@ void WF_Render(uint8_t wy, bool wfDown) {
   }
 
   if (wfDown) {
-    // wfScroll = (wfScroll + 1) % wh;
     wfScroll = (wfScroll == 0) ? (wh - 1) : (wfScroll - 1);
   } else {
-    wfScroll = (wfScroll == 0) ? (wh - 1) : (wfScroll - 1);
+    wfScroll = (wfScroll + 1) % wh;
   }
 
-  st7789_set_vscroll_start(wy + wfScroll);
-
-  uint16_t localY;
-  if (wfDown) {
-    localY = (wfScroll + wh - 1) % wh;
-  } else {
-    localY = wfScroll;
-  }
-
-  uint16_t drawY = wy + localY;
-
+  uint16_t drawY = wy + wfScroll;
   st7789_cs_low();
   st7789_set_addr_window_raw(0, drawY, SP_MAX_POINTS, 1);
   st7789_write_pixels_dma(wfLine, SP_MAX_POINTS);
   st7789_cs_high();
+
+  // Новая строка = wfScroll, она должна быть снизу
+  // Верхняя видимая = следующая строка после неё
+  uint16_t vsp = wy + (wfScroll + 1) % wh;
+  st7789_set_vscroll_start(vsp);
 }
 
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh) {

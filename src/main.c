@@ -30,9 +30,9 @@ void testScan(void) {
 
   BK4819_SelectChip(0); */
 
-  uint32_t stp = 25 * KHZ;
-  uint32_t s = 172 * MHZ;
-  uint32_t e = s + stp * SP_MAX_POINTS;
+  uint32_t stp = 5 * KHZ;
+  uint32_t s = 104 * MHZ;
+  uint32_t e = 105 * MHZ;
 
   FRange range = {.start = s, .end = e};
   SP_Init(&range, stp, stp);
@@ -47,12 +47,13 @@ void testScan(void) {
 
     SP_Begin();
 
-    for (uint32_t i = 0; i < SP_MAX_POINTS; i++) {
-      uint32_t f = s + i * stp;
-
+    for (uint32_t f = s; f < e; f += stp) {
       // BK4819_SelectChip(0);
       BK4819_TuneTo(f, false);
-      rt880_delay_ms(3);
+      // rt880_delay_ms(3);
+
+      for (uint8_t i = 0; i < 4; i++)
+        ;
 
       uint16_t rssi = BK4819_GetRSSI();
       if (rssi > peakRssi) {
@@ -70,7 +71,7 @@ void testScan(void) {
 
     SP_Render(&range, SPECTRUM_BAR_Y, SPECTRUM_BAR_H);
 
-    st7789_fill_rect_dma(0, WATERFALL_Y, ST7789_WIDTH, WF_YN + 1, C_BLACK);
+    // st7789_fill_rect_dma(0, WATERFALL_Y, ST7789_WIDTH, WF_YN + 1, C_BLACK);
     WF_Render(WATERFALL_Y, tick > 0);
 
     if (tick > 0) {

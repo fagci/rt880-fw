@@ -1,6 +1,6 @@
 #include "graphics.h"
 #include "driver/st7789.h"
-#include "fonts/TomThumb.h"
+#include "fonts/FreeSans12pt7b.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -206,7 +206,7 @@ void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color c, const char *fmt,
   vsnprintf(buf, sizeof(buf), fmt, a);
   va_end(a);
 
-  const GFXfont *f = &TomThumb;
+  const GFXfont *f = &FreeSans12pt7b;
   int16_t sx = x;
 
   if (align == POS_C) {
