@@ -1,45 +1,70 @@
 #ifndef BK4819_H
 #define BK4819_H
 
-#include <stdint.h>
-#include <stdbool.h>
 #include "bk4819-regs.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 #define BK4819_F_MIN 1588000U
 #define BK4819_F_MAX 134000000U
 #define AUTO_GAIN_INDEX 0
 
 typedef enum {
-    MOD_FM, MOD_AM, MOD_LSB, MOD_USB, MOD_BYP, MOD_RAW, MOD_WFM
+  BK4819_AF_MUTE,
+  BK4819_AF_FM,
+  BK4819_AF_ALAM, // tone
+  BK4819_AF_BEEP, // for tx
+  BK4819_AF_RAW,  // (ssb without if filter = raw in sdr sharp)
+  BK4819_AF_USB,  // (or ssb = lsb and usb at the same time)
+  BK4819_AF_CTCO, // ctcss/dcs (fm with narrow filters for ctcss/dcs)
+  BK4819_AF_AM,
+  BK4819_AF_FSKO, // fsk out test with special fsk filters (need reg58 fsk on to
+                  // give sound on speaker )
+  BK4819_AF_BYPASS, // (fm without filter = discriminator output)
+} BK4819_AF_Type_t;
+
+typedef enum {
+  MOD_FM,
+  MOD_AM,
+  MOD_LSB,
+  MOD_USB,
+  MOD_BYP,
+  MOD_RAW,
+  MOD_WFM,
 } ModulationType;
 
 typedef enum {
-    FILTER_VHF, FILTER_UHF, FILTER_OFF
-} Filter;
+  XTAL_0_13M,
+  XTAL_1_19_2M,
+  XTAL_2_26M,
+  XTAL_3_38_4M,
+} XtalMode;
+
+typedef enum { FILTER_VHF, FILTER_UHF, FILTER_OFF } Filter;
 
 typedef enum {
-    BK4819_FILTER_BW_6k,
-    BK4819_FILTER_BW_7k,
-    BK4819_FILTER_BW_9k,
-    BK4819_FILTER_BW_10k,
-    BK4819_FILTER_BW_12k,
-    BK4819_FILTER_BW_14k,
-    BK4819_FILTER_BW_17k,
-    BK4819_FILTER_BW_20k,
-    BK4819_FILTER_BW_23k,
-    BK4819_FILTER_BW_26k,
+  BK4819_FILTER_BW_6k,
+  BK4819_FILTER_BW_7k,
+  BK4819_FILTER_BW_9k,
+  BK4819_FILTER_BW_10k,
+  BK4819_FILTER_BW_12k,
+  BK4819_FILTER_BW_14k,
+  BK4819_FILTER_BW_17k,
+  BK4819_FILTER_BW_20k,
+  BK4819_FILTER_BW_23k,
+  BK4819_FILTER_BW_26k,
 } BK4819_FilterBandwidth_t;
 
 typedef enum {
-    SQUELCH_RSSI_NOISE_GLITCH,
-    SQUELCH_RSSI_GLITCH,
-    SQUELCH_RSSI_NOISE,
-    SQUELCH_RSSI,
+  SQUELCH_RSSI_NOISE_GLITCH,
+  SQUELCH_RSSI_GLITCH,
+  SQUELCH_RSSI_NOISE,
+  SQUELCH_RSSI,
 } SquelchType;
 
 typedef struct {
-    uint16_t regValue;
-    uint8_t  gainDb;
+  uint16_t regValue;
+  uint8_t gainDb;
 } Gain;
 
 extern const Gain gainTable[32];
@@ -79,7 +104,8 @@ void BK4819_EnterSubAu(void);
 void BK4819_ExitSubAu(void);
 void BK4819_EnterDTMF_TX(bool bTail);
 void BK4819_ExitDTMF_TX(bool bTail);
-void BK4819_PlayDTMFString(const char *str, bool bAuto, uint16_t first, uint16_t tick, uint16_t gap, uint16_t tail);
+void BK4819_PlayDTMFString(const char *str, bool bAuto, uint16_t first,
+                           uint16_t tick, uint16_t gap, uint16_t tail);
 void BK4819_EnableDTMF(void);
 void BK4819_DisableDTMF(void);
 void BK4819_PlayRogerTiny(void);

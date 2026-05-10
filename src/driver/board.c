@@ -1,17 +1,62 @@
 #include "board.h"
+#include "at32f423.h"
+#include "at32f423_flash.h"
+#include "gpio.h"
+#include "keyboard.h"
 
-static uint32_t fac_ms;
+volatile uint32_t tick_ms = 0;
 
-static volatile uint32_t tick_ms = 0;
+// HEXT = 8 MHz → PLL → SCLK = 150 MHz
+// SCLK = (HEXT / pllms) * pllns / pllfr / 2
+//  150 = (8 / 1) * 150 / 4 / 2  ✓
 
-// SysTick_Handler — если его ещё нет в проекте
-void SysTick_Handler(void) { tick_ms++; }
+void system_clock_config(void) {
+  flash_psr_set(FLASH_WAIT_CYCLE_4);
 
-// Инициализация: вызвать ПОСЛЕ system_clock_config()
-void rt880_tick_init(void) {
-  // прерывание каждые 1 мс
-  SysTick_Config(SystemCoreClock / 1000);
+  CRM->ctrl_bit.hexten = TRUE;
+  uint32_t timeout = 50000;
+  while (CRM->ctrl_bit.hextstbl == 0 && --timeout)
+    ;
+
+  if (timeout == 0) {
+    flash_psr_set(FLASH_WAIT_CYCLE_0);
+    return;
+  }
+
+  CRM->pllcfg_bit.pllrcs = 1;
+  CRM->pllcfg_bit.pllms = 1;
+  CRM->pllcfg_bit.pllns = 150;
+  CRM->pllcfg_bit.pllfr = 2;
+
+  CRM->ctrl_bit.pllen = TRUE;
+  timeout = 50000;
+  while (CRM->ctrl_bit.pllstbl == 0 && --timeout)
+    ;
+
+  if (timeout == 0) {
+    flash_psr_set(FLASH_WAIT_CYCLE_0);
+    return;
+  }
+
+  CRM->cfg_bit.ahbdiv = 0;
+  CRM->cfg_bit.apb1div = 4;
+  CRM->cfg_bit.apb2div = 0;
+
+  CRM->cfg_bit.sclksel = CRM_SCLK_PLL;
+  timeout = 50000;
+  while (CRM->cfg_bit.sclksts != CRM_SCLK_PLL && --timeout)
+    ;
+
+  system_core_clock_update();
 }
+
+void SysTick_Handler(void) {
+  tick_ms++;
+  if ((tick_ms % KEY_SCAN_PERIOD_MS) == 0)
+    keyboard_scan_tick();
+}
+
+void rt880_tick_init(void) { SysTick_Config(SystemCoreClock / 1000); }
 
 uint32_t rt880_tick_ms(void) { return tick_ms; }
 
@@ -23,93 +68,68 @@ void rt880_dwt_init(void) {
 
 uint32_t rt880_dwt_ms(void) { return DWT->CYCCNT / (SystemCoreClock / 1000); }
 
-static void gpio_output_init(gpio_type *port, uint16_t pin,
-                             crm_periph_clock_type clk) {
-  gpio_init_type g;
-  crm_periph_clock_enable(clk, TRUE);
-  gpio_default_para_init(&g);
-  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-  g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-  g.gpio_mode = GPIO_MODE_OUTPUT;
-  g.gpio_pins = pin;
-  g.gpio_pull = GPIO_PULL_NONE;
-  gpio_init(port, &g);
-}
-
 void rt880_led_init(void) {
-  gpio_output_init(RT880_LED_PORT, RT880_LED_RED_PIN, RT880_LED_CRM_CLK);
-  gpio_output_init(RT880_LED_PORT, RT880_LED_GREEN_PIN, RT880_LED_CRM_CLK);
-  gpio_output_init(RT880_LED_PORT, RT880_LED_BKLIGHT_PIN, RT880_LED_CRM_CLK);
+  gpio_pin_init_output(&PIN_LED_RED);
+  gpio_pin_init_output(&PIN_LED_GREEN);
+  gpio_pin_init_output(&PIN_LCD_BACKLIGHT);
 }
 
-void rt880_led_on(void) {
-  RT880_LED_PORT->scr =
-      RT880_LED_RED_PIN | RT880_LED_GREEN_PIN | RT880_LED_BKLIGHT_PIN;
-}
-
-void rt880_led_off(void) {
-  RT880_LED_PORT->clr =
-      RT880_LED_RED_PIN | RT880_LED_GREEN_PIN | RT880_LED_BKLIGHT_PIN;
-}
-
-void rt880_ant_sw(bool hf) {
-  if (hf) {
-    ANT_SW_PORT->scr = ANT_SW_PIN;
-  } else {
-    ANT_SW_PORT->clr = ANT_SW_PIN;
-  }
-}
-
-void rt880_led_toggle(void) {
-  RT880_LED_PORT->togr =
-      RT880_LED_RED_PIN | RT880_LED_GREEN_PIN | RT880_LED_BKLIGHT_PIN;
-}
-
-void rt880_delay_init(void) {
-  systick_clock_source_config(SYSTICK_CLOCK_SOURCE_AHBCLK_NODIV);
-  fac_ms = system_core_clock / 1000U;
-}
-
-void rt880_delay_ms(uint32_t ms) {
-  uint32_t temp;
-  SysTick->LOAD = (uint32_t)(ms * fac_ms);
-  SysTick->VAL = 0x00;
-  SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
-  do {
-    temp = SysTick->CTRL;
-  } while ((temp & 0x01) && !(temp & (1 << 16)));
-  SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
-  SysTick->VAL = 0x00;
-}
-
+// DWT-based: работает из любого контекста, не зависит от SysTick
 void rt880_delay_us(uint32_t us) {
-  uint32_t temp;
-  SysTick->LOAD = us * (fac_ms / 1000);
-  SysTick->VAL = 0x00;
-  SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
-  do {
-    temp = SysTick->CTRL;
-  } while ((temp & 0x01) && !(temp & (1 << 16)));
-  SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
-  SysTick->VAL = 0x00;
+  uint32_t start = DWT->CYCCNT;
+  uint32_t cycles = us * (SystemCoreClock / 1000000U);
+  while ((DWT->CYCCNT - start) < cycles)
+    ;
+}
+
+// Разбито на 1 мс куски — нет переполнения uint32_t при любом ms
+void rt880_delay_ms(uint32_t ms) {
+  while (ms--)
+    rt880_delay_us(1000);
 }
 
 void rt880_audio_init(void) {
-  gpio_output_init(AF_MUTE_PORT, AF_MUTE_PIN, CRM_GPIOF_PERIPH_CLOCK);
-  gpio_output_init(ANC_PWR_PORT, ANC_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
-  gpio_output_init(AUDIO_PWR_PORT, AUDIO_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
-  gpio_output_init(FM_PWR_PORT, FM_PWR_PIN, CRM_GPIOC_PERIPH_CLOCK);
+  gpio_pin_init_output(&PIN_AF_MUTE);
+  gpio_pin_init_output(&PIN_ANC_POWER);
+  gpio_pin_init_output(&PIN_RX_TS);
+  gpio_pin_init_output(&PIN_FM_POWER);
 
-  AF_MUTE_PORT->clr = AF_MUTE_PIN;
-  ANC_PWR_PORT->clr = ANC_PWR_PIN;
-  AUDIO_PWR_PORT->clr = AUDIO_PWR_PIN;
-  FM_PWR_PORT->clr = FM_PWR_PIN;
+  gpio_pin_clr(&PIN_AF_MUTE);
+  gpio_pin_clr(&PIN_ANC_POWER);
+  gpio_pin_clr(&PIN_RX_TS);
+  gpio_pin_clr(&PIN_FM_POWER);
+}
+
+void rt880_keyboard_init(void) {
+  gpio_pin_init_input(&PIN_KEY_M1, true);
+  gpio_pin_init_input(&PIN_KEY_M2, true);
+  gpio_pin_init_input(&PIN_KEY_M3, true);
+  gpio_pin_init_input(&PIN_KEY_M4, true);
+
+  gpio_pin_init_output(&PIN_KEY_O1);
+  gpio_pin_init_output(&PIN_KEY_O2);
+  gpio_pin_init_output(&PIN_KEY_O3);
+  gpio_pin_init_output(&PIN_KEY_O4);
+
+  gpio_pin_set(&PIN_KEY_O1);
+  gpio_pin_set(&PIN_KEY_O2);
+  gpio_pin_set(&PIN_KEY_O3);
+  gpio_pin_set(&PIN_KEY_O4);
 }
 
 void rt880_audio_path_set(uint8_t source) {
-  if (source == 0) {
-    ANC_PWR_PORT->clr = ANC_PWR_PIN;
-  } else {
-    ANC_PWR_PORT->scr = ANC_PWR_PIN;
-  }
+  if (source == 0)
+    gpio_pin_clr(&PIN_ANC_POWER);
+  else
+    gpio_pin_set(&PIN_ANC_POWER);
+}
+
+void rt880_init(void) {
+  SCB->VTOR = FLASH_BASE | 0x2800;
+  system_clock_config();
+  rt880_dwt_init();  // DWT должен быть до первого delay
+  rt880_tick_init(); // SysTick: 1 мс прерывание
+  rt880_led_init();
+  rt880_audio_init();
+  keyboard_init();
 }

@@ -19,10 +19,10 @@ C_INCLUDES := \
   -Isrc/external/cmsis/cm4/device_support \
   -Isrc/external/drivers/inc
 
-CFLAGS := $(MCUFLAGS) -ffunction-sections -fdata-sections -Wall -Wextra -Os -g3 $(C_DEFS) $(C_INCLUDES)
+CFLAGS  := $(MCUFLAGS) -ffunction-sections -fdata-sections -Wall -Wextra -Os -g3 $(C_DEFS) $(C_INCLUDES)
 ASFLAGS := $(MCUFLAGS) -x assembler-with-cpp -g3 $(C_DEFS) $(C_INCLUDES)
 LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs --specs=nosys.specs
-LIBS := -lc -lm -lnosys
+LIBS    := -lc -lm -lnosys
 
 SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_gpio.c' \
@@ -34,10 +34,12 @@ SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/cmsis/cm4/device_support/system_at32f423.c' \
   | sort)
 
-SRCS_S := $(shell find src -name '*.s' ! -path '*/external/*' | sort)
+# Ищем оба варианта расширения: *.s и *.S
+SRCS_S := $(shell find src \( -name '*.s' -o -name '*.S' \) ! -path '*/external/*' | sort)
 
 OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C)) \
-        $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S))
+        $(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS_S))) \
+        $(patsubst %.s,$(BUILD)/%.o,$(filter %.s,$(SRCS_S)))
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 
@@ -56,7 +58,12 @@ $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) -c $(CFLAGS) $< -o $@
 
+# Оба правила нужны: GNU make не делает case-insensitive match
 $(BUILD)/%.o: %.S
+	@mkdir -p $(dir $@)
+	$(CC) -c $(ASFLAGS) $< -o $@
+
+$(BUILD)/%.o: %.s
 	@mkdir -p $(dir $@)
 	$(CC) -c $(ASFLAGS) $< -o $@
 
