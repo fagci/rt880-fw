@@ -14,6 +14,8 @@ static const gpio_pin_t PIN_LED_RED =
     GPIO_PIN(GPIOA, GPIO_PINS_14, CRM_GPIOA_PERIPH_CLOCK);
 static const gpio_pin_t PIN_LCD_BACKLIGHT =
     GPIO_PIN(GPIOA, GPIO_PINS_4, CRM_GPIOA_PERIPH_CLOCK);
+static const gpio_pin_t PIN_KEYBOARD_BACKLIGHT =
+    GPIO_PIN(GPIOA, GPIO_PINS_9, CRM_GPIOA_PERIPH_CLOCK);
 
 static const gpio_pin_t PIN_AF_MUTE =
     GPIO_PIN(GPIOF, GPIO_PINS_8, CRM_GPIOF_PERIPH_CLOCK);
@@ -44,6 +46,15 @@ static const gpio_pin_t PIN_KEY_O3 =
 static const gpio_pin_t PIN_KEY_O4 =
     GPIO_PIN(GPIOB, GPIO_PINS_0, CRM_GPIOB_PERIPH_CLOCK);
 
+static const gpio_pin_t PIN_KEY_PTT =
+    GPIO_PIN(GPIOB, GPIO_PINS_6, CRM_GPIOB_PERIPH_CLOCK);
+static const gpio_pin_t PIN_KEY_SIDE1 =
+    GPIO_PIN(GPIOC, GPIO_PINS_0, CRM_GPIOC_PERIPH_CLOCK);
+static const gpio_pin_t PIN_KEY_SIDE2 =
+    GPIO_PIN(GPIOC, GPIO_PINS_1, CRM_GPIOC_PERIPH_CLOCK);
+static const gpio_pin_t PIN_KEY_ALARM =
+    GPIO_PIN(GPIOC, GPIO_PINS_2, CRM_GPIOC_PERIPH_CLOCK);
+
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 uint32_t millis(void);
@@ -53,4 +64,5 @@ void ant_sw(bool hf);
 
 void board_init(void);
 
+uint16_t rt880_adc_read_keyin(void);
 #endif

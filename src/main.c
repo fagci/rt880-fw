@@ -7,7 +7,7 @@
 #include "ui/graphics.h"
 #include "ui/spectrum.h"
 
-static const char *KEY_NAMES[17] = {
+static const char *KEY_NAMES[] = {
     [KEY_NONE] = "NONE", //
     [KEY_1] = "1",       //
     [KEY_2] = "2",       //
@@ -26,6 +26,10 @@ static const char *KEY_NAMES[17] = {
     [KEY_STAR] = "STAR", //
     [KEY_HASH] = "HASH", //
 
+    [KEY_PTT] = "PTT",     /* PB6  */
+    [KEY_SIDE1] = "SIDE1", /* PC0  */
+    [KEY_SIDE2] = "SIDE2", /* PC1  */
+    [KEY_ALARM] = "ALARM", /* PC2  */
 };
 
 int main(void) {
@@ -33,6 +37,7 @@ int main(void) {
 
   st7789_init();
   st7789_backlight_on();
+  gpio_pin_set(&PIN_KEYBOARD_BACKLIGHT);
 
   BK4819_SelectChip(0);
   BK4819_Init();
@@ -53,6 +58,9 @@ int main(void) {
       PrintfEx(0, 18 * 2, POS_L, C_WHITE, C_BLACK, "Name %s",
                KEY_NAMES[evt.key]);
     }
+
+    uint16_t adc = rt880_adc_read_keyin();
+    PrintfEx(0, 18 * 3, POS_L, C_WHITE, C_BLACK, "ADC: %u   ", adc);
 
     delay_ms(250);
   }

@@ -82,6 +82,49 @@ void audio_path_set(uint8_t source) {
     gpio_pin_clr(&PIN_ANC_POWER);
 }
 
+// board.h — добавить пин как аналоговый (без pull):
+// PC2 = ADC1_IN12 на AT32F423 (проверь datasheet пин-маппинг)
+
+void rt880_adc_init(void) {
+  // Тактирование
+  crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
+  crm_periph_clock_enable(CRM_ADC1_PERIPH_CLOCK, TRUE);
+
+  // PC2 в аналоговый режим
+  gpio_init_type g;
+  gpio_default_para_init(&g);
+  g.gpio_mode = GPIO_MODE_ANALOG;
+  g.gpio_pins = GPIO_PINS_2;
+  gpio_init(GPIOC, &g);
+
+  // ADC: одиночное преобразование, без прерываний
+  adc_base_config_type adc_cfg;
+  adc_base_default_para_init(&adc_cfg);
+  adc_cfg.sequence_mode = FALSE;
+  adc_cfg.repeat_mode = FALSE;
+  adc_cfg.data_align = ADC_RIGHT_ALIGNMENT;
+  adc_cfg.ordinary_channel_length = 1;
+  adc_base_config(ADC1, &adc_cfg);
+  adc_enable(ADC1, TRUE);
+
+  // Калибровка
+  adc_calibration_init(ADC1);
+  while (adc_calibration_init_status_get(ADC1))
+    ;
+  adc_calibration_start(ADC1);
+  while (adc_calibration_status_get(ADC1))
+    ;
+}
+
+uint16_t rt880_adc_read_keyin(void) {
+  // Канал 12 = PC2 (уточни по datasheet AT32F423)
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_12, 1, ADC_SAMPLETIME_47_5);
+  adc_ordinary_software_trigger_enable(ADC1, TRUE);
+  while (!adc_flag_get(ADC1, ADC_OCCE_FLAG))
+    ;
+  return adc_ordinary_conversion_data_get(ADC1);
+}
+
 void board_init(void) {
   SCB->VTOR = 0x08002800; // таблица векторов не на 0x08000000
 
@@ -92,6 +135,7 @@ void board_init(void) {
   gpio_pin_init_output(&PIN_LED_RED);
   gpio_pin_init_output(&PIN_LED_GREEN);
   gpio_pin_init_output(&PIN_LCD_BACKLIGHT);
+  gpio_pin_init_output(&PIN_KEYBOARD_BACKLIGHT);
 
   gpio_pin_init_output(&PIN_AF_MUTE);
   gpio_pin_init_output(&PIN_ANC_POWER);
@@ -114,6 +158,8 @@ void board_init(void) {
   gpio_pin_set(&PIN_KEY_O2);
   gpio_pin_set(&PIN_KEY_O3);
   gpio_pin_set(&PIN_KEY_O4);
+
+  rt880_adc_init();
 
   keyboard_init();
 }
