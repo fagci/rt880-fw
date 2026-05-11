@@ -384,8 +384,8 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
 }
 
 void FINPUT_render(void) {
-  UI_ClearScreen(C_BLACK);
-  const uint8_t BASE_Y = 32;
+  // UI_ClearScreen(C_BLACK);
+  const uint8_t BASE_Y = LCD_HEIGHT / 2;
   char displayStr[MAX_INPUT_LENGTH + 3] = "";
 
   // Only copy buffer to display if it's not empty

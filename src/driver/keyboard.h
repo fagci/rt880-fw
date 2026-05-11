@@ -14,6 +14,7 @@
 typedef enum {
   KEY_NONE = 0,
   /* матрица 4×4 */
+  KEY_0,
   KEY_1,
   KEY_2,
   KEY_3,
@@ -23,7 +24,6 @@ typedef enum {
   KEY_7,
   KEY_8,
   KEY_9,
-  KEY_0,
   KEY_MENU,
   KEY_UP,
   KEY_DOWN,

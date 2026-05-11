@@ -260,14 +260,14 @@ static int16_t text_width(const char *s, const GFXfont *f) {
   return x;
 }
 
-void Printf(uint8_t x, uint8_t y, const char *fmt, ...) {
+void Printf(uint8_t x, uint16_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
   PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
   va_end(a);
 }
 
-void PrintfEx(uint8_t x, uint8_t y, TextPos align, Color col, Color bg,
+void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
               const GFXfont *f, const char *fmt, ...) {
   char s[64];
   va_list a;
