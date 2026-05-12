@@ -22,6 +22,7 @@
 #define F_SYM (&Symbols)
 
 #define F_LG (&FreeMono18pt7b)
+// 12*11
 #define F_SM (&FreeMono9pt7b)
 #define F_NORM (&FreeMono12pt7b)
 #define F_MONO_LG (&FreeMono18pt7b)

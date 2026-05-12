@@ -1,12 +1,15 @@
 #include "vfo.h"
+#include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
 #include "../helper/log.h"
+#include "../helper/measurements.h"
 #include "../radio.h"
 #include "../ui/finput.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
+#include "scanner.h"
 #include <stdlib.h>
 
 #define VFO_H 64
@@ -17,6 +20,7 @@ typedef struct {
 } MainCtx_t;
 
 static MainCtx_t ctx;
+static bool secondReceiver;
 
 // Колбэк от NumVal — пользователь ввёл новую частоту
 static void onFreqEntered(uint32_t f) {
@@ -38,12 +42,22 @@ static void renderVfo(uint8_t i) {
   DrawRect(0, sy, LCD_WIDTH, VFO_H, currentVfo == i ? C_GRAY : C_BLACK);
   PrintfEx(8, sy + 4 + 13, POS_L, C_GRAY, C_BLACK, F_SM, "VFO%u", i + 1);
   NumVal_Render(&ctx.numVal[i]);
+
+  if (i < 2 && i == currentVfo) {
+    uint8_t w = ConvertDomain(BK4819_GetRSSI(), 0, 255, 0, LCD_WIDTH - 16);
+    FillRect(8, sy + VFO_H - 16, w, 8, C_GREEN);
+    FillRect(8 + w, sy + VFO_H - 16, LCD_WIDTH - 16, 8, C_BLACK);
+
+    PrintfEx(LCD_WIDTH / 2, sy + 4 + 13, POS_L, C_CYAN, C_BLACK, F_SM, "%u",
+             BK4819_GetFrequency());
+  }
 }
 
 // ── Mode callbacks ──────────────────────────────
 
 static void enter(Mode_t *self) {
   (void)self;
+  UI_ClearScreen(C_BLACK);
   initNumVals();
   Radio_Init();
 }
@@ -85,6 +99,9 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     return false;
 
   switch (k) {
+  case KEY_MENU:
+    Mode_Switch(&MODE_SCANNER);
+    return true;
   case KEY_EXIT:
     Radio_NextVfo();
     // реинициализируем NumVal нового VFO с актуальной частотой
@@ -101,6 +118,12 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     return true;
   case KEY_SIDE2:
     Radio_ToggleFilter();
+    return true;
+  case KEY_ALARM:
+    secondReceiver = !secondReceiver;
+    BK4819_SelectB(secondReceiver);
+    Log("BK: %c", secondReceiver ? 'B' : 'A');
+    Log_Render(0, LCD_HEIGHT - 8 * 6, 6);
     return true;
   default:
     break;

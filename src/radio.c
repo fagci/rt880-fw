@@ -2,6 +2,9 @@
 #include "driver/bk4819-regs.h"
 #include "driver/bk4819.h"
 #include "driver/board.h"
+#include "driver/gpio.h"
+#include "helper/log.h"
+#include "ui/graphics.h"
 
 VFO vfos[DEVICE_VFO_COUNT] = {
     {.radio = RADIO_BK4819A,
@@ -10,7 +13,7 @@ VFO vfos[DEVICE_VFO_COUNT] = {
      .modulation = MOD_FM,
      .bw = BK4819_FILTER_BW_12k},
     {.radio = RADIO_BK4819B,
-     .rxF = 43392500,
+     .rxF = 43400000,
      .step = STEP_25_0kHz,
      .modulation = MOD_FM,
      .bw = BK4819_FILTER_BW_12k},
@@ -34,18 +37,14 @@ const uint16_t StepFrequencyTable[15] = {
 
 static void applyVfo(bool precise) {
   uint32_t f = vfos[currentVfo].rxF;
-  if (currentVfo != 2) {
-    BK4819_SelectChip(currentVfo);
-    BK4819_TuneTo(f, precise);
+  BK4819_TuneTo(f, precise);
 
-    BK4819_SelectChip(0);
-    if (f >= 240 * MHZ) {
-      BK4819_ToggleGpioOut(BK4819_GPIO2_VHF_RX, false);
-      BK4819_ToggleGpioOut(BK4819_GPIO1_UHF_RX, true);
-    } else {
-      BK4819_ToggleGpioOut(BK4819_GPIO2_VHF_RX, true);
-      BK4819_ToggleGpioOut(BK4819_GPIO1_UHF_RX, false);
-    }
+  if (f >= 240 * MHZ) {
+    BK4819_ToggleFilter(FILTER_VHF, false);
+    BK4819_ToggleFilter(FILTER_UHF, true);
+  } else {
+    BK4819_ToggleFilter(FILTER_VHF, true);
+    BK4819_ToggleFilter(FILTER_UHF, false);
   }
 }
 
@@ -55,8 +54,10 @@ void Radio_Init(void) {
   BK4819_RX_TurnOn();
   BK4819_SetAFC(0);
   BK4819_SetAGC(true, 1);
-  BK4819_SetFilterBandwidth(BK4819_FILTER_BW_12k);
+  BK4819_SetFilterBandwidth(vfos[0].bw);
   BK4819_TuneTo(vfos[0].rxF, true);
+  BK4819_SetModulation(vfos[0].modulation);
+
   gpio_pin_set(&PIN_AF_MUTE);
 }
 
@@ -70,7 +71,16 @@ void Radio_TuneStep(int8_t dir) {
   Radio_TuneTo(vfos[currentVfo].rxF + step * dir, false);
 }
 
-void Radio_NextVfo(void) { currentVfo = (currentVfo + 1) % DEVICE_VFO_COUNT; }
+void Radio_NextVfo(void) {
+  currentVfo = (currentVfo + 1) % DEVICE_VFO_COUNT;
+  applyVfo(true);
+
+  /* if (currentVfo == 0) {
+    gpio_pin_clr(&PIN_RX_TS);
+  } else if (currentVfo == 1) {
+    gpio_pin_set(&PIN_RX_TS);
+  } */
+}
 
 void Radio_NextFilter(void) { filterIndex = (filterIndex + 1) % 4; }
 

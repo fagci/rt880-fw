@@ -266,10 +266,13 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
   case KEY_MENU:
   case KEY_HASH:
   case KEY_PTT:
-    stopEdit(nv, true);
-    gRedrawScreen = true;
-    nv->dirty = true;
-    return true;
+    if (nv->editing) {
+      stopEdit(nv, true);
+      gRedrawScreen = true;
+      nv->dirty = true;
+      return true;
+    }
+    break;
 
   default:
     break;

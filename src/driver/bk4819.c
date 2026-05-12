@@ -44,35 +44,29 @@ typedef struct {
   ModulationType lastModulation;
   bool reg30_cached;
   uint16_t reg30_cache;
-  uint16_t reg_cache_43;
-  uint16_t reg_cache_47;
-  uint16_t reg_cache_7E;
-  uint16_t reg_cache_73;
 } BK4819_Chip;
 
 static BK4819_Chip g_chips[2] = {
-    [0] = {.gpioOutState = 0x9000,
-           .selectedFilter = 255,
-           .freqCacheLow = 0,
-           .freqCacheHigh = 0,
-           .lastModulation = 255,
-           .reg30_cached = false,
-           .reg30_cache = 0,
-           .reg_cache_43 = 0xFFFF,
-           .reg_cache_47 = 0xFFFF,
-           .reg_cache_7E = 0xFFFF,
-           .reg_cache_73 = 0xFFFF},
-    [1] = {.gpioOutState = 0x9000,
-           .selectedFilter = 255,
-           .freqCacheLow = 0,
-           .freqCacheHigh = 0,
-           .lastModulation = 255,
-           .reg30_cached = false,
-           .reg30_cache = 0,
-           .reg_cache_43 = 0xFFFF,
-           .reg_cache_47 = 0xFFFF,
-           .reg_cache_7E = 0xFFFF,
-           .reg_cache_73 = 0xFFFF},
+    [0] =
+        {
+            .gpioOutState = 0x9000,
+            .selectedFilter = 255,
+            .freqCacheLow = 0,
+            .freqCacheHigh = 0,
+            .lastModulation = 255,
+            .reg30_cached = false,
+            .reg30_cache = 0,
+        },
+    [1] =
+        {
+            .gpioOutState = 0x9000,
+            .selectedFilter = 255,
+            .freqCacheLow = 0,
+            .freqCacheHigh = 0,
+            .lastModulation = 255,
+            .reg30_cached = false,
+            .reg30_cache = 0,
+        },
 };
 
 static BK4819_Chip *g_bk = &g_chips[0];
@@ -137,10 +131,6 @@ void BK4819_SelectChip(uint8_t chip) {
   }
 
   g_bk->reg30_cached = false;
-  g_bk->reg_cache_43 = 0xFFFF;
-  g_bk->reg_cache_47 = 0xFFFF;
-  g_bk->reg_cache_7E = 0xFFFF;
-  g_bk->reg_cache_73 = 0xFFFF;
 
   gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
   gpio_set_output(g_bk->sda_port, g_bk->sda_pin);
@@ -328,10 +318,6 @@ void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
 void BK4819_Init(void) {
   g_bk->reg30_cached = false;
-  g_bk->reg_cache_43 = 0xFFFF;
-  g_bk->reg_cache_47 = 0xFFFF;
-  g_bk->reg_cache_7E = 0xFFFF;
-  g_bk->reg_cache_73 = 0xFFFF;
 
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
@@ -477,6 +463,11 @@ static void BK4819_SetVariableCaliper(int32_t var) {
   }
 }
 
+uint32_t BK4819_GetFrequency(void) {
+  return (BK4819_ReadRegister(BK4819_REG_39) << 16) |
+         BK4819_ReadRegister(BK4819_REG_38);
+}
+
 void BK4819_SetFrequency(uint32_t freq) {
   uint16_t low = freq & 0xFFFF;
   uint16_t high = (freq >> 16) & 0xFFFF;
@@ -495,14 +486,13 @@ void BK4819_SetFrequency(uint32_t freq) {
 void BK4819_TuneTo(uint32_t freq, bool precise) {
   BK4819_SetFrequency(freq);
 
+  uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
   if (precise) {
-    uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
     BK4819_WriteRegister(BK4819_REG_30, 0x0200);
-    BK4819_WriteRegister(BK4819_REG_30, reg);
   } else {
-    uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
     BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
   }
+  BK4819_WriteRegister(BK4819_REG_30, reg);
 }
 
 void BK4819_RX_TurnOn(void) {
@@ -545,13 +535,53 @@ void BK4819_SetAF(BK4819_AF_Type_t af) {
   BK4819_WriteRegister(BK4819_REG_47, 0x6042 | (af << 8));
 }
 
+XtalMode BK4819_XtalGet(void) {
+  return (XtalMode)((BK4819_ReadRegister(0x3C) >> 6) & 0b11);
+}
+
+void BK4819_XtalSet(XtalMode mode) {
+  uint16_t ifset = 0x2AAB;
+  uint16_t xtal = 20360;
+
+  switch (mode) {
+  case XTAL_0_13M:
+    xtal = 20232;
+    ifset = 0x3555;
+    break;
+  case XTAL_1_19_2M:
+    xtal = 20296;
+    ifset = 0x2E39;
+    break;
+  case XTAL_2_26M:
+    // Use defaults
+    break;
+  case XTAL_3_38_4M:
+    xtal = 20424;
+    ifset = 0x271C;
+    break;
+  }
+
+  BK4819_WriteRegister(0x3C, xtal);
+  BK4819_WriteRegister(0x3D, ifset);
+}
+
+uint16_t BK4819_GetRegValue(RegisterSpec spec) {
+  return (_ReadRegCached(spec.num) >> spec.offset) & spec.mask;
+}
+
+void BK4819_SetRegValue(RegisterSpec spec, uint16_t value) {
+  uint16_t reg = BK4819_ReadRegister(spec.num);
+  reg &= ~(spec.mask << spec.offset);
+  BK4819_WriteRegister(spec.num, reg | (value << spec.offset));
+}
+
 uint8_t gLastModulation = 255;
 void BK4819_SetModulation(ModulationType type) {
-  if (type == MOD_BYP) {
+  /* if (type == MOD_BYP) {
     BK4819_EnterBypass();
   } else if (gLastModulation == MOD_BYP) {
     BK4819_ExitBypass();
-  }
+  } */
 
   const bool isSsb = (type == MOD_LSB || type == MOD_USB);
 
@@ -709,9 +739,17 @@ void BK4819_ToggleFilter(Filter flt, bool on) {
   }
 
   BK4819_SelectChip(0);
-  BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
+  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
   if (g_bk != &g_chips[0]) {
     BK4819_SelectChip(1);
+  }
+}
+
+void BK4819_SelectB(bool on) {
+  BK4819_SelectChip(1);
+  BK4819_ToggleGpioOut(BK4819_GPIO2_VHF_RX, on);
+  if (g_bk != &g_chips[1]) {
+    BK4819_SelectChip(0);
   }
 }
 

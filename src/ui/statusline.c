@@ -46,112 +46,33 @@ void STATUSLINE_SetTickerText(const char *pattern, ...) {
   lastTickerUpdate = millis();
 }
 
-void STATUSLINE_update(void) {
-  const uint32_t now = millis();
-  /* const uint8_t level = gBatteryPercent / 10;
-
-  if (gBatteryPercent < BAT_WARN_PERCENT) {
-    showBattery = !showBattery;
-    gRedrawScreen = true;
-  } else {
-    showBattery = true;
-  }
-
-  if (previousBatteryLevel != level) {
-    previousBatteryLevel = level;
-    gRedrawScreen = true;
-  }
-
-  if ((bool)lastEepromWrite != gEepromWrite) {
-    lastEepromWrite = gEepromWrite ? now : 0;
-    gRedrawScreen = true;
-  }
-
-  if (lastEepromWrite && now - lastEepromWrite > 250) {
-    lastEepromWrite = gEepromWrite = false;
-    gRedrawScreen = true;
-  } */
-
-  if (statuslineTicker[0] && now - lastTickerUpdate > 5000) {
-    statuslineTicker[0] = '\0';
-  }
-}
+void STATUSLINE_update(void) { const uint32_t now = millis(); }
 
 void STATUSLINE_render(void) {
-  FillRect(0, 0, LCD_WIDTH, 24, C_BLACK);
+  static uint16_t oldFlt;
+  static bool oldRxTs;
 
-  const uint8_t BASE_Y = 4;
+  uint16_t flt = BK4819_GetFilter();
+  bool rxTs = gpio_pin_read(&PIN_RX_TS);
 
-  DrawHLine(0, 24, LCD_WIDTH, C_GRAY);
+  bool needRender = flt != oldFlt || rxTs != oldRxTs;
 
-  /* if (showBattery) {
-    switch (gSettings.batteryStyle) {
-    case BAT_CLEAN:
-      UI_Battery(previousBatteryLevel);
-      break;
-    case BAT_PERCENT:
-      PrintSmallEx(LCD_WIDTH - 1, BASE_Y, POS_R, C_INVERT, "%u%%",
-                   gBatteryPercent);
-      break;
-    case BAT_VOLTAGE:
-      PrintSmallEx(LCD_WIDTH - 1, BASE_Y, POS_R, C_FILL, "%u.%02uV",
-                   gBatteryVoltage / 100, gBatteryVoltage % 100);
-      break;
-    }
-  } */
+  if (needRender) {
+    FillRect(0, 0, LCD_WIDTH, 24, C_BLACK);
+    DrawHLine(0, 24, LCD_WIDTH, C_GRAY);
+    PrintfEx(LCD_XCENTER - 16, 16, POS_C, flt & FILTER_HF ? C_WHITE : C_DARK,
+             C_BLACK, F_SS, "HF");
+    PrintfEx(LCD_XCENTER - 16, 22, POS_C, flt & FILTER_VHF ? C_WHITE : C_DARK,
+             C_BLACK, F_SS, "VHF");
+    PrintfEx(LCD_XCENTER + 16, 16, POS_C, flt & FILTER_UHF ? C_WHITE : C_DARK,
+             C_BLACK, F_SS, "UHF");
+    PrintfEx(LCD_XCENTER + 16, 22, POS_C, flt & FILTER_800 ? C_WHITE : C_DARK,
+             C_BLACK, F_SS, "800");
+    PrintfEx(0, 22, POS_L, C_WHITE, C_BLACK, F_SS, "RX TS: %u", rxTs);
 
-  char icons[8] = {'\0'};
-  uint8_t idx = 0;
-
-  /* if (gEepromWrite) {
-    icons[idx++] = SYM_EEPROM_W;
-  }
-
-  if (gMonitorMode) {
-    icons[idx++] = SYM_MONITOR;
-  }
-
-  if (ctx->radio_type == RADIO_BK1080 || isSi4732On) {
-    icons[idx++] = SYM_BROADCAST;
-  }
-
-  if (ctx && ctx->upconverter) {
-    icons[idx++] = SYM_CONVERTER;
-  }
-
-  if (gSettings.keylock) {
-    icons[idx++] = SYM_LOCK;
-  } */
-
-  /* if (gCurrentApp == APP_CH_LIST || gCurrentApp == APP_LOOT_LIST) {
-    UI_Scanlists(LCD_XCENTER - 13, 0, gSettings.currentScanlist);
-  } */
-
-  /* if (gHasUnreadMessages) {
-    icons[idx++] = SYM_FOLDER;
-  } */
-
-  PrintfEx(LCD_WIDTH - 1 - 22, BASE_Y, POS_R, C_WHITE, C_BLACK, F_SYM, "%s",
-           icons);
-
-  /* if (gIsNumNavInput) {
-    PrintSmall(0, BASE_Y, "Select: %s", gNumNavInput);
-  } else { */
-  PrintfEx(0, BASE_Y, POS_L, C_WHITE, C_BLACK, F_SM,
-           statuslineTicker[0] == '\0' ? statuslineText : statuslineTicker);
-  // }
-
-  if (BK4819_GetFilter() & FILTER_HF) {
-    PrintfEx(LCD_XCENTER - 16, 16, POS_C, C_WHITE, C_BLACK, F_SS, "HF");
-  }
-  if (BK4819_GetFilter() & FILTER_VHF) {
-    PrintfEx(LCD_XCENTER - 16, 22, POS_C, C_WHITE, C_BLACK, F_SS, "VHF");
-  }
-  if (BK4819_GetFilter() & FILTER_UHF) {
-    PrintfEx(LCD_XCENTER + 16, 16, POS_C, C_WHITE, C_BLACK, F_SS, "UHF");
-  }
-  if (BK4819_GetFilter() & FILTER_800) {
-    PrintfEx(LCD_XCENTER + 16, 22, POS_C, C_WHITE, C_BLACK, F_SS, "800");
+    // HERE update all old vals
+    oldFlt = flt;
+    oldRxTs = rxTs;
   }
 }
 
