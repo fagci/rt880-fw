@@ -35,6 +35,9 @@ static void onRangeChanged() {
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
+  UI_ClearScreen(C_BLACK);
+  NumVal_Invalidate(&ctx.numVal[0]);
+  NumVal_Invalidate(&ctx.numVal[1]);
 }
 
 static void onStartEntered(uint32_t f) {
@@ -49,7 +52,7 @@ static void onEndEntered(uint32_t f) {
 static void initNumVals(void) {
   NumVal_Init(&ctx.numVal[0], 8, STATUS_H + 2 + 12, F_SM, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered);
-  NumVal_Init(&ctx.numVal[0], LCD_XCENTER, STATUS_H + 2 + 12, F_SM, 11, 12,
+  NumVal_Init(&ctx.numVal[1], LCD_XCENTER, STATUS_H + 2 + 12, F_SM, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered);
 }
 
@@ -57,7 +60,6 @@ static void initNumVals(void) {
 
 static void enter(Mode_t *self) {
   (void)self;
-  UI_ClearScreen(C_BLACK);
   initNumVals();
   Radio_Init();
 
@@ -79,8 +81,11 @@ static void update(Mode_t *self) {
   Loot m = {
       .f = vfos[currentVfo].rxF,
       .rssi = BK4819_GetRSSI(),
+      .noise = 0,
+      .open = false,
   };
   SP_AddPoint(&m);
+  // SP_Next();
 
   if (vfos[currentVfo].rxF >= range.end) {
     spectrumReady = true;
@@ -95,8 +100,8 @@ static void render(Mode_t *self) {
   NumVal_Render(&ctx.numVal[0]);
   NumVal_Render(&ctx.numVal[1]);
 
-  PrintfEx(LCD_WIDTH, STATUS_H + 12, POS_R, C_WHITE, C_BLACK, F_SM, "%s",
-           (const char *[]){"Start", "End"}[endFSel]);
+  PrintfEx(LCD_WIDTH, STATUS_H + 12, POS_R, C_WHITE, C_BLACK, F_SM, "%c",
+           endFSel ? '>' : '<');
 
   if (spectrumReady || millis() - lastSpectrumRender >= 500) {
     SP_Render(&range, STATUS_H + 12, 64);
@@ -105,6 +110,7 @@ static void render(Mode_t *self) {
   if (spectrumReady) {
     WF_Render(STATUS_H + 12 + 64, true);
     spectrumReady = false;
+    SP_Begin();
   }
 }
 
