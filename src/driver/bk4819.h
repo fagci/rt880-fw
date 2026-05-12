@@ -40,8 +40,6 @@ typedef enum {
   XTAL_3_38_4M,
 } XtalMode;
 
-typedef enum { FILTER_VHF, FILTER_UHF, FILTER_OFF } Filter;
-
 typedef enum {
   BK4819_FILTER_BW_6k,
   BK4819_FILTER_BW_7k,
@@ -61,6 +59,13 @@ typedef enum {
   SQUELCH_RSSI_NOISE,
   SQUELCH_RSSI,
 } SquelchType;
+
+typedef enum {
+  FILTER_HF = 0x40 >> BK4819_GPIO6_HF_RX,
+  FILTER_VHF = 0x40 >> BK4819_GPIO2_VHF_RX,
+  FILTER_UHF = 0x40 >> BK4819_GPIO1_UHF_RX,
+  FILTER_800 = 0x40 >> BK4819_GPIO5_UHF800_RX,
+} Filter;
 
 typedef struct {
   uint16_t regValue;
@@ -119,5 +124,8 @@ void BK4819_SetTailDetection(uint16_t freq);
 void BK4819_TurnsOffTones_TurnsOnRX(void);
 void BK4819_ExitTxMute(void);
 void BK4819_EnterTxMute(void);
+
+uint16_t BK4819_GetFilter();
+void BK4819_ToggleFilter(Filter flt, bool on);
 
 #endif

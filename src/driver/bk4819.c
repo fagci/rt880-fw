@@ -696,6 +696,25 @@ void BK4819_ToggleGpioOut(BK4819_GPIO_PIN_t pin, bool enable) {
   BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
 }
 
+uint16_t BK4819_GetFilter() {
+  return g_chips[0].gpioOutState &
+         (FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
+}
+
+void BK4819_ToggleFilter(Filter flt, bool on) {
+  if (on) {
+    g_chips[0].gpioOutState |= flt;
+  } else {
+    g_chips[0].gpioOutState &= ~flt;
+  }
+
+  BK4819_SelectChip(0);
+  BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
+  if (g_bk != &g_chips[0]) {
+    BK4819_SelectChip(1);
+  }
+}
+
 void BK4819_ToggleAFBit(bool enable) {
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_47);
   reg &= ~(1 << 8);

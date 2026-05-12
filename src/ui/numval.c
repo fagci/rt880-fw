@@ -98,13 +98,13 @@ static void startEdit(NumVal_t *nv) {
   nv->fracDigits = 0;
   memset(nv->buf, 0, NUMVAL_BUF);
 
-  if (nv->value != 0) {
+  /* if (nv->value != 0) {
     valueToStr(nv, nv->buf);
     nv->cursor = strlen(nv->buf);
     char *dot = strchr(nv->buf, '.');
     nv->dotEntered = (dot != NULL);
     nv->fracDigits = dot ? (uint8_t)strlen(dot + 1) : 0;
-  }
+  } */
 }
 
 static void stopEdit(NumVal_t *nv, bool confirm) {
@@ -203,11 +203,8 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
 
   // не в режиме редактирования — цифра или «.» его открывают
   if (!nv->editing) {
-    if ((key >= KEY_0 && key <= KEY_9) || key == KEY_STAR) {
+    if (key >= KEY_0 && key <= KEY_9) {
       startEdit(nv);
-      if (key == KEY_STAR)
-        return true; // просто входим
-                     // цифра — обрабатываем ниже
     } else {
       return false;
     }
@@ -284,3 +281,10 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
 bool NumVal_IsEditing(const NumVal_t *nv) { return nv->editing; }
 
 void NumVal_Invalidate(NumVal_t *nv) { nv->dirty = true; }
+
+uint32_t NumVal_GetValue(NumVal_t *nv) { return nv->value; }
+
+void NumVal_SetValue(NumVal_t *nv, uint32_t val) {
+  nv->value = val;
+  nv->dirty = true;
+}

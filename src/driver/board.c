@@ -162,4 +162,8 @@ void board_init(void) {
   rt880_adc_init();
 
   keyboard_init();
+
+  st7789_init();
+  st7789_backlight_on();
+  gpio_pin_set(&PIN_KEYBOARD_BACKLIGHT);
 }

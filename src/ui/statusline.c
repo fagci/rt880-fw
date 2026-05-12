@@ -4,6 +4,7 @@
 // #include "../driver/battery.h"
 // #include "../driver/py25q16.h"
 // #include "../driver/si473x.h"
+#include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "graphics.h"
@@ -81,7 +82,7 @@ void STATUSLINE_render(void) {
 
   const uint8_t BASE_Y = 4;
 
-  DrawHLine(0, 6, LCD_WIDTH, C_WHITE);
+  DrawHLine(0, 24, LCD_WIDTH, C_GRAY);
 
   /* if (showBattery) {
     switch (gSettings.batteryStyle) {
@@ -139,6 +140,19 @@ void STATUSLINE_render(void) {
   PrintfEx(0, BASE_Y, POS_L, C_WHITE, C_BLACK, F_SM,
            statuslineTicker[0] == '\0' ? statuslineText : statuslineTicker);
   // }
+
+  if (BK4819_GetFilter() & FILTER_HF) {
+    PrintfEx(LCD_XCENTER - 16, 16, POS_C, C_WHITE, C_BLACK, F_SS, "HF");
+  }
+  if (BK4819_GetFilter() & FILTER_VHF) {
+    PrintfEx(LCD_XCENTER - 16, 22, POS_C, C_WHITE, C_BLACK, F_SS, "VHF");
+  }
+  if (BK4819_GetFilter() & FILTER_UHF) {
+    PrintfEx(LCD_XCENTER + 16, 16, POS_C, C_WHITE, C_BLACK, F_SS, "UHF");
+  }
+  if (BK4819_GetFilter() & FILTER_800) {
+    PrintfEx(LCD_XCENTER + 16, 22, POS_C, C_WHITE, C_BLACK, F_SS, "800");
+  }
 }
 
 /* void STATUSLINE_RenderRadioSettings() {
