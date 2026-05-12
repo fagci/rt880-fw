@@ -89,6 +89,7 @@ static void update(Mode_t *self) {
 
   if (vfos[currentVfo].rxF >= range.end) {
     spectrumReady = true;
+    Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
   }
 }
 
