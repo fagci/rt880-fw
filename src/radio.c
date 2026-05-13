@@ -98,12 +98,6 @@ void Radio_TuneStep(int8_t dir) {
 void Radio_NextVfo(void) {
   currentVfo = (currentVfo + 1) % DEVICE_VFO_COUNT;
   applyVfo(true);
-
-  /* if (currentVfo == 0) {
-    gpio_pin_clr(&PIN_RX_TS);
-  } else if (currentVfo == 1) {
-    gpio_pin_set(&PIN_RX_TS);
-  } */
 }
 
 void Radio_NextFilter(void) { filterIndex = (filterIndex + 1) % 4; }
