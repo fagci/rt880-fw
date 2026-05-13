@@ -35,16 +35,17 @@ const uint16_t StepFrequencyTable[15] = {
     900, 1000, 1250, 2500, 5000, 10000, 50000,
 };
 
+static bool lastWasUHF = false;
+
 static void applyVfo(bool precise) {
   uint32_t f = vfos[currentVfo].rxF;
   BK4819_TuneTo(f, precise);
 
-  if (f >= 240 * MHZ) {
-    BK4819_ToggleFilter(FILTER_VHF, false);
-    BK4819_ToggleFilter(FILTER_UHF, true);
-  } else {
-    BK4819_ToggleFilter(FILTER_VHF, true);
-    BK4819_ToggleFilter(FILTER_UHF, false);
+  bool isUHF = (f >= 240 * MHZ);
+  if (isUHF != lastWasUHF) {
+    BK4819_ToggleFilter(FILTER_VHF, !isUHF);
+    BK4819_ToggleFilter(FILTER_UHF, isUHF);
+    lastWasUHF = isUHF;
   }
 }
 

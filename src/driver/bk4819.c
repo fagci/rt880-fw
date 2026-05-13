@@ -71,12 +71,8 @@ static BK4819_Chip g_chips[2] = {
 
 static BK4819_Chip *g_bk = &g_chips[0];
 
-/* static inline void bk_delay(void) {
-  __asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
-} */
 // период полутакта SPI в нс — крутить здесь
-#define BK_SPI_HALF_PERIOD_NS 100u // ~5 МГц SPI
+#define BK_SPI_HALF_PERIOD_NS 50u // ~10 МГц SPI
 
 static inline void bk_delay(void) {
   uint32_t cycles =

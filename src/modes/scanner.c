@@ -31,13 +31,21 @@ static MainCtx_t ctx;
 static bool spectrumReady;
 static bool endFSel;
 
+static uint32_t stepCount;
+static uint32_t lastStepTime;
+static uint32_t stepsPerSec;
+
 static void onRangeChanged() {
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
-  UI_ClearScreen(C_BLACK);
+  /* очищаем только область спектра и водопада */
+  FillRect(0, STATUS_H + 12, LCD_WIDTH, LCD_HEIGHT - STATUS_H - 12, C_BLACK);
   NumVal_Invalidate(&ctx.numVal[0]);
   NumVal_Invalidate(&ctx.numVal[1]);
+  stepCount = 0;
+  lastStepTime = millis();
+  stepsPerSec = 0;
 }
 
 static void onStartEntered(uint32_t f) {
@@ -85,7 +93,17 @@ static void update(Mode_t *self) {
       .open = false,
   };
   SP_AddPoint(&m);
-  // SP_Next();
+
+  stepCount++;
+
+  if ((stepCount & 0x7F) == 0) {
+    uint32_t now = millis();
+    if (now - lastStepTime >= 1000) {
+      stepsPerSec = stepCount * 1000 / (now - lastStepTime);
+      stepCount = 0;
+      lastStepTime = now;
+    }
+  }
 
   if (vfos[currentVfo].rxF >= range.end) {
     spectrumReady = true;
@@ -101,8 +119,8 @@ static void render(Mode_t *self) {
   NumVal_Render(&ctx.numVal[0]);
   NumVal_Render(&ctx.numVal[1]);
 
-  PrintfEx(LCD_WIDTH, STATUS_H + 12, POS_R, C_WHITE, C_BLACK, F_SM, "%c",
-           endFSel ? '>' : '<');
+  PrintfEx(LCD_WIDTH, STATUS_H + 12, POS_R, C_WHITE, C_BLACK, F_SM, "%c %u/s",
+           endFSel ? '>' : '<', stepsPerSec);
 
   if (spectrumReady || millis() - lastSpectrumRender >= 500) {
     SP_Render(&range, STATUS_H + 12, 64);
