@@ -41,8 +41,7 @@ static void onRangeChanged() {
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
-  /* очищаем только область спектра и водопада */
-  FillRect(0, STATUS_H + 12, LCD_WIDTH, LCD_HEIGHT - STATUS_H - 12, C_BLACK);
+  FillRect(0, STATUS_H, LCD_WIDTH, SPECTRUM_Y + SPECTRUM_H - STATUS_H, C_BLACK);
   NumVal_Invalidate(&ctx.numVal[0]);
   NumVal_Invalidate(&ctx.numVal[1]);
   stepCount = 0;

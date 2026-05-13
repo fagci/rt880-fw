@@ -60,13 +60,13 @@ void STATUSLINE_render(void) {
   if (needRender) {
     FillRect(0, 0, LCD_WIDTH, 24, C_BLACK);
     DrawHLine(0, 24, LCD_WIDTH, C_GRAY);
-    PrintfEx(LCD_XCENTER - 16, 16, POS_C, flt & FILTER_HF ? C_WHITE : C_DARK,
+    PrintfEx(LCD_XCENTER - 10, 12, POS_C, flt & FILTER_HF ? C_WHITE : C_DARK,
              C_BLACK, F_SS, "HF");
-    PrintfEx(LCD_XCENTER - 16, 22, POS_C, flt & FILTER_VHF ? C_WHITE : C_DARK,
+    PrintfEx(LCD_XCENTER - 10, 20, POS_C, flt & FILTER_VHF ? C_WHITE : C_DARK,
              C_BLACK, F_SS, "VHF");
-    PrintfEx(LCD_XCENTER + 16, 16, POS_C, flt & FILTER_UHF ? C_WHITE : C_DARK,
+    PrintfEx(LCD_XCENTER + 10, 12, POS_C, flt & FILTER_UHF ? C_WHITE : C_DARK,
              C_BLACK, F_SS, "UHF");
-    PrintfEx(LCD_XCENTER + 16, 22, POS_C, flt & FILTER_800 ? C_WHITE : C_DARK,
+    PrintfEx(LCD_XCENTER + 10, 20, POS_C, flt & FILTER_800 ? C_WHITE : C_DARK,
              C_BLACK, F_SS, "800");
     PrintfEx(0, 22, POS_L, C_WHITE, C_BLACK, F_SS, "RX TS: %u", rxTs);
 
