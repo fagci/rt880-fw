@@ -49,7 +49,7 @@ typedef struct {
 static BK4819_Chip g_chips[2] = {
     [0] =
         {
-            .gpioOutState = 0x9000,
+            .gpioOutState = 0x0,
             .selectedFilter = 255,
             .freqCacheLow = 0,
             .freqCacheHigh = 0,
@@ -59,7 +59,7 @@ static BK4819_Chip g_chips[2] = {
         },
     [1] =
         {
-            .gpioOutState = 0x9000,
+            .gpioOutState = 0x0,
             .selectedFilter = 255,
             .freqCacheLow = 0,
             .freqCacheHigh = 0,
@@ -72,7 +72,7 @@ static BK4819_Chip g_chips[2] = {
 static BK4819_Chip *g_bk = &g_chips[0];
 
 // период полутакта SPI в нс
-#define BK_SPI_HALF_PERIOD_NS 63u // ~4 МГц SPI (безопасно, макс 8 МГц)
+#define BK_SPI_HALF_PERIOD_NS 32u // ~4 МГц SPI (безопасно, макс 8 МГц)
 
 static inline void bk_delay(void) {
   // cycles = (CoreClock_MHz * ns) / 1000
