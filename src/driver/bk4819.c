@@ -71,16 +71,19 @@ static BK4819_Chip g_chips[2] = {
 
 static BK4819_Chip *g_bk = &g_chips[0];
 
-static void bk_delay(void) {
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
-  __asm volatile("nop\nnop\nnop\nnop\nnop\n");
+/* static inline void bk_delay(void) {
+  __asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
+  __asm volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\nnop\n");
+} */
+// период полутакта SPI в нс — крутить здесь
+#define BK_SPI_HALF_PERIOD_NS 100u // ~5 МГц SPI
+
+static inline void bk_delay(void) {
+  uint32_t cycles =
+      (SystemCoreClock / 1000000UL) * BK_SPI_HALF_PERIOD_NS / 1000u;
+  uint32_t start = DWT->CYCCNT;
+  while ((DWT->CYCCNT - start) < cycles)
+    ;
 }
 
 static void gpio_set_output(gpio_type *port, uint16_t pin) {
@@ -93,19 +96,17 @@ static void gpio_set_output(gpio_type *port, uint16_t pin) {
   g.gpio_pull = GPIO_PULL_NONE;
   gpio_init(port, &g);
 }
-
-static void sda_input(void) {
-  gpio_init_type g;
-  gpio_default_para_init(&g);
-  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-  g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
-  g.gpio_mode = GPIO_MODE_INPUT;
-  g.gpio_pins = g_bk->sda_pin;
-  g.gpio_pull = GPIO_PULL_NONE;
-  gpio_init(g_bk->sda_port, &g);
+static inline void sda_input(void) {
+  // mode = 00 (input)
+  g_bk->sda_port->cfgr &= ~(3u << (__builtin_ctz(g_bk->sda_pin) * 2));
 }
 
-static void sda_output(void) { gpio_set_output(g_bk->sda_port, g_bk->sda_pin); }
+static inline void sda_output(void) {
+  uint8_t shift = __builtin_ctz(g_bk->sda_pin) * 2;
+  uint32_t cfgr = g_bk->sda_port->cfgr;
+  cfgr = (cfgr & ~(3u << shift)) | (1u << shift); // mode = 01 (output)
+  g_bk->sda_port->cfgr = cfgr;
+}
 
 void BK4819_SelectChip(uint8_t chip) {
   crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
@@ -141,31 +142,41 @@ void BK4819_SelectChip(uint8_t chip) {
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
 }
 
-static void write_u8(uint8_t data) {
-  for (int i = 0; i < 8; i++) {
-    if (data & 0x80)
-      PIN_SET(g_bk->sda_port, g_bk->sda_pin);
+static void write_u16(uint16_t data) {
+  gpio_type *sda_port = g_bk->sda_port;
+  uint16_t sda_pin = g_bk->sda_pin;
+  gpio_type *sck_port = g_bk->sck_port;
+  uint16_t sck_pin = g_bk->sck_pin;
+
+  for (int i = 0; i < 16; i++) {
+    if (data & 0x8000)
+      PIN_SET(sda_port, sda_pin);
     else
-      PIN_CLR(g_bk->sda_port, g_bk->sda_pin);
+      PIN_CLR(sda_port, sda_pin);
     bk_delay();
-    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
+    PIN_CLR(sck_port, sck_pin);
     bk_delay();
-    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+    PIN_SET(sck_port, sck_pin);
     bk_delay();
     data <<= 1;
   }
 }
 
-static void write_u16(uint16_t data) {
-  for (int i = 0; i < 16; i++) {
-    if (data & 0x8000)
-      PIN_SET(g_bk->sda_port, g_bk->sda_pin);
+static void write_u8(uint8_t data) {
+  gpio_type *sda_port = g_bk->sda_port;
+  uint16_t sda_pin = g_bk->sda_pin;
+  gpio_type *sck_port = g_bk->sck_port;
+  uint16_t sck_pin = g_bk->sck_pin;
+
+  for (int i = 0; i < 8; i++) {
+    if (data & 0x80)
+      PIN_SET(sda_port, sda_pin);
     else
-      PIN_CLR(g_bk->sda_port, g_bk->sda_pin);
+      PIN_CLR(sda_port, sda_pin);
     bk_delay();
-    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
+    PIN_CLR(sck_port, sck_pin);
     bk_delay();
-    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+    PIN_SET(sck_port, sck_pin);
     bk_delay();
     data <<= 1;
   }
@@ -173,14 +184,19 @@ static void write_u16(uint16_t data) {
 
 static uint16_t read_u16(void) {
   sda_input();
+  gpio_type *sda_port = g_bk->sda_port;
+  uint16_t sda_pin = g_bk->sda_pin;
+  gpio_type *sck_port = g_bk->sck_port;
+  uint16_t sck_pin = g_bk->sck_pin;
+
   uint16_t v = 0;
   for (int i = 0; i < 16; i++) {
-    PIN_SET(g_bk->sck_port, g_bk->sck_pin);
+    PIN_SET(sck_port, sck_pin);
     bk_delay();
-    PIN_CLR(g_bk->sck_port, g_bk->sck_pin);
+    PIN_CLR(sck_port, sck_pin);
     bk_delay();
     v <<= 1;
-    if (PIN_GET(g_bk->sda_port, g_bk->sda_pin))
+    if (PIN_GET(sda_port, sda_pin))
       v |= 1;
   }
   sda_output();
