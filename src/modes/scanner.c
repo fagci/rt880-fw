@@ -73,6 +73,8 @@ static void enter(Mode_t *self) {
   Radio_Init();
 
   onRangeChanged();
+  FillRect(0, SPECTRUM_Y + SPECTRUM_H, LCD_WIDTH,
+           LCD_HEIGHT - (SPECTRUM_Y + SPECTRUM_H), C_BLACK);
 }
 
 #define SCAN_STEPS_PER_UPDATE 64
@@ -126,6 +128,8 @@ static void render(Mode_t *self) {
     DrawHLine(LCD_WIDTH - 8 - 32, SPECTRUM_Y, 32, !endFSel ? C_BLACK : C_WHITE);
     PrintfEx(LCD_XCENTER, SPECTRUM_Y - 2, POS_C, C_WHITE, C_BLACK, F_SM,
              "%4u/s", stepsPerSec);
+
+
   }
   if (spectrumReady) {
     WF_Render(SPECTRUM_Y + SPECTRUM_H, true);

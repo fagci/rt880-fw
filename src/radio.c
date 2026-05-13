@@ -35,17 +35,40 @@ const uint16_t StepFrequencyTable[15] = {
     900, 1000, 1250, 2500, 5000, 10000, 50000,
 };
 
-static bool lastWasUHF = false;
+typedef enum {
+  BAND_HF = 0, // < 30 МГц  (HF, SW, AM)
+  BAND_VHF,    // 30–239 МГц (включая FM 76–108)
+  BAND_UHF,    // 240–799 МГц
+  BAND_800,    // >= 800 МГц
+} BandState_t;
+
+static BandState_t lastBand = BAND_HF;
+
+static BandState_t getBand(uint32_t f) {
+  if (f >= 800 * MHZ)
+    return BAND_800;
+  if (f >= 240 * MHZ)
+    return BAND_UHF;
+  if (f >= 30 * MHZ)
+    return BAND_VHF;
+  return BAND_HF;
+}
+
+static void applyFilters(BandState_t band) {
+  BK4819_ToggleFilter(FILTER_HF, band == BAND_HF);
+  BK4819_ToggleFilter(FILTER_VHF, band == BAND_VHF);
+  BK4819_ToggleFilter(FILTER_UHF, band == BAND_UHF);
+  BK4819_ToggleFilter(FILTER_800, band == BAND_800);
+}
 
 static void applyVfo(bool precise) {
   uint32_t f = vfos[currentVfo].rxF;
   BK4819_TuneTo(f, precise);
 
-  bool isUHF = (f >= 240 * MHZ);
-  if (isUHF != lastWasUHF) {
-    BK4819_ToggleFilter(FILTER_VHF, !isUHF);
-    BK4819_ToggleFilter(FILTER_UHF, isUHF);
-    lastWasUHF = isUHF;
+  BandState_t band = getBand(f);
+  if (band != lastBand) {
+    applyFilters(band);
+    lastBand = band;
   }
 }
 

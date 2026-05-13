@@ -50,12 +50,10 @@ void STATUSLINE_update(void) { const uint32_t now = millis(); }
 
 void STATUSLINE_render(void) {
   static uint16_t oldFlt;
-  static bool oldRxTs;
 
   uint16_t flt = BK4819_GetFilter();
-  bool rxTs = gpio_pin_read(&PIN_RX_TS);
 
-  bool needRender = flt != oldFlt || rxTs != oldRxTs;
+  bool needRender = flt != oldFlt;
 
   if (needRender) {
     FillRect(0, 0, LCD_WIDTH, 24, C_BLACK);
@@ -68,11 +66,9 @@ void STATUSLINE_render(void) {
              C_BLACK, F_SS, "UHF");
     PrintfEx(LCD_XCENTER + 10, 20, POS_C, flt & FILTER_800 ? C_WHITE : C_DARK,
              C_BLACK, F_SS, "800");
-    PrintfEx(0, 22, POS_L, C_WHITE, C_BLACK, F_SS, "RX TS: %u", rxTs);
 
     // HERE update all old vals
     oldFlt = flt;
-    oldRxTs = rxTs;
   }
 }
 
