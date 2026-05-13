@@ -39,17 +39,17 @@ static void initNumVals(void) {
 
 static void renderVfo(uint8_t i) {
   uint16_t sy = STATUS_H + i * VFO_H;
-  DrawRect(0, sy, LCD_WIDTH, VFO_H, currentVfo == i ? C_GRAY : C_BLACK);
-  PrintfEx(8, sy + 4 + 13, POS_L, C_GRAY, C_BLACK, F_SM, "VFO%u", i + 1);
+  PrintfEx(8, sy + 4 + 13, POS_L, i == currentVfo ? C_GREEN : C_GRAY, C_BLACK,
+           F_SM, "VFO %c", 'A' + i);
   NumVal_Render(&ctx.numVal[i]);
 
-  if (i < 2 && i == currentVfo) {
-    uint8_t w = ConvertDomain(BK4819_GetRSSI(), 0, 255, 0, LCD_WIDTH - 16);
+  if (i < 2) {
+    uint8_t w = 0;
+    if (i == currentVfo) {
+      w = ConvertDomain(BK4819_GetRSSI(), 0, 255, 0, LCD_WIDTH - 16);
+    }
     FillRect(8, sy + VFO_H - 16, w, 8, C_GREEN);
     FillRect(8 + w, sy + VFO_H - 16, LCD_WIDTH - 16, 8, C_BLACK);
-
-    PrintfEx(LCD_WIDTH / 2, sy + 4 + 13, POS_L, C_CYAN, C_BLACK, F_SM, "%u",
-             BK4819_GetFrequency());
   }
 }
 

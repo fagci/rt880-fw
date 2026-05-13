@@ -77,7 +77,7 @@ static void update(Mode_t *self) {
     return;
 
   Radio_TuneStep(+1);
-  delay_us(2500);
+  delay_us(100);
   Loot m = {
       .f = vfos[currentVfo].rxF,
       .rssi = BK4819_GetRSSI(),
