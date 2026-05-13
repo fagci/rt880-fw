@@ -74,40 +74,38 @@ static void enter(Mode_t *self) {
   onRangeChanged();
 }
 
-static void update(Mode_t *self) {
-  (void)self;
-  // синхронизируем NumVal если частота изменилась извне
-  for (uint8_t i = 0; i < 2; i++) {
-    NumVal_Update(&ctx.numVal[i]);
-  }
+#define SCAN_STEPS_PER_UPDATE 32
 
+static void update(Mode_t *self) {
   if (spectrumReady)
     return;
 
-  Radio_TuneStep(+1);
-  delay_us(100);
-  Loot m = {
-      .f = vfos[currentVfo].rxF,
-      .rssi = BK4819_GetRSSI(),
-      .noise = 0,
-      .open = false,
-  };
-  SP_AddPoint(&m);
+  for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
+    Radio_TuneStep(+1);
+    delay_us(100);
+    Loot m = {
+        .f = vfos[currentVfo].rxF,
+        .rssi = BK4819_GetRSSI(),
+        .noise = 0,
+        .open = false,
+    };
+    SP_AddPoint(&m);
+    stepCount++; // <-- считаем каждый шаг
 
-  stepCount++;
-
-  if ((stepCount & 0x7F) == 0) {
-    uint32_t now = millis();
-    if (now - lastStepTime >= 1000) {
-      stepsPerSec = stepCount * 1000 / (now - lastStepTime);
-      stepCount = 0;
-      lastStepTime = now;
+    if (vfos[currentVfo].rxF >= range.end) {
+      spectrumReady = true;
+      Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step],
+                   false);
+      break;
     }
   }
 
-  if (vfos[currentVfo].rxF >= range.end) {
-    spectrumReady = true;
-    Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
+  // пересчёт раз в секунду
+  uint32_t now = millis();
+  if (now - lastStepTime >= 1000) {
+    stepsPerSec = stepCount * 1000 / (now - lastStepTime);
+    stepCount = 0;
+    lastStepTime = now;
   }
 }
 
