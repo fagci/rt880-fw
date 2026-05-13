@@ -16,6 +16,8 @@
 #include <stdlib.h>
 
 #define STATUS_H 24
+#define SPECTRUM_H 64
+#define SPECTRUM_Y (STATUS_H + 2 + 12)
 
 static FRange range = {
     .start = 400 * MHZ,
@@ -58,10 +60,10 @@ static void onEndEntered(uint32_t f) {
 }
 
 static void initNumVals(void) {
-  NumVal_Init(&ctx.numVal[0], 8, STATUS_H + 2 + 12, F_SM, 11, 12, UNIT_MHZ,
-              range.start, 0, 1340 * MHZ, onStartEntered);
-  NumVal_Init(&ctx.numVal[1], LCD_XCENTER, STATUS_H + 2 + 12, F_SM, 11, 12,
-              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered);
+  NumVal_Init(&ctx.numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
+              range.start, 0, 1340 * MHZ, onStartEntered, POS_L);
+  NumVal_Init(&ctx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
+              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R);
 }
 
 // ── Mode callbacks ──────────────────────────────
@@ -74,7 +76,7 @@ static void enter(Mode_t *self) {
   onRangeChanged();
 }
 
-#define SCAN_STEPS_PER_UPDATE 32
+#define SCAN_STEPS_PER_UPDATE 64
 
 static void update(Mode_t *self) {
   if (spectrumReady)
@@ -117,15 +119,17 @@ static void render(Mode_t *self) {
   NumVal_Render(&ctx.numVal[0]);
   NumVal_Render(&ctx.numVal[1]);
 
-  PrintfEx(LCD_WIDTH, STATUS_H + 12, POS_R, C_WHITE, C_BLACK, F_SM, "%c %u/s",
-           endFSel ? '>' : '<', stepsPerSec);
-
   if (spectrumReady || millis() - lastSpectrumRender >= 500) {
-    SP_Render(&range, STATUS_H + 12, 64);
+    SP_Render(&range, STATUS_H + 14, SPECTRUM_H);
     lastSpectrumRender = millis();
+
+    DrawHLine(8, SPECTRUM_Y, 32, endFSel ? C_BLACK : C_WHITE);
+    DrawHLine(LCD_WIDTH - 8 - 32, SPECTRUM_Y, 32, !endFSel ? C_BLACK : C_WHITE);
+    PrintfEx(LCD_XCENTER, SPECTRUM_Y - 2, POS_C, C_WHITE, C_BLACK, F_SM,
+             "%4u/s", stepsPerSec);
   }
   if (spectrumReady) {
-    WF_Render(STATUS_H + 12 + 64, true);
+    WF_Render(SPECTRUM_Y + SPECTRUM_H, true);
     spectrumReady = false;
     SP_Begin();
   }

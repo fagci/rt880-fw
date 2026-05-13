@@ -33,7 +33,7 @@ static void initNumVals(void) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     uint16_t sy = STATUS_H + i * VFO_H;
     NumVal_Init(&ctx.numVal[i], 8, sy + 4 + 13 + 2 + 23, F_MONO_LG, 21, 23,
-                UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered);
+                UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, POS_L);
   }
 }
 

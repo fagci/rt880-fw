@@ -213,7 +213,13 @@ static uint8_t sp_buf[2][SP_BYTES];
 
 static void fill_sp_row(uint8_t *buf, int16_t row) {
   for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
-    uint16_t c = ((int16_t)nsy[x] > row) ? C_CYAN : C_BLACK;
+    uint16_t c;
+    if ((int16_t)nsy[x] > row) {
+      // top pixel — bright yellow line; fill below — dark amber
+      c = ((int16_t)nsy[x] - 1 == row) ? 0xFFE0 : 0x8400;
+    } else {
+      c = C_BLACK;
+    }
     buf[x * 2] = (uint8_t)(c >> 8);
     buf[x * 2 + 1] = (uint8_t)(c);
   }
