@@ -1,6 +1,7 @@
 #include "graphics.h"
 #include "driver/st7789.h"
 #include "gfxfont.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -166,7 +167,7 @@ void FillCircle(int16_t x0, int16_t y0, int16_t r, Color c) {
 // Буфер одной строки символа — макс. ширина глифа ~20px
 static uint16_t glyph_line_buf[32];
 
-static void putchar(int16_t *cx, int16_t y, uint8_t c, Color col, Color bg,
+static void putchar_(int16_t *cx, int16_t y, uint8_t c, Color col, Color bg,
                     const GFXfont *f) {
   if (c < f->first || c > f->last)
     return;
@@ -260,20 +261,10 @@ static int16_t text_width(const char *s, const GFXfont *f) {
   return x;
 }
 
-void Printf(uint8_t x, uint16_t y, const char *fmt, ...) {
-  va_list a;
-  va_start(a, fmt);
-  PrintfEx(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
-  va_end(a);
-}
-
-void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
-              const GFXfont *f, const char *fmt, ...) {
+static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
+                      const GFXfont *f, const char *fmt, va_list a) {
   char s[64];
-  va_list a;
-  va_start(a, fmt);
   vsnprintf(s, sizeof(s), fmt, a);
-  va_end(a);
 
   int16_t sx = x;
   if (align == POS_C)
@@ -328,4 +319,18 @@ void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
 
   st7789_dma_wait();
   st7789_cs_high();
+}
+
+void Printf(uint8_t x, uint16_t y, const char *fmt, ...) {
+  va_list a;
+  va_start(a, fmt);
+  printfEx(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
+  va_end(a);
+}
+void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
+               const GFXfont *f, const char *fmt, ...) {
+  va_list a;
+  va_start(a, fmt);
+  printfEx(x, y, align, col, bg, f, fmt, a);
+  va_end(a);
 }

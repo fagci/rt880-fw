@@ -5,7 +5,7 @@
 #include <stdio.h>
 
 #define LOG_LINES 8
-#define LOG_LINE_W 32
+#define LOG_LINE_W LCD_WIDTH
 
 static char logBuf[LOG_LINES][LOG_LINE_W];
 static uint8_t logHead = 0;
