@@ -2,6 +2,7 @@
 #include "at32f423.h"
 #include "bk4819-regs.h"
 #include "board.h"
+#include "../misc.h"
 
 #define PIN_SET(port, pin) ((port)->scr = (pin))
 #define PIN_CLR(port, pin) ((port)->clr = (pin))
@@ -776,7 +777,6 @@ void BK4819_SelectFilterByFrequency(uint32_t f) {
   }
   lastBand = band;
   // Определяем маску нужного фильтра
-  BandState_t band = getBand(f);
   uint16_t flt;
   if (band == BAND_HF)
     flt = FILTER_HF;
@@ -797,24 +797,6 @@ void BK4819_SelectFilterByFrequency(uint32_t f) {
   BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
 
   // Восстанавливаем активный чип, если нужно
-  if (g_bk != &g_chips[0]) {
-    BK4819_SelectChip(1);
-  }
-}
-
-void BK4819_SelectFilterByFrequency(uint32_t f) {
-  BK4819_ToggleFilter(FILTER_HF, band == BAND_HF);
-  BK4819_ToggleFilter(FILTER_VHF, band == BAND_VHF);
-  BK4819_ToggleFilter(FILTER_UHF, band == BAND_UHF);
-  BK4819_ToggleFilter(FILTER_800, band == BAND_800);
-  if (on) {
-    g_chips[0].gpioOutState |= flt;
-  } else {
-    g_chips[0].gpioOutState &= ~flt;
-  }
-
-  BK4819_SelectChip(0);
-  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
   if (g_bk != &g_chips[0]) {
     BK4819_SelectChip(1);
   }
