@@ -128,6 +128,7 @@ void BK4819_EnterTxMute(void);
 
 uint16_t BK4819_GetFilter();
 void BK4819_ToggleFilter(Filter flt, bool on);
+void BK4819_SelectFilterByFrequency(uint32_t f);
 void BK4819_SelectB(bool on);
 
 #endif

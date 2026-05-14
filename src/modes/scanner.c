@@ -77,7 +77,7 @@ static void enter(Mode_t *self) {
            LCD_HEIGHT - (SPECTRUM_Y + SPECTRUM_H), C_BLACK);
 }
 
-#define SCAN_STEPS_PER_UPDATE 64
+#define SCAN_STEPS_PER_UPDATE 128
 
 static void update(Mode_t *self) {
   if (spectrumReady)
@@ -85,7 +85,6 @@ static void update(Mode_t *self) {
 
   for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
     Radio_TuneStep(+1);
-    delay_us(100);
     Loot m = {
         .f = vfos[currentVfo].rxF,
         .rssi = BK4819_GetRSSI(),

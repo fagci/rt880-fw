@@ -505,10 +505,12 @@ void BK4819_TuneTo(uint32_t freq, bool precise) {
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
   if (precise) {
     BK4819_WriteRegister(BK4819_REG_30, 0x0200);
-  } else {
-    BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
+    BK4819_WriteRegister(BK4819_REG_30, reg);
+  } else if (reg & BK4819_REG_30_ENABLE_VCO_CALIB) {
+    BK4819_WriteRegister(BK4819_REG_30,
+                         reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
+    BK4819_WriteRegister(BK4819_REG_30, reg);
   }
-  BK4819_WriteRegister(BK4819_REG_30, reg);
 }
 
 void BK4819_RX_TurnOn(void) {
@@ -745,6 +747,77 @@ void BK4819_ToggleGpioOut(BK4819_GPIO_PIN_t pin, bool enable) {
 uint16_t BK4819_GetFilter() {
   return g_chips[0].gpioOutState &
          (FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
+}
+
+typedef enum {
+  BAND_HF = 0, // < 30 МГц  (HF, SW, AM)
+  BAND_VHF,    // 30–239 МГц (включая FM 76–108)
+  BAND_UHF,    // 240–799 МГц
+  BAND_800,    // >= 800 МГц
+  BAND_UNSET,
+} BandState_t;
+
+static BandState_t getBand(uint32_t f) {
+  if (f >= 800 * MHZ)
+    return BAND_800;
+  if (f >= 240 * MHZ)
+    return BAND_UHF;
+  if (f >= 30 * MHZ)
+    return BAND_VHF;
+  return BAND_HF;
+}
+
+static BandState_t lastBand = BAND_UNSET;
+
+void BK4819_SelectFilterByFrequency(uint32_t f) {
+  BandState_t band = getBand(f);
+  if (band == lastBand) {
+    return;
+  }
+  lastBand = band;
+  // Определяем маску нужного фильтра
+  BandState_t band = getBand(f);
+  uint16_t flt;
+  if (band == BAND_HF)
+    flt = FILTER_HF;
+  else if (band == BAND_VHF)
+    flt = FILTER_VHF;
+  else if (band == BAND_UHF)
+    flt = FILTER_UHF;
+  else
+    flt = FILTER_800;
+
+  // Сбрасываем все фильтры и включаем только нужный
+  g_chips[0].gpioOutState &=
+      ~(FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
+  g_chips[0].gpioOutState |= flt;
+
+  // Пишем в регистр чипа 0
+  BK4819_SelectChip(0);
+  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
+
+  // Восстанавливаем активный чип, если нужно
+  if (g_bk != &g_chips[0]) {
+    BK4819_SelectChip(1);
+  }
+}
+
+void BK4819_SelectFilterByFrequency(uint32_t f) {
+  BK4819_ToggleFilter(FILTER_HF, band == BAND_HF);
+  BK4819_ToggleFilter(FILTER_VHF, band == BAND_VHF);
+  BK4819_ToggleFilter(FILTER_UHF, band == BAND_UHF);
+  BK4819_ToggleFilter(FILTER_800, band == BAND_800);
+  if (on) {
+    g_chips[0].gpioOutState |= flt;
+  } else {
+    g_chips[0].gpioOutState &= ~flt;
+  }
+
+  BK4819_SelectChip(0);
+  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
+  if (g_bk != &g_chips[0]) {
+    BK4819_SelectChip(1);
+  }
 }
 
 void BK4819_ToggleFilter(Filter flt, bool on) {
