@@ -86,26 +86,48 @@ static void process_key(uint8_t idx, key_id_t key_id, bool pressed) {
   bool was = key_debounced[idx];
 
   if (pressed == was) {
+    /* Состояние не изменилось — сбрасываем счётчик дебаунса */
     debounce_cnt[idx] = 0;
   } else {
     if (++debounce_cnt[idx] >= KEY_DEBOUNCE_TICKS) {
       debounce_cnt[idx] = 0;
       key_debounced[idx] = pressed;
+
       if (pressed) {
+        /* Нажатие подтверждено */
         hold_ticks[idx] = 0;
         long_sent[idx] = false;
         queue_push(key_id, KEY_EVT_PRESS, idx);
       } else {
+        /* Отпускание: генерируем KEY_EVT_RELEASE только если не было
+           долгого нажатия. Если long_sent == true, значит кнопка уже
+           сработала как долгая — короткое RELEASE подавляем. */
+        if (!long_sent[idx]) {
+          queue_push(key_id, KEY_EVT_RELEASE, idx);
+        }
         hold_ticks[idx] = 0;
-        queue_push(key_id, KEY_EVT_RELEASE, idx);
       }
     }
   }
 
-  if (key_debounced[idx] && !long_sent[idx]) {
-    if (++hold_ticks[idx] >= KEY_LONG_PRESS_TICKS) {
-      long_sent[idx] = true;
-      queue_push(key_id, KEY_EVT_LONG_PRESS, idx);
+  /* --- Удержание (работает только пока кнопка физически нажата) --- */
+  if (key_debounced[idx]) {
+    hold_ticks[idx]++;
+
+    if (!long_sent[idx]) {
+      /* Долгое нажатие (один раз) */
+      if (hold_ticks[idx] >= KEY_LONG_PRESS_TICKS) {
+        long_sent[idx] = true;
+        queue_push(key_id, KEY_EVT_LONG_PRESS, idx);
+      }
+    } else {
+      /* Повтор при удержании после долгого нажатия */
+      if (hold_ticks[idx] >= KEY_LONG_PRESS_TICKS + KEY_HOLD_REPEAT_TICKS) {
+        queue_push(key_id, KEY_LONG_PRESSED_CONT, idx);
+        /* Сдвигаем счётчик, чтобы следующие повторы шли с тем же
+           интервалом относительно последнего срабатывания */
+        hold_ticks[idx] = KEY_LONG_PRESS_TICKS;
+      }
     }
   }
 }
