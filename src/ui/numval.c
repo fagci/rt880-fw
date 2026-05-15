@@ -35,7 +35,7 @@ static uint8_t fracWidth(uint32_t mul) {
 }
 
 // Форматирует nv->value → строку для отображения
-// Для UNIT_MHZ показываем не более 3 знаков после точки
+// Для UNIT_MHZ всегда 3 знака после точки
 static void valueToStr(const NumVal_t *nv, char *out) {
     uint32_t v   = nv->value;
     uint32_t mul = nv->multiplier;
@@ -49,16 +49,22 @@ static void valueToStr(const NumVal_t *nv, char *out) {
     uint32_t fracPart = v % mul;
     uint8_t  fw       = fracWidth(mul);
 
-    // Для МГц ограничиваем до 3 знаков после точки
-    if (nv->unit == UNIT_MHZ && fw > 3) {
-        uint8_t drop = fw - 3;
-        uint32_t divisor = 1;
-        for (uint8_t i = 0; i < drop; i++) divisor *= 10;
-        fracPart /= divisor;
+    // Для МГц — всегда ровно 3 знака после точки
+    if (nv->unit == UNIT_MHZ) {
+        if (fw > 3) {
+            uint8_t drop = fw - 3;
+            uint32_t divisor = 1;
+            for (uint8_t i = 0; i < drop; i++) divisor *= 10;
+            fracPart /= divisor;
+        } else if (fw < 3) {
+            for (uint8_t i = fw; i < 3; i++) fracPart *= 10;
+        }
         fw = 3;
+        sprintf(out, "%lu.%03lu", (unsigned long)intPart, (unsigned long)fracPart);
+        return;
     }
 
-    // убираем trailing zeros
+    // убираем trailing zeros для других единиц
     while (fw > 0 && fracPart % 10 == 0) {
         fracPart /= 10;
         fw--;
@@ -188,6 +194,13 @@ void NumVal_Render(NumVal_t *nv) {
 
     uint8_t len      = strlen(str);
     uint8_t clearLen = len > nv->prevLen ? len : nv->prevLen;
+
+    /* Для правого выравнивания с фиксированным форматом (MHz, 3 знака)
+       всегда очищаем полную ширину 9 символов, чтобы короткие значения
+       не оставляли хвостов слева. */
+    if (nv->pos == POS_R && nv->unit == UNIT_MHZ) {
+        clearLen = 9;
+    }
 
     // Затираем предыдущую область с учётом выравнивания
     uint16_t clearX = renderX(nv, clearLen);

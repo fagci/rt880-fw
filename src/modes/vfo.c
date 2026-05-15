@@ -55,8 +55,11 @@ static void onFreqEntered(uint32_t f) {
 static void initNumVals(void) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     uint16_t sy = STATUS_H + i * VFO_H;
-    NumVal_Init(&ctx.numVal[i], 8, sy + VFO_FREQ_Y, F_MONO_LG, 21, 23,
-                UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, POS_L);
+    /* Правое выравнивание: частота прижата к правому краю,
+       x = LCD_WIDTH - 8 (отступ 8px справа).
+       Формат "1340.000" = 9 символов × 21px = 189px */
+    NumVal_Init(&ctx.numVal[i], LCD_WIDTH - 8, sy + VFO_FREQ_Y, F_MONO_LG, 21, 23,
+                UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, POS_R);
   }
 }
 
@@ -208,7 +211,7 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
       return true;
     case KEY_SIDE2:
       gInverted = !gInverted;
-      gRedrawScreen = true;
+      FillRect(0, 0, LCD_WIDTH, LCD_HEIGHT, BG());
       return true;
     default:
       break;
