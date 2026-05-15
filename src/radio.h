@@ -84,7 +84,9 @@ extern const uint16_t StepFrequencyTable[15];
 
 void Radio_Init(void);
 void Radio_TuneTo(uint32_t f, bool precise);
+void Radio_TuneToAuto(uint32_t f);
 void Radio_TuneStep(int8_t dir);
 void Radio_NextVfo(void);
 void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
+void Radio_Update(void);
