@@ -146,24 +146,30 @@ static void stopEdit(NumVal_t *nv, bool confirm) {
 
 void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, GFXfont *font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
-                 uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos) {
-    nv->x          = x;
-    nv->y          = y;
-    nv->font       = font;
-    nv->charW      = charW;
-    nv->charH      = charH;
-    nv->pos        = pos;
-    nv->unit       = unit;
-    nv->multiplier = unitMultiplier(unit);
-    nv->value      = value;
-    nv->min        = min;
-    nv->max        = max;
-    nv->onChange   = onChange;
-    nv->editing    = false;
-    nv->blinkState = 0;
-    nv->lastBlink  = 0;
-    nv->prevLen    = 0;
-    nv->dirty      = true;
+                 uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
+                 GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH) {
+    nv->x              = x;
+    nv->y              = y;
+    nv->font           = font;
+    nv->charW          = charW;
+    nv->charH          = charH;
+    nv->pos            = pos;
+    nv->unit           = unit;
+    nv->multiplier     = unitMultiplier(unit);
+    nv->value          = value;
+    nv->min            = min;
+    nv->max            = max;
+    nv->onChange       = onChange;
+    nv->editing        = false;
+    nv->blinkState     = 0;
+    nv->lastBlink      = 0;
+    nv->prevLen        = 0;
+    nv->prevExtra      = 255;
+    nv->dirty          = true;
+    nv->extraPrecision = (extraFont != NULL);
+    nv->extraFont      = extraFont;
+    nv->extraCharW     = extraCharW;
+    nv->extraCharH     = extraCharH;
     memset(nv->buf, 0, NUMVAL_BUF);
 }
 
@@ -220,6 +226,26 @@ void NumVal_Render(NumVal_t *nv) {
     }
 
     nv->prevLen = len;
+
+    /* ── Доп. точность: 2 маленьких знака справа ── */
+    if (nv->extraPrecision && !nv->editing && nv->extraFont) {
+        /* value в 10 Гц. fracPart = value % 100000 (в единицах 0.00001 МГц).
+         * Первые 3 знака: fracPart / 100, доп. 2 знака: fracPart % 100 */
+        uint8_t extra = (nv->value % 100000) % 100;
+
+        if (extra != nv->prevExtra) {
+            uint8_t ew = 2 * nv->extraCharW + 1;
+            /* Позиция: сразу справа от якоря основной частоты (nv->x),
+             * с отступом 2px. Y — середина основной строки. */
+            uint16_t ex = nv->x + 2;
+            uint16_t ey = nv->y - (nv->charH / 2) + (nv->extraCharH / 2);
+
+            FillRect(ex, ey, ew, nv->extraCharH, BG());
+            PrintfEx(ex, ey + nv->extraCharH - 1, POS_L, C_GRAY, BG(),
+                     nv->extraFont, "%02d", extra);
+            nv->prevExtra = extra;
+        }
+    }
 }
 
 bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
@@ -349,6 +375,7 @@ void NumVal_Invalidate(NumVal_t *nv) { nv->dirty = true; }
 uint32_t NumVal_GetValue(NumVal_t *nv) { return nv->value; }
 
 void NumVal_SetValue(NumVal_t *nv, uint32_t val) {
-    nv->value = val;
-    nv->dirty = true;
+    nv->value     = val;
+    nv->dirty     = true;
+    nv->prevExtra = 255;
 }

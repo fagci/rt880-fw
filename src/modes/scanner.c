@@ -60,9 +60,9 @@ static void onEndEntered(uint32_t f) {
 
 static void initNumVals(void) {
   NumVal_Init(&ctx.numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
-              range.start, 0, 1340 * MHZ, onStartEntered, POS_L);
+              range.start, 0, 1340 * MHZ, onStartEntered, POS_L, NULL, 0, 0);
   NumVal_Init(&ctx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
-              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R);
+              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, NULL, 0, 0);
 }
 
 // ── Mode callbacks ──────────────────────────────

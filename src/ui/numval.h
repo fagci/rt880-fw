@@ -40,15 +40,23 @@ typedef struct {
 
   // для корректного затирания предыдущей отрисовки
   uint8_t prevLen;
+  uint8_t prevExtra; /* предыдущие 2 знака для сравнения */
 
   bool dirty;
+
+  /* Доп. точность: 2 маленьких знака справа */
+  bool extraPrecision;
+  GFXfont *extraFont;
+  uint8_t extraCharW, extraCharH;
 } NumVal_t;
 
 // multiplier и fracDigits выводятся из unit
 // pos — выравнивание: POS_L, POS_C, POS_R
+// extraFont/extraCharW/extraCharH — NULL/0 если доп. знаки не нужны
 void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, GFXfont *font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
-                 uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos);
+                 uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
+                 GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH);
 
 // вызывать периодически — управляет морганием курсора
 void NumVal_Update(NumVal_t *nv);
