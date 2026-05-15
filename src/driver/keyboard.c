@@ -54,8 +54,8 @@ static const direct_key_def_t DIRECT[DIRECT_COUNT] = {
     {&PIN_KEY_ALARM, KEY_ALARM}, /* PC2, idx=19 */
 };
 
-/* ── Общее состояние (матрица + прямые как единый массив) ───────────── */
-#define TOTAL_KEYS (16 + DIRECT_COUNT)
+/* ── Общее состояние (матрица + прямые + ADC как единый массив) ────── */
+#define TOTAL_KEYS (16 + DIRECT_COUNT + ADC_COUNT)
 
 static uint8_t debounce_cnt[TOTAL_KEYS];
 static uint16_t hold_ticks[TOTAL_KEYS];

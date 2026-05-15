@@ -123,10 +123,16 @@ static void render(Mode_t *self) {
     SP_Render(&range, STATUS_H + 14, SPECTRUM_H);
     lastSpectrumRender = millis();
 
+    /* Индикаторы выбора start/end — минимальные зоны 32px */
     DrawHLine(8, SPECTRUM_Y, 32, endFSel ? C_BLACK : C_WHITE);
     DrawHLine(LCD_WIDTH - 8 - 32, SPECTRUM_Y, 32, !endFSel ? C_BLACK : C_WHITE);
-    PrintfEx(LCD_XCENTER, SPECTRUM_Y - 2, POS_C, C_WHITE, C_BLACK, F_SM,
-             "%4u/s", stepsPerSec);
+
+    /* stepsPerSec — затереть старое + нарисовать новое */
+    {
+      int16_t tw = TextWidth("9999/s", F_SM);
+      FillRect(LCD_XCENTER - tw / 2, SPECTRUM_Y - 14, tw, 12, BG());
+      PrintfT(LCD_XCENTER, SPECTRUM_Y - 2, text_style(C_WHITE, C_BLACK, POS_C, F_SM), "%4u/s", stepsPerSec);
+    }
   }
   if (spectrumReady) {
     WF_Render(SPECTRUM_Y + SPECTRUM_H, true);

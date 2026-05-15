@@ -2,6 +2,7 @@
 #define GRAPHICS_H
 
 #include "gfxfont.h"
+#include "driver/st7789.h"
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -30,7 +31,29 @@
 typedef enum { POS_L, POS_C, POS_R } TextPos;
 typedef uint16_t Color;
 
-static bool gRedrawScreen;
+extern bool gRedrawScreen;
+extern bool gInverted;
+
+/* Текущий цвет фона (учитывает инверсию) */
+static inline Color BG(void) { return gInverted ? C_WHITE : C_BLACK; }
+
+/* ── Стиль текста — объединяет шрифт, цвета, выравнивание ── */
+typedef struct {
+  const GFXfont *font;
+  Color fg;
+  Color bg;
+  TextPos align;
+} TextStyle;
+
+static inline TextStyle text_style(Color fg, Color bg, TextPos align,
+                                    const GFXfont *font) {
+  return (TextStyle){.font = font, .fg = fg, .bg = bg, .align = align};
+}
+
+/* Пресеты */
+#define STYLE_SM_WHITE   text_style(C_WHITE, C_BLACK, POS_L, F_SM)
+#define STYLE_SM_YELLOW  text_style(C_YELLOW, C_BLACK, POS_L, F_SM)
+#define STYLE_SS_DARK    text_style(C_DARK, C_BLACK, POS_C, F_SS)
 
 void UI_ClearScreen(Color bg);
 
@@ -42,8 +65,14 @@ void DrawRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillCircle(int16_t x, int16_t y, int16_t r, Color c);
 
+/* Ширина текста в пикселях */
+int16_t TextWidth(const char *s, const GFXfont *f);
+
 void Printf(uint8_t x, uint16_t y, const char *fmt, ...);
 void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
               const GFXfont *font, const char *fmt, ...);
+
+/* Версия с TextStyle — 4 параметра вместо 7 */
+void PrintfT(uint8_t x, uint16_t y, TextStyle st, const char *fmt, ...);
 
 #endif

@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+bool gRedrawScreen;
+bool gInverted;
+
 #define FB_W ST7789_WIDTH
 #define FB_H ST7789_HEIGHT
 
@@ -261,8 +264,16 @@ static int16_t text_width(const char *s, const GFXfont *f) {
   return x;
 }
 
+int16_t TextWidth(const char *s, const GFXfont *f) { return text_width(s, f); }
+
 static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
-                      const GFXfont *f, const char *fmt, va_list a) {
+                       const GFXfont *f, const char *fmt, va_list a) {
+  if (gInverted) {
+    Color tmp = col;
+    col = bg;
+    bg = tmp;
+  }
+
   char s[64];
   vsnprintf(s, sizeof(s), fmt, a);
 
@@ -332,5 +343,12 @@ void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
   va_list a;
   va_start(a, fmt);
   printfEx(x, y, align, col, bg, f, fmt, a);
+  va_end(a);
+}
+
+void PrintfT(uint8_t x, uint16_t y, TextStyle st, const char *fmt, ...) {
+  va_list a;
+  va_start(a, fmt);
+  printfEx(x, y, st.align, st.fg, st.bg, st.font, fmt, a);
   va_end(a);
 }

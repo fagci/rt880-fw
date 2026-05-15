@@ -192,7 +192,7 @@ void NumVal_Render(NumVal_t *nv) {
     // Затираем предыдущую область с учётом выравнивания
     uint16_t clearX = renderX(nv, clearLen);
     FillRect(clearX, nv->y - nv->charH + 1,
-             clearLen * nv->charW + 1, nv->charH, C_BLACK);
+             clearLen * nv->charW + 1, nv->charH, BG());
 
     if (len > 0) {
         uint16_t drawX = renderX(nv, len);

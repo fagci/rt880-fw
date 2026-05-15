@@ -8,16 +8,68 @@
 #include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "graphics.h"
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+#define SL_H 24
+
+/* ── Позиции и размеры лейблов фильтров ─────────────────────────── */
+typedef struct {
+  uint16_t x, y;
+  uint16_t w, h;
+  uint16_t mask;
+  const char *name;
+} FilterLabel;
+
+/* TomThumb ~5px/char: HF=10, VHF/UHF/800=15; +1px запас */
+static const FilterLabel FL[] = {
+    {LCD_XCENTER - 10, 2,  11, 10, FILTER_HF,  "HF"},
+    {LCD_XCENTER - 10, 10, 16, 10, FILTER_VHF, "VHF"},
+    {LCD_XCENTER + 10,  2, 16, 10, FILTER_UHF, "UHF"},
+    {LCD_XCENTER + 10, 10, 16, 10, FILTER_800, "800"},
+};
+
+static uint16_t prevFlt;
+
+/* Стиль для одного лейбла */
+static TextStyle makeFltStyle(bool on) {
+  return text_style(on ? C_WHITE : C_DARK, C_BLACK, POS_C, F_SS);
+}
+
+void STATUSLINE_render(void) {
+  uint16_t flt = BK4819_GetFilter();
+
+  if (!prevFlt) {
+    /* Первый проход: рисуем фон, разделитель и все лейблы */
+    FillRect(0, 0, LCD_WIDTH, SL_H, BG());
+    DrawHLine(0, SL_H - 1, LCD_WIDTH, C_GRAY);
+    for (uint8_t i = 0; i < 4; i++) {
+      bool on = flt & FL[i].mask;
+      PrintfT(FL[i].x, FL[i].y + FL[i].h, makeFltStyle(on), "%s", FL[i].name);
+    }
+    prevFlt = flt;
+    return;
+  }
+
+  /* Инкрементальный рендер: только изменившиеся биты */
+  uint16_t changed = flt ^ prevFlt;
+  if (changed) {
+    for (uint8_t i = 0; i < 4; i++) {
+      if (changed & FL[i].mask) {
+        bool on = flt & FL[i].mask;
+        PrintfT(FL[i].x, FL[i].y + FL[i].h, makeFltStyle(on), "%s", FL[i].name);
+      }
+    }
+    prevFlt = flt;
+  }
+}
+
 static uint8_t previousBatteryLevel = 255;
 static bool showBattery = true;
-
 static uint32_t lastEepromWrite = 0;
 static uint32_t lastTickerUpdate = 0;
-
 static char statuslineText[32] = {0};
 static char statuslineTicker[32] = {0};
 
@@ -47,44 +99,3 @@ void STATUSLINE_SetTickerText(const char *pattern, ...) {
 }
 
 void STATUSLINE_update(void) { const uint32_t now = millis(); }
-
-void STATUSLINE_render(void) {
-  static uint16_t oldFlt;
-
-  uint16_t flt = BK4819_GetFilter();
-
-  bool needRender = flt != oldFlt;
-
-  if (needRender) {
-    FillRect(0, 0, LCD_WIDTH, 24, C_BLACK);
-    DrawHLine(0, 24, LCD_WIDTH, C_GRAY);
-    PrintfEx(LCD_XCENTER - 10, 12, POS_C, flt & FILTER_HF ? C_WHITE : C_DARK,
-             C_BLACK, F_SS, "HF");
-    PrintfEx(LCD_XCENTER - 10, 20, POS_C, flt & FILTER_VHF ? C_WHITE : C_DARK,
-             C_BLACK, F_SS, "VHF");
-    PrintfEx(LCD_XCENTER + 10, 12, POS_C, flt & FILTER_UHF ? C_WHITE : C_DARK,
-             C_BLACK, F_SS, "UHF");
-    PrintfEx(LCD_XCENTER + 10, 20, POS_C, flt & FILTER_800 ? C_WHITE : C_DARK,
-             C_BLACK, F_SS, "800");
-
-    // HERE update all old vals
-    oldFlt = flt;
-  }
-}
-
-/* void STATUSLINE_RenderRadioSettings() {
-  char gain[8];
-  char bandwidth[8];
-  char squelch_type[8];
-  char squelch_value[8];
-  char modulation[8];
-
-  strcpy(gain, RADIO_GetParamValueString(ctx, PARAM_GAIN));
-  strcpy(bandwidth, RADIO_GetParamValueString(ctx, PARAM_BANDWIDTH));
-  strcpy(squelch_type, RADIO_GetParamValueString(ctx, PARAM_SQUELCH_TYPE));
-  strcpy(squelch_value, RADIO_GetParamValueString(ctx, PARAM_SQUELCH_VALUE));
-  strcpy(modulation, RADIO_GetParamValueString(ctx, PARAM_MODULATION));
-
-  STATUSLINE_SetText("%s %s %s %s %s", gain, bandwidth, squelch_type,
-                     squelch_value, modulation);
-} */
