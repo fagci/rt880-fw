@@ -9,9 +9,9 @@
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
-#include "scanner.h"
-#include "fc.h"
 #include "analyser.h"
+#include "fc.h"
+#include "scanner.h"
 #include <stdlib.h>
 #include <string.h>
 

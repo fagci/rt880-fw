@@ -64,7 +64,8 @@ static void initNumVals(void) {
   NumVal_Init(&ctx.numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered, POS_L, NULL, 0, 0);
   NumVal_Init(&ctx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
-              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, NULL, 0, 0);
+              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, NULL, 0,
+              0);
 }
 
 // ── Mode callbacks ──────────────────────────────
@@ -72,7 +73,8 @@ static void initNumVals(void) {
 static void enter(Mode_t *self) {
   (void)self;
   savedVfo = currentVfo;
-  // сканер работает только с BK4819A; если активен SI4732 — откатываемся на VFO 0
+  // сканер работает только с BK4819A; если активен SI4732 — откатываемся на VFO
+  // 0
   if (vfos[currentVfo].radio != RADIO_BK4819A)
     currentVfo = 0;
   initNumVals();
@@ -91,7 +93,6 @@ static void update(Mode_t *self) {
 
   for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
     Radio_TuneStep(+1);
-    BK4819_SelectChip(0);
     Loot m = {
         .f = vfos[currentVfo].rxF,
         .rssi = BK4819_GetRSSI(),
@@ -119,6 +120,7 @@ static void update(Mode_t *self) {
 }
 
 static uint32_t lastSpectrumRender;
+static bool rendered;
 
 static void render(Mode_t *self) {
   (void)self;
@@ -128,7 +130,6 @@ static void render(Mode_t *self) {
 
   if (spectrumReady || millis() - lastSpectrumRender >= 500) {
     SP_Render(&range, STATUS_H + 14, SPECTRUM_H);
-    lastSpectrumRender = millis();
 
     /* Индикаторы выбора start/end — минимальные зоны 32px */
     DrawHLine(8, SPECTRUM_Y, 32, endFSel ? C_BLACK : C_WHITE);
@@ -138,13 +139,20 @@ static void render(Mode_t *self) {
     {
       int16_t tw = TextWidth("9999/s", F_SM);
       FillRect(LCD_XCENTER - tw / 2, SPECTRUM_Y - 14, tw, 12, BG());
-      PrintfT(LCD_XCENTER, SPECTRUM_Y - 2, text_style(C_WHITE, C_BLACK, POS_C, F_SM), "%4u/s", stepsPerSec);
+      PrintfT(LCD_XCENTER, SPECTRUM_Y - 2,
+              text_style(C_WHITE, C_BLACK, POS_C, F_SM), "%4u/s", stepsPerSec);
     }
+    rendered = true;
   }
   if (spectrumReady) {
     WF_Render(SPECTRUM_Y + SPECTRUM_H, true);
     spectrumReady = false;
     SP_Begin();
+    rendered = true;
+  }
+  if (rendered) {
+    lastSpectrumRender = millis();
+    rendered = false;
   }
 }
 

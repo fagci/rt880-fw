@@ -1,6 +1,7 @@
 #ifndef BK4819_H
 #define BK4819_H
 
+#include "../helper/measurements.h"
 #include "bk4819-regs.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -96,7 +97,7 @@ uint16_t BK4819_GetLnaPeakRSSI(void);
 uint16_t BK4819_GetAgcRSSI(void);
 
 bool BK4819_IsSquelchOpen(void);
-void BK4819_Squelch(uint8_t sq, uint8_t openTime, uint8_t closeTime);
+void BK4819_SetupSquelch(SQL sq, uint8_t delayO, uint8_t delayC);
 void BK4819_SquelchType(SquelchType t);
 
 void BK4819_RX_TurnOn(void);

@@ -54,5 +54,6 @@ bool IsReadable(const char *name);
 
 uint32_t DeltaF(uint32_t f1, uint32_t f2);
 uint32_t RoundToStep(uint32_t f, uint32_t step);
+SQL GetSql(uint8_t level);
 
 #endif /* end of include guard: MEASUREMENTS_H */

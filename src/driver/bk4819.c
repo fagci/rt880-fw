@@ -73,7 +73,7 @@ static BK4819_Chip g_chips[2] = {
 static BK4819_Chip *g_bk = &g_chips[0];
 
 // период полутакта SPI в нс
-#define BK_SPI_HALF_PERIOD_NS 32u // ~4 МГц SPI (безопасно, макс 8 МГц)
+#define BK_SPI_HALF_PERIOD_NS 16u // ~4 МГц SPI (безопасно, макс 8 МГц)
 
 static inline void bk_delay(void) {
   // cycles = (CoreClock_MHz * ns) / 1000
@@ -529,11 +529,10 @@ void BK4819_TuneTo(uint32_t freq, bool precise) {
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
   if (precise) {
     BK4819_WriteRegister(BK4819_REG_30, 0x0200);
-    BK4819_WriteRegister(BK4819_REG_30, reg);
-  } else if (reg & BK4819_REG_30_ENABLE_VCO_CALIB) {
+  } else {
     BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
-    BK4819_WriteRegister(BK4819_REG_30, reg);
   }
+  BK4819_WriteRegister(BK4819_REG_30, reg);
 }
 
 void BK4819_RX_TurnOn(void) {
@@ -695,17 +694,19 @@ void BK4819_SquelchType(SquelchType t) {
   BK4819_WriteRegister(BK4819_REG_77, sqTypeValues[t] << 8);
 }
 
-void BK4819_Squelch(uint8_t sq, uint8_t openTime, uint8_t closeTime) {
-  uint16_t v = sq << 8;
-  if (openTime)
-    v |= ((openTime & 0x0F) << 4);
-  if (closeTime)
-    v |= (closeTime & 0x0F);
-  BK4819_WriteRegister(BK4819_REG_6F, (sq << 8));
-  BK4819_WriteRegister(BK4819_REG_4D, 0xA000 | sq);
-  BK4819_WriteRegister(BK4819_REG_4E, 0x4000 | sq);
-  BK4819_WriteRegister(BK4819_REG_4F, 0x0800 | sq);
-  BK4819_WriteRegister(BK4819_REG_78, sq << 8);
+void BK4819_SetupSquelch(SQL sq, uint8_t delayO, uint8_t delayC) {
+  sq.no = Clamp(sq.no, 0, 127);
+  sq.nc = Clamp(sq.nc, 0, 127);
+
+  BK4819_WriteRegister(BK4819_REG_4D, 0xA000 | sq.gc);
+  BK4819_WriteRegister(
+      BK4819_REG_4E,
+      (1u << 14) |                   //  1 ???
+          (uint16_t)(delayO << 11) | // *5  squelch = open  delay .. 0 ~ 7
+          (uint16_t)(delayC << 9) |  // *3  squelch = close delay .. 0 ~ 3
+          sq.go);
+  BK4819_WriteRegister(BK4819_REG_4F, (sq.nc << 8) | sq.no);
+  BK4819_WriteRegister(BK4819_REG_78, (sq.ro << 8) | sq.rc);
 }
 
 bool BK4819_IsSquelchOpen(void) {
