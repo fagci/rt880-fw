@@ -95,3 +95,5 @@ void Radio_NextStep(void);
 void Radio_PrevStep(void);
 void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
+
+extern uint8_t squelchLevel;

@@ -925,3 +925,38 @@ void BK4819_TurnsOffTones_TurnsOnRX(void) {
 void BK4819_EnterTxMute(void) { BK4819_WriteRegister(BK4819_REG_50, 0xBB20); }
 
 void BK4819_ExitTxMute(void) { BK4819_WriteRegister(BK4819_REG_50, 0x3B20); }
+
+bool BK4819_GetFrequencyScanResult(uint32_t *pFrequency) {
+  uint16_t high = BK4819_ReadRegister(BK4819_REG_0D);
+  bool finished = (high & 0x8000) == 0;
+  if (finished) {
+    uint16_t low = BK4819_ReadRegister(BK4819_REG_0E);
+    *pFrequency = (uint32_t)((high & 0x7FF) << 16) | low;
+  }
+  return finished;
+}
+
+void BK4819_DisableFrequencyScan(void) {
+  BK4819_WriteRegister(BK4819_REG_32, 0x0244);
+}
+
+void BK4819_EnableFrequencyScanEx2(FreqScanTime t, uint16_t hz) {
+  BK4819_WriteRegister(BK4819_REG_32, (t << 14) | (hz << 1) | 1);
+}
+
+void BK4819_SelectFilterEx(Filter filter) {
+  const uint16_t PIN_BIT_VHF = 0x40U >> BK4819_GPIO2_VHF_RX;
+  const uint16_t PIN_BIT_UHF = 0x40U >> BK4819_GPIO1_UHF_RX;
+
+  if (filter == FILTER_VHF) {
+    g_bk->gpioOutState |= PIN_BIT_VHF;
+    g_bk->gpioOutState &= ~PIN_BIT_UHF;
+  } else if (filter == FILTER_UHF) {
+    g_bk->gpioOutState |= PIN_BIT_UHF;
+    g_bk->gpioOutState &= ~PIN_BIT_VHF;
+  } else {
+    g_bk->gpioOutState &= ~(PIN_BIT_VHF | PIN_BIT_UHF);
+  }
+
+  BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
+}

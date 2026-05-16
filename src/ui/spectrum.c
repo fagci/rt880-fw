@@ -24,27 +24,6 @@ static bool ticksRendered = false;
 static uint8_t wf[WF_YN][WF_XN] = {0};
 static uint16_t osy[SP_MAX_POINTS] = {0};
 
-/* static const uint16_t GRADIENT_PALETTE[] = {
-    0x2000, 0x3000, 0x5000, 0x9000, 0xfc44, 0xffbf, 0x7bf, 0x1b5f,
-    0x1b5f, 0x1f,   0x1f,   0x18,   0x13,   0xe,    0x9,
-}; */
-/* static const uint16_t GRADIENT_PALETTE[] = {
-    0x0000, // black
-    0x0002, // almost black blue
-    0x0006, // very dark blue
-    0x0010, // dark blue
-    0x0019, // deep blue
-    0x0030, // blue
-    0x0050, // saturated blue
-    0x0078, // bright blue
-    0x03BF, // blue-cyan
-    0x057F, // cyan
-    0x06FF, // bright cyan
-    0x97FF, // pale cyan
-    0xBFFF, // very light cyan
-    0xDFFF, // near white with blue tint
-    0xEFFF, // almost white
-}; */
 static const uint16_t GRADIENT_PALETTE[] = {
     0x0000, // black
     0x000A, // almost black blue

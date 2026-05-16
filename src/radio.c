@@ -45,7 +45,7 @@ const char *const STEP_NAMES[STEP_COUNT] = {
     "12.5k", "25k",    "50k",   "100k", "500k",
 };
 
-static uint8_t squelchLevel = 4;
+uint8_t squelchLevel = 4;
 
 /* Состояние AFDAC и SI4732 — пишем только при изменении */
 static bool bk0DacOn  = false;

@@ -117,6 +117,19 @@ void BK4819_DisableDTMF(void);
 void BK4819_PlayRogerTiny(void);
 void BK4819_GenTail(uint8_t tail);
 
+typedef enum {
+  F_SC_T_0_2s,
+  F_SC_T_0_4s,
+  F_SC_T_0_8s,
+  F_SC_T_1_6s,
+  F_SC_T_COUNT
+} FreqScanTime;
+
+bool BK4819_GetFrequencyScanResult(uint32_t *pFrequency);
+void BK4819_DisableFrequencyScan(void);
+void BK4819_EnableFrequencyScanEx2(FreqScanTime t, uint16_t hz);
+void BK4819_SelectFilterEx(Filter filter);
+
 void BK4819_SetCTCSSFrequency(uint16_t freq);
 void BK4819_SetCDCSSCodeWord(uint32_t codeWord);
 void BK4819_SetScrambler(uint8_t scrambler);
