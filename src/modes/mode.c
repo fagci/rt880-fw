@@ -1,4 +1,5 @@
 #include "mode.h"
+#include "../driver/st7789.h"
 #include <stdlib.h>
 
 // mode_manager.c
@@ -19,6 +20,7 @@ void Mode_Update(void) {
     next = NULL;
     if (current->enter)
       current->enter(current);
+    st7789_set_vscroll_area(320, 320, 320);
   }
   if (current && current->update)
     current->update(current);
