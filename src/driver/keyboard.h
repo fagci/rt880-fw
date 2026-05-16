@@ -8,8 +8,8 @@
 /* ── Настройки ──────────────────────────────────────────────────────── */
 #define KEY_SCAN_PERIOD_MS 5
 #define KEY_DEBOUNCE_TICKS 4     /* 4 × 5 ms = 20 ms   */
-#define KEY_LONG_PRESS_TICKS 24  /* 46 × 5 ms = 230 ms */
-#define KEY_HOLD_REPEAT_TICKS 23 /* 23 × 5 ms = 115 ms */
+#define KEY_LONG_PRESS_TICKS 16  /* 46 × 5 ms = 230 ms */
+#define KEY_HOLD_REPEAT_TICKS 8 /* 23 × 5 ms = 115 ms */
 #define KEY_QUEUE_SIZE 16
 
 typedef enum {
