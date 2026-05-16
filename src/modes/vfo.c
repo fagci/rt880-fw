@@ -17,26 +17,26 @@
 #define STATUS_H 24
 
 /* Позиции внутри блока VFO */
-#define VFO_LABEL_Y   17
-#define VFO_FREQ_Y    40
-#define VFO_STEP_Y    48
-#define VFO_RSSI_Y    (VFO_H - 8)
+#define VFO_LABEL_Y 17
+#define VFO_FREQ_Y 30
+#define VFO_STEP_Y 48
+#define VFO_RSSI_Y (VFO_STEP_Y - 8)
 
-/* Колонка доп. точности справа: 2 символа TomThumb + отступы */
-#define EXTRA_W       14
-#define EXTRA_X       (LCD_WIDTH - 8 - EXTRA_W)
-#define EXTRA_COL_W   32
+/* Колонка доп. точности справа: 2 символа + отступы */
+#define EXTRA_W (11 * 2 + 8)
+#define EXTRA_X (LCD_WIDTH - 8 - EXTRA_W)
+#define EXTRA_COL_W 32
 
-#define VFO_LABEL_W   30
-#define VFO_RSSI_W    (LCD_WIDTH - 16 - EXTRA_W - 4)
+#define VFO_LABEL_W 30
+#define VFO_RSSI_W (LCD_WIDTH - LCD_WIDTH / 3)
 
 typedef struct {
   NumVal_t numVal[DEVICE_VFO_COUNT];
-  uint8_t  prevActive;
-  uint8_t  prevMod[DEVICE_VFO_COUNT];
-  uint8_t  prevStep;
-  uint8_t  prevRssi[DEVICE_VFO_COUNT];
-  bool     inited;
+  uint8_t prevActive;
+  uint8_t prevMod[DEVICE_VFO_COUNT];
+  uint8_t prevStep;
+  uint8_t prevRssi[DEVICE_VFO_COUNT];
+  bool inited;
 } MainCtx_t;
 
 static MainCtx_t ctx;
@@ -57,26 +57,29 @@ static void initNumVals(void) {
     uint16_t sy = STATUS_H + i * VFO_H;
     NumVal_Init(&ctx.numVal[i], LCD_WIDTH - 8 - EXTRA_W - 4, sy + VFO_FREQ_Y,
                 F_MONO_LG, 21, 23, UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ,
-                onFreqEntered, POS_R, F_SS, 5, 10);
+                onFreqEntered, POS_R, F_SM, 11, 12);
   }
 }
 
 static void renderVfoLabel(uint8_t i, uint16_t sy, bool active) {
   Color clr = active ? C_GREEN : C_GRAY;
 
-  FillRect(8, sy + VFO_LABEL_Y - 10, VFO_LABEL_W, 12, BG());
-  PrintfT(8, sy + VFO_LABEL_Y, text_style(clr, C_BLACK, POS_L, F_SM), "VFO %c", 'A' + i);
+  // FillRect(8, sy + VFO_LABEL_Y - 10, VFO_LABEL_W, 12, BG());
+  // PrintfT(8, sy + VFO_LABEL_Y, text_style(clr, C_BLACK, POS_L, F_SM), "%c",
+  //         'A' + i);
 
   FillRect(EXTRA_X, sy + VFO_LABEL_Y - 10, EXTRA_COL_W, 12, BG());
-  PrintfT(LCD_WIDTH - 8, sy + VFO_LABEL_Y, text_style(clr, C_BLACK, POS_R, F_SM),
-          "%3s", MOD_NAMES[vfos[i].modulation]);
+  PrintfT(LCD_WIDTH - 8, sy + VFO_LABEL_Y,
+          text_style(clr, C_BLACK, POS_R, F_SM), "%3s",
+          MOD_NAMES[vfos[i].modulation]);
 }
 
 static void renderVfoStep(uint8_t i, uint16_t sy) {
-  uint16_t stepKhz = StepFrequencyTable[vfos[i].step] / 100;
-  FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
-  PrintfT(LCD_WIDTH - 8, sy + VFO_STEP_Y, text_style(C_YELLOW, C_BLACK, POS_R, F_SM),
-          "%2uk", stepKhz);
+  uint32_t step = StepFrequencyTable[vfos[i].step];
+  // FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
+  PrintfT(LCD_WIDTH - 8, sy + VFO_STEP_Y,
+          text_style(C_YELLOW, C_BLACK, POS_R, F_SM), "%3u.%02uk", step / 100,
+          step % 100);
 }
 
 static void renderVfoRssi(uint8_t i, uint16_t sy, uint8_t w) {
@@ -91,7 +94,8 @@ static void renderVfo(uint8_t i) {
   bool wasActive = (ctx.prevActive == i);
   bool firstRender = !ctx.inited;
 
-  if (firstRender || active != wasActive || vfos[i].modulation != ctx.prevMod[i]) {
+  if (firstRender || active != wasActive ||
+      vfos[i].modulation != ctx.prevMod[i]) {
     renderVfoLabel(i, sy, active);
   }
 
@@ -103,7 +107,7 @@ static void renderVfo(uint8_t i) {
     }
   } else {
     if (wasActive) {
-      FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
+      //  FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
     }
   }
 
@@ -146,8 +150,8 @@ static void renderFilterList(void) {
     uint16_t y = baseY + i * 14;
     char marker = filterIndex == i ? '>' : ' ';
     FillRect(2, y - 10, 14, 12, BG());
-    PrintfT(2, y, text_style(C_GREEN, C_BLACK, POS_L, F_SM),
-            "%c %s", marker, FILTER_NAMES[i]);
+    PrintfT(2, y, text_style(C_GREEN, C_BLACK, POS_L, F_SM), "%c %s", marker,
+            FILTER_NAMES[i]);
   }
 }
 
@@ -158,8 +162,8 @@ static void render(Mode_t *self) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
     renderVfo(i);
 
-  ctx.prevActive    = currentVfo;
-  ctx.prevStep      = vfos[currentVfo].step;
+  ctx.prevActive = currentVfo;
+  ctx.prevStep = vfos[currentVfo].step;
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
     ctx.prevMod[i] = vfos[i].modulation;
   ctx.inited = true;
@@ -178,12 +182,23 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
   if (NumVal_Key(&ctx.numVal[currentVfo], k, state))
     return true;
 
-  if (state == KEY_EVT_LONG_PRESS) {
+  if (state == KEY_LONG_PRESSED_CONT) {
     switch (k) {
     case KEY_UP:
-      Radio_NextStep();
+      Radio_TuneStep(+1);
       return true;
     case KEY_DOWN:
+      Radio_TuneStep(-1);
+      return true;
+    }
+  }
+
+  if (state == KEY_EVT_LONG_PRESS) {
+    switch (k) {
+    case KEY_3:
+      Radio_NextStep();
+      return true;
+    case KEY_9:
       Radio_PrevStep();
       return true;
     case KEY_6:
