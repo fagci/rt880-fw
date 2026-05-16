@@ -25,9 +25,9 @@ typedef struct {
 
 /* TomThumb ~5px/char: HF=10, VHF/UHF/800=15; +1px запас */
 static const FilterLabel FL[] = {
-    {LCD_XCENTER - 10, 2,  11, 10, FILTER_HF,  "HF"},
+    {LCD_XCENTER - 10, 2, 11, 10, FILTER_HF, "HF"},
     {LCD_XCENTER - 10, 10, 16, 10, FILTER_VHF, "VHF"},
-    {LCD_XCENTER + 10,  2, 16, 10, FILTER_UHF, "UHF"},
+    {LCD_XCENTER + 10, 2, 16, 10, FILTER_UHF, "UHF"},
     {LCD_XCENTER + 10, 10, 16, 10, FILTER_800, "800"},
 };
 
@@ -62,6 +62,9 @@ void STATUSLINE_render(void) {
         PrintfT(FL[i].x, FL[i].y + FL[i].h, makeFltStyle(on), "%s", FL[i].name);
       }
     }
+    uint16_t bat = battery_voltage_cv();
+    PrintfEx(LCD_WIDTH - 8, 20, POS_R, C_WHITE, C_BLACK, F_SM, "%u.%02u",
+             bat / 100, bat % 100);
     prevFlt = flt;
   }
 }

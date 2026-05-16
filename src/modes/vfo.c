@@ -11,7 +11,7 @@
 #include "../ui/statusline.h"
 #include "scanner.h"
 #include "fc.h"
-#include "fc.h"
+#include "analyser.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -205,6 +205,9 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
       return true;
     case KEY_4:
       Mode_Switch(&MODE_FC);
+      return true;
+    case KEY_5:
+      Mode_Switch(&MODE_ANALYSER);
       return true;
     case KEY_6:
       vfos[currentVfo].modulation =

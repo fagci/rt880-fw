@@ -55,6 +55,9 @@ static const gpio_pin_t PIN_KEY_SIDE2 =
 static const gpio_pin_t PIN_KEY_ALARM =
     GPIO_PIN(GPIOC, GPIO_PINS_2, CRM_GPIOC_PERIPH_CLOCK);
 
+static const gpio_pin_t PIN_BAT =
+    GPIO_PIN(GPIOA, GPIO_PINS_7, CRM_GPIOA_PERIPH_CLOCK);
+
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 uint32_t millis(void);
@@ -65,4 +68,7 @@ void ant_sw(bool hf);
 void board_init(void);
 
 uint16_t rt880_adc_read_keyin(void);
+uint16_t rt880_adc_read_battery(void);
+uint16_t battery_voltage_cv(void);
+
 #endif

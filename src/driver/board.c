@@ -88,14 +88,21 @@ void audio_path_set(uint8_t source) {
 void rt880_adc_init(void) {
   // Тактирование
   crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
+  crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE); // ← добавить
   crm_periph_clock_enable(CRM_ADC1_PERIPH_CLOCK, TRUE);
 
-  // PC2 в аналоговый режим
+  // PC2 в аналоговый режим (keyin)
   gpio_init_type g;
   gpio_default_para_init(&g);
   g.gpio_mode = GPIO_MODE_ANALOG;
   g.gpio_pins = GPIO_PINS_2;
   gpio_init(GPIOC, &g);
+
+  // PA7 в аналоговый режим (батарея)  ← добавить
+  gpio_default_para_init(&g);
+  g.gpio_mode = GPIO_MODE_ANALOG;
+  g.gpio_pins = GPIO_PINS_7;
+  gpio_init(GPIOA, &g);
 
   // ADC: одиночное преобразование, без прерываний
   adc_base_config_type adc_cfg;
@@ -114,6 +121,23 @@ void rt880_adc_init(void) {
   adc_calibration_start(ADC1);
   while (adc_calibration_status_get(ADC1))
     ;
+}
+
+uint16_t rt880_adc_read_battery(void) {
+  // PA7 = ADC1_IN7 на AT32F423
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_7, 1, ADC_SAMPLETIME_47_5);
+  adc_ordinary_software_trigger_enable(ADC1, TRUE);
+  while (!adc_flag_get(ADC1, ADC_OCCE_FLAG))
+    ;
+  return adc_ordinary_conversion_data_get(ADC1);
+}
+
+// Возвращает напряжение батареи в сотых вольта (например 372 = 3.72 В)
+uint16_t battery_voltage_cv(void) {
+  uint32_t raw = rt880_adc_read_battery();
+  // Vbat_cV = raw * Vref_cV * (R1+R2) / (ADC_MAX * R2)
+  // = raw * 330 * 347 / (4095 * 47)
+  return (uint16_t)((raw * 330UL * 347UL) / (4095UL * 47UL));
 }
 
 uint16_t rt880_adc_read_keyin(void) {
