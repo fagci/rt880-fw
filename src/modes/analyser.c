@@ -7,6 +7,7 @@
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
+#include "../ui/finput.h"
 #include "../ui/graphics.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
@@ -39,6 +40,9 @@ typedef struct {
   uint32_t lastStepTime;
   uint32_t stepsPerSec;
   uint32_t stepCount;
+  uint8_t prevCursorStart;
+  uint8_t prevCursorEnd;
+  bool prevCursorActive;
 } AnaCtx;
 
 static AnaCtx ctx;
@@ -75,8 +79,9 @@ static void onRangeChanged(void) {
   ctx.stepCount = 0;
   ctx.lastStepTime = millis();
   ctx.stepsPerSec = 0;
+  ctx.prevCursorActive = false;
 
-  FillRect(0, STATUS_H, LCD_WIDTH, SPECTRUM_Y + SPECTRUM_H - STATUS_H + CURSOR_H, C_BLACK);
+  FillRect(0, STATUS_H, LCD_WIDTH, WF_Y - STATUS_H, C_BLACK);
 }
 
 static void shiftRange(int32_t deltaStep) {
@@ -162,6 +167,46 @@ static uint32_t xToFreq(uint8_t x) {
   return ctx.range.start + (uint32_t)x * span / SP_MAX_POINTS;
 }
 
+static void eraseCursorZone(void) {
+  if (!ctx.prevCursorActive)
+    return;
+
+  uint8_t x0 = ctx.prevCursorStart;
+  uint8_t x1 = ctx.prevCursorEnd;
+
+  DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
+  DrawHLine(x0, SPECTRUM_Y + SPECTRUM_H - 1, x1 - x0 + 1, C_BLACK);
+  DrawVLine(x0, SPECTRUM_Y, SPECTRUM_H, C_BLACK);
+  DrawVLine(x1, SPECTRUM_Y, SPECTRUM_H, C_BLACK);
+
+  ctx.prevCursorActive = false;
+}
+
+static void drawCursorZone(void) {
+  uint8_t x0 = getCursorStart();
+  uint8_t x1 = getCursorEnd();
+
+  DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
+  DrawHLine(x0, SPECTRUM_Y + SPECTRUM_H - 1, x1 - x0 + 1, C_CYAN);
+  DrawVLine(x0, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
+  DrawVLine(x1, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
+
+  ctx.prevCursorStart = x0;
+  ctx.prevCursorEnd = x1;
+  ctx.prevCursorActive = true;
+}
+
+static void onFreqInput(uint32_t val1, uint32_t val2) {
+  (void)val2;
+  if (val1 >= BK4819_F_MIN && val1 <= BK4819_F_MAX) {
+    uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+    uint32_t span = step * SP_MAX_POINTS;
+    ctx.range.start = val1;
+    ctx.range.end = val1 + span;
+    onRangeChanged();
+  }
+}
+
 static void enter(Mode_t *self) {
   (void)self;
   ctx.savedVfo = currentVfo;
@@ -179,6 +224,10 @@ static void enter(Mode_t *self) {
 
 static void update(Mode_t *self) {
   (void)self;
+  if (gFInputActive) {
+    FINPUT_update();
+    return;
+  }
   if (ctx.spectrumReady)
     return;
 
@@ -214,23 +263,10 @@ static void update(Mode_t *self) {
 
 static uint32_t lastSpectrumRender;
 
-static void renderCursorZone(void) {
-  if (!ctx.cursorActive || millis() > ctx.cursorTimeout) {
-    ctx.cursorActive = false;
-    return;
-  }
-
-  uint8_t x0 = getCursorStart();
-  uint8_t x1 = getCursorEnd();
-
-  DrawVLine(x0, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
-  DrawVLine(x1, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
-  DrawHLine(x0, SPECTRUM_Y, x1 - x0, C_CYAN);
-  DrawHLine(x0, SPECTRUM_Y + SPECTRUM_H - 1, x1 - x0, C_CYAN);
-}
-
 static void renderCursorInfo(void) {
-  FillRect(0, CURSOR_Y, LCD_WIDTH, CURSOR_H, C_BLACK);
+  FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
+
+  uint16_t textY = WF_Y - 1;
 
   if (ctx.cursorActive && millis() <= ctx.cursorTimeout) {
     uint8_t x0 = getCursorStart();
@@ -241,21 +277,27 @@ static void renderCursorInfo(void) {
     char buf[24];
 
     snprintf(buf, sizeof(buf), "%lu.%03lu", leftF / MHZ, (leftF % MHZ) / 1000);
-    PrintfEx(4, CURSOR_Y + 2, POS_L, C_CYAN, C_BLACK, F_SS, "%s", buf);
+    PrintfEx(4, textY, POS_L, C_CYAN, C_BLACK, F_SS, "%s", buf);
 
     snprintf(buf, sizeof(buf), "%lu.%03lu", centerF / MHZ, (centerF % MHZ) / 1000);
-    PrintfEx(LCD_XCENTER, CURSOR_Y + 2, POS_C, C_WHITE, C_BLACK, F_SM, "%s", buf);
+    PrintfEx(LCD_XCENTER, textY, POS_C, C_WHITE, C_BLACK, F_SM, "%s", buf);
 
     snprintf(buf, sizeof(buf), "%lu.%03lu", rightF / MHZ, (rightF % MHZ) / 1000);
-    PrintfEx(LCD_WIDTH - 4, CURSOR_Y + 2, POS_R, C_CYAN, C_BLACK, F_SS, "%s", buf);
+    PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_CYAN, C_BLACK, F_SS, "%s", buf);
   } else {
     uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+    uint32_t span = ctx.range.end - ctx.range.start;
     char buf[24];
+
     snprintf(buf, sizeof(buf), "Step %lu.%02luk", step / 100, step % 100);
-    PrintfEx(4, CURSOR_Y + 2, POS_L, C_GRAY, C_BLACK, F_SS, "%s", buf);
+    PrintfEx(4, textY, POS_L, C_GRAY, C_BLACK, F_SS, "%s", buf);
 
     snprintf(buf, sizeof(buf), "%4lu/s", ctx.stepsPerSec);
-    PrintfEx(LCD_WIDTH - 4, CURSOR_Y + 2, POS_R, C_GRAY, C_BLACK, F_SS, "%s", buf);
+    PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_GRAY, C_BLACK, F_SS, "%s", buf);
+
+    snprintf(buf, sizeof(buf), "%lu MHz", span / MHZ);
+    PrintfEx(LCD_XCENTER, textY, POS_C, C_GRAY, C_BLACK, F_SS, "%s", buf);
+
     ctx.cursorActive = false;
   }
 }
@@ -264,9 +306,16 @@ static void render(Mode_t *self) {
   (void)self;
   STATUSLINE_render();
 
+  if (gFInputActive) {
+    FINPUT_render();
+    return;
+  }
+
+  bool spectrumRedrawn = false;
   if (ctx.spectrumReady || millis() - lastSpectrumRender >= 500) {
     SP_Render(&ctx.range, STATUS_H + 14, SPECTRUM_H);
     lastSpectrumRender = millis();
+    spectrumRedrawn = true;
   }
 
   if (ctx.spectrumReady) {
@@ -278,7 +327,13 @@ static void render(Mode_t *self) {
     ctx.scanF = ctx.range.start;
   }
 
-  renderCursorZone();
+  if (spectrumRedrawn) {
+    ctx.prevCursorActive = false;
+  }
+  eraseCursorZone();
+  if (ctx.cursorActive && millis() <= ctx.cursorTimeout) {
+    drawCursorZone();
+  }
   renderCursorInfo();
 }
 
@@ -289,6 +344,12 @@ static void exitMode(Mode_t *self) {
 
 static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
   (void)self;
+
+  if (gFInputActive) {
+    if (FINPUT_key(k, state))
+      return true;
+    return false;
+  }
 
   if (state == KEY_LONG_PRESSED_CONT) {
     if (k == KEY_UP) {
@@ -333,6 +394,10 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
         ? (vfos[currentVfo].step + 1) % STEP_COUNT
         : (vfos[currentVfo].step + STEP_COUNT - 1) % STEP_COUNT;
     onRangeChanged();
+    return true;
+  case KEY_0:
+    FINPUT_setup(BK4819_F_MIN, BK4819_F_MAX, UNIT_MHZ, false);
+    FINPUT_Show(onFreqInput);
     return true;
   case KEY_EXIT:
     ctx.cursorActive = false;
