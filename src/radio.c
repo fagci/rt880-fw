@@ -178,7 +178,7 @@ void Radio_Init(void) {
   BK4819_SetFilterBandwidth(vfos[0].bw);
   BK4819_TuneTo(vfos[0].rxF, true);
   BK4819_SetModulation(vfos[0].modulation);
-  SQL sq = GetSql(4);
+  SQL sq = GetSql(squelchLevel);
   BK4819_SetupSquelch(sq, 1, 1);
 
   SI47XX_Init();
@@ -193,18 +193,20 @@ void Radio_Init(void) {
 }
 
 /* Вызывается каждый update-цикл. Опрашивает шумодав и обновляет AFDAC
-   только если состояние изменилось — SPI не пишется вхолостую. */
+    только если состояние изменилось — SPI не пишется вхолостую. */
 void Radio_Update(void) {
   if (vfos[currentVfo].radio == RADIO_SI4732)
     return;
 
   bool sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+  Log("SQ: level=%u, reg0C_10=%d, sqOpen=%d", squelchLevel,
+      BK4819_ReadRegister(0x0C) & (1 << 10), sqOpen);
   applyMute(sqOpen);
 }
 
 void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;
-  SQL sq = GetSql(4);
+  SQL sq = GetSql(level);
   BK4819_SetupSquelch(sq, 1, 1);
 }
 

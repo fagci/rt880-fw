@@ -90,9 +90,9 @@ void BK4819_SetAGC(bool useDefault, uint8_t gainIndex);
 void BK4819_SetAFC(uint8_t level);
 
 uint16_t BK4819_GetRSSI(void);
-uint16_t BK4819_GetSNR(void);
-uint16_t BK4819_GetNoise(void);
-uint16_t BK4819_GetGlitch(void);
+uint8_t BK4819_GetSNR(void);
+uint8_t BK4819_GetNoise(void);
+uint8_t BK4819_GetGlitch(void);
 uint16_t BK4819_GetLnaPeakRSSI(void);
 uint16_t BK4819_GetAgcRSSI(void);
 

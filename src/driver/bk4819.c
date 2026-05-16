@@ -709,32 +709,33 @@ void BK4819_SetupSquelch(SQL sq, uint8_t delayO, uint8_t delayC) {
   BK4819_WriteRegister(BK4819_REG_78, (sq.ro << 8) | sq.rc);
 }
 
-bool BK4819_IsSquelchOpen(void) {
-  return !(BK4819_ReadRegister(BK4819_REG_0C) & (1 << 10));
-}
-
 uint16_t BK4819_GetRSSI(void) {
-  return BK4819_ReadRegister(BK4819_REG_67) & 0xFF;
+  return BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
 }
 
-uint16_t BK4819_GetSNR(void) {
-  return BK4819_ReadRegister(BK4819_REG_69) & 0xFF;
+uint8_t BK4819_GetNoise(void) {
+  return BK4819_ReadRegister(BK4819_REG_65) & 0x7F;
 }
 
-uint16_t BK4819_GetNoise(void) {
-  return BK4819_ReadRegister(BK4819_REG_68) & 0xFF;
+uint8_t BK4819_GetRSSIRelative(void) {
+  return (BK4819_ReadRegister(BK4819_REG_65) >> 8) & 0xFF;
 }
 
-uint16_t BK4819_GetGlitch(void) {
-  return BK4819_ReadRegister(BK4819_REG_65) & 0xFF;
-}
-
-uint16_t BK4819_GetLnaPeakRSSI(void) {
+uint8_t BK4819_GetGlitch(void) {
   return BK4819_ReadRegister(BK4819_REG_63) & 0xFF;
 }
 
-uint16_t BK4819_GetAgcRSSI(void) {
-  return BK4819_ReadRegister(BK4819_REG_64) & 0xFF;
+// AF TX/RX input amplitude (dB)
+uint8_t BK4819_GetAfTxRx(void) {
+  return BK4819_ReadRegister(BK4819_REG_6F) & 0x3F;
+}
+
+uint8_t BK4819_GetSNR(void) { return BK4819_ReadRegister(0x61) & 0xFF; }
+
+uint16_t BK4819_GetVoiceAmplitude(void) { return BK4819_ReadRegister(0x64); }
+
+bool BK4819_IsSquelchOpen(void) {
+  return (BK4819_ReadRegister(BK4819_REG_0C) >> 1) & 1;
 }
 
 void BK4819_SetupPowerAmplifier(uint8_t power, uint32_t freq) {
