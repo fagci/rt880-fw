@@ -1,8 +1,8 @@
 #include "bk4819.h"
+#include "../misc.h"
 #include "at32f423.h"
 #include "bk4819-regs.h"
 #include "board.h"
-#include "../misc.h"
 
 #define PIN_SET(port, pin) ((port)->scr = (pin))
 #define PIN_CLR(port, pin) ((port)->clr = (pin))
@@ -333,8 +333,31 @@ static inline uint16_t scale_freq(const uint16_t freq) {
 
 void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
+/* ── Filter band tracking ───────────────────────────────────── */
+
+typedef enum {
+  BAND_HF = 0,
+  BAND_VHF,
+  BAND_UHF,
+  BAND_800,
+  BAND_UNSET,
+} BandState_t;
+
+static BandState_t lastBand = BAND_UNSET;
+
+static BandState_t getBand(uint32_t f) {
+  if (f >= 800 * MHZ)
+    return BAND_800;
+  if (f >= 240 * MHZ)
+    return BAND_UHF;
+  if (f >= 30 * MHZ)
+    return BAND_VHF;
+  return BAND_HF;
+}
+
 void BK4819_Init(void) {
   g_bk->reg30_cached = false;
+  lastBand = BAND_UNSET; // REG_33 сейчас будет обнулён, кэш должен совпадать
 
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
@@ -508,8 +531,7 @@ void BK4819_TuneTo(uint32_t freq, bool precise) {
     BK4819_WriteRegister(BK4819_REG_30, 0x0200);
     BK4819_WriteRegister(BK4819_REG_30, reg);
   } else if (reg & BK4819_REG_30_ENABLE_VCO_CALIB) {
-    BK4819_WriteRegister(BK4819_REG_30,
-                         reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
+    BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
     BK4819_WriteRegister(BK4819_REG_30, reg);
   }
 }
@@ -749,26 +771,6 @@ uint16_t BK4819_GetFilter() {
   return g_chips[0].gpioOutState &
          (FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
 }
-
-typedef enum {
-  BAND_HF = 0, // < 30 МГц  (HF, SW, AM)
-  BAND_VHF,    // 30–239 МГц (включая FM 76–108)
-  BAND_UHF,    // 240–799 МГц
-  BAND_800,    // >= 800 МГц
-  BAND_UNSET,
-} BandState_t;
-
-static BandState_t getBand(uint32_t f) {
-  if (f >= 800 * MHZ)
-    return BAND_800;
-  if (f >= 240 * MHZ)
-    return BAND_UHF;
-  if (f >= 30 * MHZ)
-    return BAND_VHF;
-  return BAND_HF;
-}
-
-static BandState_t lastBand = BAND_UNSET;
 
 void BK4819_SelectFilterByFrequency(uint32_t f) {
   BandState_t band = getBand(f);

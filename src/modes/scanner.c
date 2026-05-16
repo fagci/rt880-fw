@@ -1,4 +1,5 @@
 #include "scanner.h"
+#include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
@@ -32,6 +33,7 @@ static MainCtx_t ctx;
 
 static bool spectrumReady;
 static bool endFSel;
+static uint8_t savedVfo;
 
 static uint32_t stepCount;
 static uint32_t lastStepTime;
@@ -69,6 +71,10 @@ static void initNumVals(void) {
 
 static void enter(Mode_t *self) {
   (void)self;
+  savedVfo = currentVfo;
+  // сканер работает только с BK4819A; если активен SI4732 — откатываемся на VFO 0
+  if (vfos[currentVfo].radio != RADIO_BK4819A)
+    currentVfo = 0;
   initNumVals();
   Radio_Init();
 
@@ -85,6 +91,7 @@ static void update(Mode_t *self) {
 
   for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
     Radio_TuneStep(+1);
+    BK4819_SelectChip(0);
     Loot m = {
         .f = vfos[currentVfo].rxF,
         .rssi = BK4819_GetRSSI(),
@@ -141,6 +148,11 @@ static void render(Mode_t *self) {
   }
 }
 
+static void exitMode(Mode_t *self) {
+  (void)self;
+  currentVfo = savedVfo;
+}
+
 static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
   (void)self;
 
@@ -165,7 +177,7 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
 
 Mode_t MODE_SCANNER = {
     .enter = enter,
-    .exit = NULL,
+    .exit = exitMode,
     .update = update,
     .render = render,
     .key = key,
