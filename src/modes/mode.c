@@ -20,7 +20,7 @@ void Mode_Update(void) {
     next = NULL;
     if (current->enter)
       current->enter(current);
-    st7789_set_vscroll_area(320, 320, 320);
+    st7789_scroll_reset();
   }
   if (current && current->update)
     current->update(current);

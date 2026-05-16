@@ -45,5 +45,6 @@ void st7789_set_addr_window_raw(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 void st7789_write_pixels_dma(const uint16_t *pixels, uint32_t count);
 void st7789_set_vscroll_area(uint16_t tfa, uint16_t vsa, uint16_t bfa);
 void st7789_set_vscroll_start(uint16_t vsp);
+void st7789_scroll_reset(void);
 
 #endif

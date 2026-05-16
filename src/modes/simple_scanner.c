@@ -1,4 +1,4 @@
-#include "scanner.h"
+#include "simple_scanner.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
@@ -40,7 +40,6 @@ static uint32_t lastStepTime;
 static uint32_t stepsPerSec;
 
 static void onRangeChanged() {
-  WF_Reset();
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
@@ -81,24 +80,42 @@ static void enter(Mode_t *self) {
   initNumVals();
   Radio_Init();
 
+  // Настройка шумодава согласно требованиям: ro=0, no=46, go=255
+  SQL sql = {
+      .ro = 0,
+      .rc = 0, // ro - 4
+      .no = 46,
+      .nc = 50, // no + 4
+      .go = 255,
+      .gc = 255, // go + 4
+  };
+  BK4819_SetupSquelch(sql, 0, 0);
+  BK4819_SquelchType(SQUELCH_RSSI_NOISE_GLITCH);
+
   onRangeChanged();
   FillRect(0, SPECTRUM_Y + SPECTRUM_H, LCD_WIDTH,
            LCD_HEIGHT - (SPECTRUM_Y + SPECTRUM_H), C_BLACK);
 }
 
-#define SCAN_STEPS_PER_UPDATE 128
+#define SCAN_STEPS_PER_UPDATE 1
 
 static void update(Mode_t *self) {
   if (spectrumReady)
     return;
 
   for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
-    Radio_TuneStep(+1);
+    // Используем precise=true для более точной настройки частоты
+    Radio_TuneTo(
+        vfos[currentVfo].rxF + StepFrequencyTable[vfos[currentVfo].step], true);
+
+    // Ждем 10 мс между перестройкой и получением RSSI
+    delay_ms(10);
+
     Loot m = {
         .f = vfos[currentVfo].rxF,
         .rssi = BK4819_GetRSSI(),
-        .noise = 0,
-        .open = false,
+        .noise = BK4819_GetNoise(),
+        .open = BK4819_IsSquelchOpen(),
     };
     SP_AddPoint(&m);
     stepCount++; // <-- считаем каждый шаг
@@ -184,7 +201,7 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
   return false;
 }
 
-Mode_t MODE_SCANNER = {
+Mode_t MODE_SIMPLE_SCANNER = {
     .enter = enter,
     .exit = exitMode,
     .update = update,

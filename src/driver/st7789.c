@@ -343,3 +343,18 @@ void st7789_set_vscroll_start(uint16_t vsp) {
   st7789_write_data16(vsp);
   st7789_cs_high();
 }
+
+void st7789_scroll_reset(void) {
+  st7789_cs_low();
+
+  // Сброс scroll area: вся frame memory — зона скролла
+  st7789_write_cmd(0x33);   // VSCRDEF
+  st7789_write_data16(0);   // TFA
+  st7789_write_data16(320); // VSA = вся frame memory
+  st7789_write_data16(0);   // BFA
+
+  // Выход из режима скролла
+  st7789_write_cmd(0x13); // NORON
+
+  st7789_cs_high();
+}

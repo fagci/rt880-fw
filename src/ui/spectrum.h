@@ -1,9 +1,9 @@
 #ifndef SPECTRUM_H
 #define SPECTRUM_H
 
+#include "misc.h"
 #include <stdbool.h>
 #include <stdint.h>
-#include "misc.h"
 
 #define SP_MAX_POINTS 240
 #define WF_XN 120
@@ -22,6 +22,7 @@ void SP_Begin(void);
 void SP_Next(void);
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh);
 void WF_Render(uint8_t y, bool wfDown);
+void WF_Reset(void);
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh);
 
 DBmRange SP_GetGradientRange(void);

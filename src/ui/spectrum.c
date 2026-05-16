@@ -312,6 +312,15 @@ void WF_Render(uint8_t wy, bool wfDown) {
   st7789_set_vscroll_start(vsp);
 }
 
+void WF_Reset(void) {
+  wfScrollInited = false;
+  wfScroll = 0;
+  // Выключить scroll до следующего WF_InitScroll
+  st7789_cs_low();
+  st7789_write_cmd(0x13); // NORON
+  st7789_cs_high();
+}
+
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh) {
   (void)sx;
   (void)sh;
