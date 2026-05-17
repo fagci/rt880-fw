@@ -611,15 +611,6 @@ void BK4819_SetModulation(ModulationType type) {
     BK4819_WriteRegister(0x2B, 0x0000);
     BK4819_WriteRegister(0x2F, 0x9890);
   }
-
-  if (type == MOD_FM) {
-    // Karina mod
-    BK4819_WriteRegister(0x28, 1536);  // 0x0600 - noise gate для FM
-    BK4819_WriteRegister(0x2C, 26210); // 0x6662 - emph/tx gain для FM
-  } else {
-    BK4819_WriteRegister(0x28, 0x0B40); // восстановить дефолт
-    BK4819_WriteRegister(0x2C, 0x1822); // восстановить дефолт
-  }
 }
 
 void BK4819_SquelchType(SquelchType t) {
