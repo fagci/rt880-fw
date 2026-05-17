@@ -575,36 +575,6 @@ void BK4819_SetAF(BK4819_AF_Type_t af) {
   BK4819_WriteRegister(BK4819_REG_47, 0x6042 | (af << 8));
 }
 
-XtalMode BK4819_XtalGet(void) {
-  return (XtalMode)((BK4819_ReadRegister(0x3C) >> 6) & 0b11);
-}
-
-void BK4819_XtalSet(XtalMode mode) {
-  uint16_t ifset = 0x2AAB;
-  uint16_t xtal = 20360;
-
-  switch (mode) {
-  case XTAL_0_13M:
-    xtal = 20232;
-    ifset = 0x3555;
-    break;
-  case XTAL_1_19_2M:
-    xtal = 20296;
-    ifset = 0x2E39;
-    break;
-  case XTAL_2_26M:
-    // Use defaults
-    break;
-  case XTAL_3_38_4M:
-    xtal = 20424;
-    ifset = 0x271C;
-    break;
-  }
-
-  BK4819_WriteRegister(0x3C, xtal);
-  BK4819_WriteRegister(0x3D, ifset);
-}
-
 uint16_t BK4819_GetRegValue(RegisterSpec spec) {
   return (_ReadRegCached(spec.num) >> spec.offset) & spec.mask;
 }
@@ -615,79 +585,26 @@ void BK4819_SetRegValue(RegisterSpec spec, uint16_t value) {
   BK4819_WriteRegister(spec.num, reg | (value << spec.offset));
 }
 
-uint8_t gLastModulation = 255;
 void BK4819_SetModulation(ModulationType type) {
-  /* if (type == MOD_BYP) {
-    BK4819_EnterBypass();
-  } else if (gLastModulation == MOD_BYP) {
-    BK4819_ExitBypass();
-  } */
-
-  const bool isSsb = (type == MOD_LSB || type == MOD_USB);
-
+  bool isSsb = type == MOD_LSB || type == MOD_USB;
+  bool isFm = type == MOD_FM || type == MOD_WFM;
   BK4819_SetAF(MOD_TYPE_REG47_VALUES[type]);
-  BK4819_SetRegValue(RS_AFC_DIS, isSsb);
-
+  BK4819_SetRegValue(RS_AF_DAC_GAIN, 0x8);
+  BK4819_SetRegValue(RS_AFC_DIS, !isFm);
   if (type == MOD_WFM) {
-    // Batch RF filter bandwidth registers: RF_FILT_BW=7, RF_FILT_BW_WEAK=7,
-    // BW_MODE=3 Saves 2 SPI read-modify-write cycles vs 3x SetRegValue
-    BK4819_WriteRegister(BK4819_REG_43,
-                         (7u << 12) | (7u << 9) | (3u << 4) | (1u << 3));
-    BK4819_XtalSet(XTAL_0_13M);
-  } else {
-    BK4819_XtalSet(XTAL_2_26M);
-  }
+    BK4819_SetRegValue(RS_RF_FILT_BW, 7);
+    BK4819_SetRegValue(RS_RF_FILT_BW_WEAK, 7);
+    BK4819_SetRegValue(RS_BW_MODE, 3);
 
-  // sound boost
-  if (isSsb) {
-    BK4819_WriteRegister(0x75, 0xFC13);
-  } else {
-    BK4819_WriteRegister(0x75, 0xF50B); // default
-  }
-
-  if (isSsb) {
-    BK4819_SetRegValue(RS_IF_F, 0);
-  } else if (type == MOD_WFM) {
+    BK4819_SetRegValue(RS_XTAL_MODE, 0);
     BK4819_SetRegValue(RS_IF_F, 14223);
+  } else if (isSsb) {
+    BK4819_SetRegValue(RS_XTAL_MODE, 3);
+    BK4819_SetRegValue(RS_IF_F, 0);
   } else {
+    BK4819_SetRegValue(RS_XTAL_MODE, 2);
     BK4819_SetRegValue(RS_IF_F, 10923);
   }
-
-  uint16_t reg4A = 0x5430; // default
-
-  if (isSsb || type == MOD_AM) {
-    reg4A |= 0b1111111;
-  } else {
-    reg4A = (reg4A & ~0b1111111) | 46;
-  }
-  BK4819_WriteRegister(0x4A, reg4A);
-
-  uint16_t r31 = BK4819_ReadRegister(0x31);
-  if (type == MOD_AM) {
-    BK4819_WriteRegister(0x31, r31 | 1);
-    BK4819_WriteRegister(0x42, 0x6F5C);
-    BK4819_WriteRegister(0x2A, 0x7434); // noise gate time constants
-    BK4819_WriteRegister(0x2B, 0x0400);
-    BK4819_WriteRegister(0x2F, 0x9990);
-  } else {
-    BK4819_WriteRegister(0x31, r31 & 0xFFFE);
-    BK4819_WriteRegister(0x42, 0x6B5A);
-    BK4819_WriteRegister(0x2A, 0x7400);
-    BK4819_WriteRegister(0x2B, 0x0000);
-    BK4819_WriteRegister(0x2F, 0x9890);
-  }
-
-  if (type == MOD_FM) {
-    // Karina mod
-    BK4819_WriteRegister(0x28, 1536);  // 0x0600 - noise gate для FM
-    BK4819_WriteRegister(0x2C, 26210); // 0x6662 - emph/tx gain для FM
-    // reg4A уже записан выше через (reg4A & ~0b111111) | 46,
-    // читаем его снова чтобы применить FM-специфичную маску ~127U
-  } else {
-    BK4819_WriteRegister(0x28, 0x0B40); // восстановить дефолт
-    BK4819_WriteRegister(0x2C, 0x1822); // восстановить дефолт
-  }
-  gLastModulation = type;
 }
 
 void BK4819_SquelchType(SquelchType t) {

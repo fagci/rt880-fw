@@ -1,8 +1,10 @@
 #include "board.h"
+#include "../ui/graphics.h"
 #include "at32f423.h"
 #include "at32f423_flash.h"
 #include "gpio.h"
 #include "keyboard.h"
+#include "st7789.h"
 
 volatile uint32_t tick_ms = 0;
 
@@ -185,9 +187,11 @@ void board_init(void) {
 
   rt880_adc_init();
 
-  keyboard_init();
-
   st7789_init();
+  UI_ClearScreen(C_BLACK);
+
   st7789_backlight_on();
   gpio_pin_set(&PIN_KEYBOARD_BACKLIGHT);
+
+  keyboard_init();
 }

@@ -1,17 +1,12 @@
 #include "driver/board.h"
 #include "driver/keyboard.h"
-#include "driver/si473x.h"
-#include "driver/st7789.h"
 #include "modes/mode.h"
 #include "modes/vfo.h"
-#include "radio.h"
-#include "ui/graphics.h"
 
-#define RENDER_INTERVAL_MS 50 // ~20 fps максимум
+#define RENDER_INTERVAL_MS 16
 
 int main(void) {
   board_init();
-  UI_ClearScreen(C_BLACK);
   Mode_Switch(&MODE_VFO);
 
   uint32_t lastRender = 0;
