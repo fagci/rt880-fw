@@ -370,10 +370,6 @@ void BK4819_Init(void) {
   g_bk->gpioOutState = 0;
   BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
 
-  if (g_bk == &g_chips[0]) {
-    BK4819_ToggleGpioOut(BK4819_GPIO2_VHF_RX, true);
-  }
-
   BK4819_SetupPowerAmplifier(0, 0);
 
   BK4819_WriteRegister(0x1E, 0x4c58);
@@ -390,30 +386,14 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_48,
                        (11u << 12) | (0 << 10) | (58 << 4) | (8 << 0));
 
-  delay_ms(10);
-  BK4819_WriteRegister(BK4819_REG_3F, 0);
-
   BK4819_WriteRegister(BK4819_REG_19, 0x1041);
-  BK4819_WriteRegister(BK4819_REG_7D, 0xE940 | 10);
+  BK4819_WriteRegister(BK4819_REG_7D, 0xE940 | 10); // mic
   BK4819_WriteRegister(0x74, 0xAF1F);
 
   BK4819_DisableDTMF();
 
   BK4819_WriteRegister(0x40, (BK4819_ReadRegister(0x40) & ~(0x7FF)) |
                                  (50 * 10) | (1 << 12));
-}
-
-uint16_t BK4819_TuneToAndWaitRSSI(uint32_t freq) {
-  BK4819_SetFrequency(freq);
-
-  uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
-  // BK4819_WriteRegister(BK4819_REG_30, 0x200);
-  BK4819_WriteRegister(BK4819_REG_30, reg & ~BK4819_REG_30_ENABLE_VCO_CALIB);
-  rt880_delay_us(300);
-  BK4819_WriteRegister(BK4819_REG_30, reg);
-  rt880_delay_us(2500);
-
-  return BK4819_GetRSSI();
 }
 
 int8_t BK4819_GetAgcIndex() {
@@ -486,21 +466,23 @@ void BK4819_SetAGC(bool fm, uint8_t gainIndex) {
 }
 
 void BK4819_SetAFC(uint8_t level) {
-  if (level == 0) {
+  if (level > 8) {
+    level = 8;
+  }
+
+  if (level) {
     BK4819_WriteRegister(0x73, (8 - level) << 11);
   } else {
-    BK4819_WriteRegister(0x73, (7 << 11) | (1 << 4));
+    BK4819_WriteRegister(0x73, BK4819_ReadRegister(0x73) | (1 << 4));
   }
 }
 
-static void BK4819_SetVariableCaliper(int32_t var) {
-  if (var >= 0) {
-    BK4819_WriteRegister(0x72, var);
-    BK4819_WriteRegister(0x71, BK4819_ReadRegister(0x71) & ~0x1000);
-  } else {
-    BK4819_WriteRegister(0x72, -var);
-    BK4819_WriteRegister(0x71, BK4819_ReadRegister(0x71) | 0x1000);
+uint8_t BK4819_GetAFC() {
+  uint16_t afc = BK4819_ReadRegister(0x73);
+  if (((afc >> 4) & 1) == 0) {
+    return 8 - ((afc >> 11) & 0b111);
   }
+  return 0;
 }
 
 uint32_t BK4819_GetFrequency(void) {
@@ -604,6 +586,39 @@ void BK4819_SetModulation(ModulationType type) {
   } else {
     BK4819_SetRegValue(RS_XTAL_MODE, 2);
     BK4819_SetRegValue(RS_IF_F, 10923);
+  }
+
+  uint16_t reg4A = 0x5430; // default
+
+  if (isSsb || type == MOD_AM) {
+    reg4A |= 0b1111111;
+  } else {
+    reg4A = (reg4A & ~0b1111111) | 46;
+  }
+  BK4819_WriteRegister(0x4A, reg4A);
+
+  uint16_t r31 = BK4819_ReadRegister(0x31);
+  if (type == MOD_AM) {
+    BK4819_WriteRegister(0x31, r31 | 1);
+    BK4819_WriteRegister(0x42, 0x6F5C);
+    BK4819_WriteRegister(0x2A, 0x7434); // noise gate time constants
+    BK4819_WriteRegister(0x2B, 0x0400);
+    BK4819_WriteRegister(0x2F, 0x9990);
+  } else {
+    BK4819_WriteRegister(0x31, r31 & 0xFFFE);
+    BK4819_WriteRegister(0x42, 0x6B5A);
+    BK4819_WriteRegister(0x2A, 0x7400);
+    BK4819_WriteRegister(0x2B, 0x0000);
+    BK4819_WriteRegister(0x2F, 0x9890);
+  }
+
+  if (type == MOD_FM) {
+    // Karina mod
+    BK4819_WriteRegister(0x28, 1536);  // 0x0600 - noise gate для FM
+    BK4819_WriteRegister(0x2C, 26210); // 0x6662 - emph/tx gain для FM
+  } else {
+    BK4819_WriteRegister(0x28, 0x0B40); // восстановить дефолт
+    BK4819_WriteRegister(0x2C, 0x1822); // восстановить дефолт
   }
 }
 
@@ -854,13 +869,25 @@ bool BK4819_GetFrequencyScanResult(uint32_t *pFrequency) {
   }
   return finished;
 }
+void BK4819_EnableFrequencyScan(void) {
+  BK4819_WriteRegister(BK4819_REG_32, 0x0245);
+}
+
+void BK4819_EnableFrequencyScanEx(FreqScanTime time) {
+  BK4819_WriteRegister(BK4819_REG_32, 0x0245 | (time << 14));
+}
+
+void BK4819_EnableFrequencyScanEx2(FreqScanTime time, uint16_t hz) {
+  BK4819_WriteRegister(BK4819_REG_32, (time << 14) | (hz << 1) | 1);
+}
 
 void BK4819_DisableFrequencyScan(void) {
   BK4819_WriteRegister(BK4819_REG_32, 0x0244);
 }
 
-void BK4819_EnableFrequencyScanEx2(FreqScanTime t, uint16_t hz) {
-  BK4819_WriteRegister(BK4819_REG_32, (t << 14) | (hz << 1) | 1);
+void BK4819_StopScan(void) {
+  BK4819_DisableFrequencyScan();
+  BK4819_Idle();
 }
 
 void BK4819_SelectFilterEx(Filter filter) {

@@ -83,11 +83,11 @@ uint16_t BK4819_ReadRegister(uint8_t reg);
 
 uint32_t BK4819_GetFrequency(void);
 void BK4819_TuneTo(uint32_t freq, bool precise);
-uint16_t BK4819_TuneToAndWaitRSSI(uint32_t freq);
 void BK4819_SetModulation(ModulationType mod);
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw);
 void BK4819_SetAGC(bool useDefault, uint8_t gainIndex);
 void BK4819_SetAFC(uint8_t level);
+uint8_t BK4819_GetAFC();
 
 uint16_t BK4819_GetRSSI(void);
 uint8_t BK4819_GetSNR(void);

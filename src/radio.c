@@ -199,8 +199,6 @@ void Radio_Update(void) {
     return;
 
   bool sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
-  Log("SQ: level=%u, reg0C_10=%d, sqOpen=%d", squelchLevel,
-      BK4819_ReadRegister(0x0C) & (1 << 10), sqOpen);
   applyMute(sqOpen);
 }
 
