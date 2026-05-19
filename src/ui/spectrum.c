@@ -24,27 +24,24 @@ static bool ticksRendered = false;
 static uint8_t wf[WF_YN][WF_XN] = {0};
 static uint16_t osy[SP_MAX_POINTS] = {0};
 
-static const uint16_t GRADIENT_PALETTE[] = {
-    0x0000, // black
-    0x000A, // almost black blue
-    0x0016, // very dark blue
-    0x001F, // blue
-    0x05BF, // cyan-blue
-    0x07F9, // cyan
-    0x06E0, // green
-    0xA7E0, // yellow-green
-    0xFFE0, // yellow
-    0xFC60, // orange
-    0xF8E0, // red-orange
-    0xF800, // red
-    0xFB2C, // light red
-    0xFE59, // near white
-    0xFFFF, // white
-};
+// Авто-генерация палитры: от чёрного → синий → голубой → зелёный → жёлтый → красный → белый
+static uint16_t GRADIENT_PALETTE[15];
+
+static void init_palette(void) {
+  static bool inited = false;
+  if (inited) return; inited = true;
+  for (uint8_t i = 0; i < 15; i++) {
+    if (i == 0)       { GRADIENT_PALETTE[i] = 0x0000; continue; }
+    if (i == 14)      { GRADIENT_PALETTE[i] = 0xFFFF; continue; }
+    uint8_t t = (i * 255) / 14;
+    if (t < 85)       GRADIENT_PALETTE[i] = ((uint16_t)(255 - t * 3) << 5) | 0x001F;
+    else if (t < 170) GRADIENT_PALETTE[i] = ((uint16_t)((t - 85) * 3) << 10) | 0x07E0;
+    else              GRADIENT_PALETTE[i] = 0xF800 | ((uint16_t)(255 - (t - 170) * 3) >> 3);
+  }
+}
 
 static uint8_t getPalIndex(uint16_t rssi) {
-  return ConvertDomain(Rssi2DBm(rssi), dBmRange.min, dBmRange.max, 0,
-                       ARRAY_SIZE(GRADIENT_PALETTE) - 1);
+  return ConvertDomain(Rssi2DBm(rssi), dBmRange.min, dBmRange.max, 0, 14);
 }
 
 static uint16_t v(uint8_t x) { return rssiHistory[x]; }
@@ -80,6 +77,7 @@ void SP_Next(void) {
 }
 
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
+  init_palette();
   filledPoints = 0;
   step = stepSize;
   bw = _bw;

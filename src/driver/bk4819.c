@@ -793,30 +793,6 @@ void BK4819_SetScrambler(uint8_t scrambler) {
   }
 }
 
-void BK4819_SetTailDetection(uint16_t freq) { (void)freq; }
-
-void BK4819_EnterDTMF_TX(bool bTail) { (void)bTail; }
-
-void BK4819_ExitDTMF_TX(bool bTail) { (void)bTail; }
-
-void BK4819_PlayDTMFString(const char *str, bool bAuto, uint16_t first,
-                           uint16_t tick, uint16_t gap, uint16_t tail) {
-  (void)str;
-  (void)bAuto;
-  (void)first;
-  (void)tick;
-  (void)gap;
-  (void)tail;
-}
-
-void BK4819_PlayRogerTiny(void) {
-  BK4819_WriteRegister(BK4819_REG_70, BK4819_REG_70_ENABLE_TONE1 | (10 << 8) |
-                                          BK4819_REG_70_ENABLE_TONE2 |
-                                          (10 << 0));
-}
-
-void BK4819_GenTail(uint8_t tail) { (void)tail; }
-
 void BK4819_TurnsOffTones_TurnsOnRX(void) {
   BK4819_WriteRegister(BK4819_REG_70, 0);
   BK4819_WriteRegister(BK4819_REG_30, BK4819_REG_30_ENABLE_RX_LINK |

@@ -2,13 +2,8 @@
 #include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
+#include "../helper/unit_fmt.h"
 #include <string.h>
-#include "printf.h"
-
-// Константы для преобразования частот
-#define HZ 1       // 1 * 10Hz
-#define KHZ 100    // 100 * 10Hz = 1kHz
-#define MHZ 100000 // 100000 * 10Hz = 1MHz
 
 static uint32_t POW[] = {1, 10, 100, 1000, 10000, 100000, 1000000, 10000000};
 
@@ -101,58 +96,24 @@ static void fillFromCurrentValue() {
   uint32_t value =
       (inputStage == INPUT_FIRST_VALUE) ? gFInputValue1 : gFInputValue2;
 
-  // Skip filling if value is 0 to prevent displaying initial "0"
   if (value == 0) {
     resetInputBuffer();
     return;
   }
 
-  uint32_t integerPart = 0;
-  uint32_t fractionalPart = 0;
-  uint8_t displayFractionalDigits = 0;
-
-  // Конвертируем из нативных единиц в отображаемые
+  uint32_t mul = 1;
+  uint8_t unit = 0;
   switch (currentConfig.unit) {
-  case UNIT_HZ:
-    integerPart = value;
-    fractionalPart = 0;
-    displayFractionalDigits = 0;
-    break;
-  case UNIT_KHZ:
-    integerPart = value / 100;
-    fractionalPart = value % 100;
-    displayFractionalDigits = 2; // показываем до 2 знаков после запятой
-    break;
-  case UNIT_MHZ:
-    integerPart = value / 100000;
-    fractionalPart = value % 100000;
-    displayFractionalDigits = 5; // показываем до 5 знаков после запятой
-    break;
-  case UNIT_VOLTS:
-    integerPart = value / 100;
-    fractionalPart = value % 100;
-    displayFractionalDigits = 2;
-    break;
-  default:
-    integerPart = value;
-    break;
+    case UNIT_MHZ: mul = UMHZ; unit = 1; break;
+    case UNIT_KHZ: mul = UKHZ; break;
+    case UNIT_VOLTS: mul = 100; break;
+    default: break;
   }
 
-  // Убираем trailing zeros
-  if (displayFractionalDigits > 0 && fractionalPart > 0) {
-    while (fractionalPart % 10 == 0 && displayFractionalDigits > 0) {
-      fractionalPart /= 10;
-      displayFractionalDigits--;
-    }
-    sprintf(inputBuffer, "%lu.%0*lu", integerPart, displayFractionalDigits,
-            fractionalPart);
-  } else {
-    sprintf(inputBuffer, "%lu", integerPart);
-  }
-
-  cursorPos = strlen(inputBuffer);
+  uint8_t len = fmt_value(inputBuffer, MAX_INPUT_LENGTH, value, mul, unit);
+  cursorPos = len;
   dotEntered = strchr(inputBuffer, '.') != NULL;
-  fractionalDigits = displayFractionalDigits;
+  fractionalDigits = unit_frac_width(mul);
 }
 
 void FINPUT_setup(uint32_t min, uint32_t max, InputUnit unit, bool is_range) {
@@ -497,7 +458,7 @@ void FINPUT_render(void) {
 void FINPUT_Show(FInputCallback cb) {
   gFInputCallback = cb;
   gFInputValue1 = 0;
-  gFInputValue1 = 0;
+  gFInputValue2 = 0;
   FINPUT_init();
   gFInputActive = true;
 }

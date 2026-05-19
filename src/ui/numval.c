@@ -2,83 +2,9 @@
 #include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
+#include "../helper/unit_fmt.h"
 #include "gfxfont.h"
-#include "printf.h"
 #include <string.h>
-
-static const uint32_t POW10[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
-
-// ──────────────────────────────────────────────
-// Вспомогательное
-
-static uint32_t unitMultiplier(InputUnit unit) {
-  switch (unit) {
-  case UNIT_MHZ:
-    return 100000;
-  case UNIT_KHZ:
-    return 100;
-  case UNIT_VOLTS:
-    return 100;
-  default:
-    return 1;
-  }
-}
-
-// Количество дробных знаков из multiplier (log10)
-static uint8_t fracWidth(uint32_t mul) {
-  uint8_t n = 0;
-  while (mul >= 10) {
-    mul /= 10;
-    n++;
-  }
-  return n;
-}
-
-// Форматирует nv->value → строку для отображения
-// Для UNIT_MHZ всегда 3 знака после точки
-static void valueToStr(const NumVal_t *nv, char *out) {
-  uint32_t v = nv->value;
-  uint32_t mul = nv->multiplier;
-
-  if (mul <= 1) {
-    sprintf(out, "%lu", (unsigned long)v);
-    return;
-  }
-
-  uint32_t intPart = v / mul;
-  uint32_t fracPart = v % mul;
-  uint8_t fw = fracWidth(mul);
-
-  // Для МГц — всегда ровно 3 знака после точки
-  if (nv->unit == UNIT_MHZ) {
-    if (fw > 3) {
-      uint8_t drop = fw - 3;
-      uint32_t divisor = 1;
-      for (uint8_t i = 0; i < drop; i++)
-        divisor *= 10;
-      fracPart /= divisor;
-    } else if (fw < 3) {
-      for (uint8_t i = fw; i < 3; i++)
-        fracPart *= 10;
-    }
-    fw = 3;
-    sprintf(out, "%lu.%03lu", (unsigned long)intPart, (unsigned long)fracPart);
-    return;
-  }
-
-  // убираем trailing zeros для других единиц
-  while (fw > 0 && fracPart % 10 == 0) {
-    fracPart /= 10;
-    fw--;
-  }
-
-  if (fw > 0) {
-    sprintf(out, "%lu.%0*lu", (unsigned long)intPart, fw,
-            (unsigned long)fracPart);
-  } else {
-    sprintf(out, "%lu", (unsigned long)intPart);
-  }
-}
 
 // Парсит buf до cursor → нативное значение
 static uint32_t bufToValue(const NumVal_t *nv) {
@@ -101,8 +27,10 @@ static uint32_t bufToValue(const NumVal_t *nv) {
   }
 
   uint32_t result = intPart * nv->multiplier;
-  if (localFrac > 0)
+  if (localFrac > 0) {
+    static const uint32_t POW10[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
     result += (fracPart * nv->multiplier) / POW10[localFrac];
+  }
   return result;
 }
 
@@ -157,7 +85,7 @@ void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, GFXfont *font,
   nv->charH = charH;
   nv->pos = pos;
   nv->unit = unit;
-  nv->multiplier = unitMultiplier(unit);
+  nv->multiplier = unit_multiplier(unit);
   nv->value = value;
   nv->min = min;
   nv->max = max;
@@ -197,7 +125,8 @@ void NumVal_Render(NumVal_t *nv) {
     if (nv->buf[0])
       strcpy(str, nv->buf);
   } else {
-    valueToStr(nv, str);
+    fmt_value(str, NUMVAL_BUF, nv->value, nv->multiplier, nv->unit);
+    (void)str;
   }
 
   uint8_t len = strlen(str);

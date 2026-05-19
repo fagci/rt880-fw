@@ -109,40 +109,11 @@ void BK4819_ToggleAFBit(bool on);
 
 void BK4819_EnterSubAu(void);
 void BK4819_ExitSubAu(void);
-void BK4819_EnterDTMF_TX(bool bTail);
-void BK4819_ExitDTMF_TX(bool bTail);
-void BK4819_PlayDTMFString(const char *str, bool bAuto, uint16_t first,
-                           uint16_t tick, uint16_t gap, uint16_t tail);
-void BK4819_EnableDTMF(void);
-void BK4819_DisableDTMF(void);
-void BK4819_PlayRogerTiny(void);
-void BK4819_GenTail(uint8_t tail);
-
-typedef enum {
-  F_SC_T_0_2s,
-  F_SC_T_0_4s,
-  F_SC_T_0_8s,
-  F_SC_T_1_6s,
-  F_SC_T_COUNT
-} FreqScanTime;
-
-bool BK4819_GetFrequencyScanResult(uint32_t *pFrequency);
-void BK4819_DisableFrequencyScan(void);
-void BK4819_EnableFrequencyScanEx2(FreqScanTime t, uint16_t hz);
-void BK4819_SelectFilterEx(Filter filter);
-
-void BK4819_SetCTCSSFrequency(uint16_t freq);
-void BK4819_SetCDCSSCodeWord(uint32_t codeWord);
-void BK4819_SetScrambler(uint8_t scrambler);
-void BK4819_SetTailDetection(uint16_t freq);
-
 void BK4819_TurnsOffTones_TurnsOnRX(void);
-void BK4819_ExitTxMute(void);
-void BK4819_EnterTxMute(void);
-
-uint16_t BK4819_GetFilter();
-void BK4819_ToggleFilter(Filter flt, bool on);
-void BK4819_SelectFilterByFrequency(uint32_t f);
-void BK4819_SelectB(bool on);
+void BK4819_EnableFrequencyScan(void);
+typedef enum { FREQ_SCAN_50MS, FREQ_SCAN_100MS, FREQ_SCAN_200MS, F_SC_T_COUNT } FreqScanTime;
+void BK4819_EnableFrequencyScanEx(FreqScanTime time);
+void BK4819_EnableFrequencyScanEx2(FreqScanTime time, uint16_t hz);
+void BK4819_DisableFrequencyScan(void);
 
 #endif
