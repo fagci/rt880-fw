@@ -102,7 +102,7 @@ static void applyVfo(bool precise) {
     if (precise)
       SI47XX_SwitchMode(modToSiMode(v->modulation));
     SI47XX_TuneTo(f);
-    SI47XX_SetAutomaticGainControl(0, 0);
+    SI47XX_SetAutomaticGainControl(1, 0);
   } else {
     BK4819_SelectFilterByFrequency(f);
     BK4819_TuneTo(f, precise);
