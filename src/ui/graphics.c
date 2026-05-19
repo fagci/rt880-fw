@@ -1,7 +1,7 @@
 #include "graphics.h"
 #include "driver/st7789.h"
 #include "gfxfont.h"
-#include <stdio.h>
+#include "printf.h"
 #include <stdlib.h>
 #include <string.h>
 

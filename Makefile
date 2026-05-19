@@ -17,12 +17,13 @@ C_INCLUDES := \
   -Iinc \
   -Isrc/external/cmsis/cm4/core_support \
   -Isrc/external/cmsis/cm4/device_support \
-  -Isrc/external/drivers/inc
+  -Isrc/external/drivers/inc \
+  -Isrc/external/printf
 
 CFLAGS  := $(MCUFLAGS) -ffunction-sections -fdata-sections -Wall -Wextra -Os -g3 $(C_DEFS) $(C_INCLUDES)
 ASFLAGS := $(MCUFLAGS) -x assembler-with-cpp -g3 $(C_DEFS) $(C_INCLUDES)
-LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs --specs=nosys.specs
-LIBS    := -lc -lm -lnosys
+LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
+LIBS    := -lc
 
 SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_adc.c' \
@@ -33,6 +34,7 @@ SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_misc.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_spi.c' \
   -o -name '*.c' -path '*/external/cmsis/cm4/device_support/system_at32f423.c' \
+  -o -name '*.c' -path '*/external/printf/printf.c' \
   | sort)
 
 # Ищем оба варианта расширения: *.s и *.S

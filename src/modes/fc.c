@@ -11,7 +11,7 @@
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "vfo.h"
-#include <stdio.h>
+#include "printf.h"
 #include <stdlib.h>
 
 #define FC_BOUND 150 * MHZ

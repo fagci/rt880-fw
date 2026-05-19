@@ -13,7 +13,7 @@
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "vfo.h"
-#include <stdio.h>
+#include "printf.h"
 #include <stdlib.h>
 #include <string.h>
 

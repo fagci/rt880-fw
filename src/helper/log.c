@@ -2,7 +2,7 @@
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
 #include <stdarg.h>
-#include <stdio.h>
+#include "printf.h"
 
 #define LOG_LINES 8
 #define LOG_LINE_W LCD_WIDTH

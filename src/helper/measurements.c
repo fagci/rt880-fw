@@ -1,4 +1,5 @@
 #include "measurements.h"
+#include "math_util.h"
 #include <stdint.h>
 
 #define SQ_HYSTERESIS 4 // Отклонение close от open thresholds
@@ -135,24 +136,13 @@ void SQ_InitPresets(void) {
   SQ_EnsureFileExists(SQ_FILE_UHF);
 }
 
-static uint16_t Sqrt32(uint32_t v) {
-  uint16_t res = 0;
-  for (uint32_t i = 0; i < v; ++i) {
-    if (i * i <= v)
-      res = i;
-    else
-      break;
-  }
-  return res;
-}
-
 uint16_t Std(const uint16_t *data, size_t n) {
   if (data == NULL || n == 0)
     return 0;
   uint32_t sumDev = 0;
   for (size_t i = 0; i < n; ++i)
     sumDev += data[i] * data[i];
-  return Sqrt32(sumDev / n);
+  return sqrt32(sumDev / n);
 }
 
 uint32_t DeltaF(uint32_t f1, uint32_t f2) {

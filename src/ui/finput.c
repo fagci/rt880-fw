@@ -3,6 +3,7 @@
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
 #include <string.h>
+#include "printf.h"
 
 // Константы для преобразования частот
 #define HZ 1       // 1 * 10Hz

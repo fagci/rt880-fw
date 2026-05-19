@@ -3,7 +3,7 @@
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
 #include "gfxfont.h"
-#include <stdio.h>
+#include "printf.h"
 #include <string.h>
 
 static const uint32_t POW10[] = {1, 10, 100, 1000, 10000, 100000, 1000000};
