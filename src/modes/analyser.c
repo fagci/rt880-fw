@@ -7,8 +7,8 @@
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
-#include "../ui/finput.h"
 #include "../ui/graphics.h"
+#include "../ui/numval.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
@@ -43,6 +43,7 @@ typedef struct {
   uint8_t prevCursorStart;
   uint8_t prevCursorEnd;
   bool prevCursorActive;
+  NumVal_t freqVal;
 } AnaCtx;
 
 static AnaCtx ctx;
@@ -196,13 +197,12 @@ static void drawCursorZone(void) {
   ctx.prevCursorActive = true;
 }
 
-static void onFreqInput(uint32_t val1, uint32_t val2) {
-  (void)val2;
-  if (val1 >= BK4819_F_MIN && val1 <= BK4819_F_MAX) {
+static void onFreqInput(uint32_t val) {
+  if (val >= BK4819_F_MIN && val <= BK4819_F_MAX) {
     uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
     uint32_t span = step * SP_MAX_POINTS;
-    ctx.range.start = val1;
-    ctx.range.end = val1 + span;
+    ctx.range.start = val;
+    ctx.range.end = val + span;
     onRangeChanged();
   }
 }
@@ -212,9 +212,11 @@ static void enter(Mode_t *self) {
   ctx.savedVfo = currentVfo;
   if (vfos[currentVfo].radio != RADIO_BK4819A)
     currentVfo = 0;
-
+  memset(&ctx, 0, sizeof(ctx));
+  NumVal_Init(&ctx.freqVal, LCD_XCENTER, LCD_HEIGHT - 20, F_SM, 11, 12,
+              UNIT_MHZ, vfos[currentVfo].rxF, BK4819_F_MIN, BK4819_F_MAX,
+              onFreqInput, POS_C, NULL, 0, 0);
   initRange();
-  Radio_Init();
   onRangeChanged();
 
   FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
@@ -224,10 +226,9 @@ static void enter(Mode_t *self) {
 
 static void update(Mode_t *self) {
   (void)self;
-  if (gFInputActive) {
-    FINPUT_update();
+  NumVal_Update(&ctx.freqVal);
+  if (NumVal_IsEditing(&ctx.freqVal))
     return;
-  }
   if (ctx.spectrumReady)
     return;
 
@@ -306,8 +307,8 @@ static void render(Mode_t *self) {
   (void)self;
   STATUSLINE_render();
 
-  if (gFInputActive) {
-    FINPUT_render();
+  if (NumVal_IsEditing(&ctx.freqVal)) {
+    NumVal_Render(&ctx.freqVal);
     return;
   }
 
@@ -345,8 +346,8 @@ static void exitMode(Mode_t *self) {
 static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
   (void)self;
 
-  if (gFInputActive) {
-    if (FINPUT_key(k, state))
+  if (NumVal_IsEditing(&ctx.freqVal)) {
+    if (NumVal_Key(&ctx.freqVal, k, state))
       return true;
     return false;
   }
@@ -396,8 +397,7 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     onRangeChanged();
     return true;
   case KEY_0:
-    FINPUT_setup(BK4819_F_MIN, BK4819_F_MAX, UNIT_MHZ, false);
-    FINPUT_Show(onFreqInput);
+    NumVal_Key(&ctx.freqVal, KEY_0, KEY_RELEASED);
     return true;
   case KEY_EXIT:
     ctx.cursorActive = false;

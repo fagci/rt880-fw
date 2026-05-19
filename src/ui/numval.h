@@ -1,7 +1,7 @@
 #pragma once
 #include "../driver/keyboard.h"
 #include "../ui/graphics.h"
-#include "finput.h" // InputUnit
+#include "../helper/unit_fmt.h" // InputUnit
 #include "gfxfont.h"
 #include <stdbool.h>
 #include <stdint.h>

@@ -4,11 +4,23 @@
 #include <stdint.h>
 #include "printf.h"
 
+/* Единицы измерения — порядок имеет значение для unit_multiplier */
+typedef enum {
+  UNIT_RAW,
+  UNIT_HZ,
+  UNIT_KHZ,
+  UNIT_MHZ,
+  UNIT_VOLTS,
+  UNIT_DBM,
+  UNIT_PERCENT,
+  UNIT_MS,
+} InputUnit;
+
 #define UHZ 1
 #define UKHZ 100
 #define UMHZ 100000
 
-/* Порядок должен совпадать с InputUnit из finput.h:
+/* Порядок должен совпадать с InputUnit выше:
    UNIT_RAW=0, UNIT_HZ=1, UNIT_KHZ=2, UNIT_MHZ=3,
    UNIT_VOLTS=4, UNIT_DBM=5, UNIT_PERCENT=6, UNIT_MS=7  */
 

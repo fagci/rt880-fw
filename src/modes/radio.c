@@ -7,7 +7,6 @@
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
-#include "../ui/finput.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
 #include "../ui/spectrum.h"

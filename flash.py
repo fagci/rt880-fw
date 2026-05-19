@@ -3,7 +3,7 @@
 Usage: python3 flash.py [--iradio] <port> <firmware_file>
 """
 
-import sys, os, time, threading, serial, serial.tools.list_ports
+import sys, os, time, threading, math, serial, serial.tools.list_ports
 
 SEND_CONNECT_DEFAULT = bytes([57, 51, 5, 16, 211])
 SEND_END_DEFAULT     = bytes([57, 51, 5, 238, 177])
@@ -12,20 +12,20 @@ SEND_CONNECT_IRADIO  = bytes([57, 51, 5, 16, 129])
 SEND_END_IRADIO      = bytes([57, 51, 5, 238, 95])
 SEND_UPDATE_IRADIO   = bytes([57, 51, 5, 85, 198])
 
-TOTAL_BLOCKS = 246       # 251904 / 1024 = ~246
 HEX_SIZE     = 251904
 
-
 def load_firmware(path: str) -> bytearray:
-    buf = bytearray(b'\xff' * HEX_SIZE)
     path = os.path.expanduser(path)
     if not os.path.exists(path):
         sys.exit(f"File not found: {path}")
 
     if path.lower().endswith(".bin"):
         data = open(path, "rb").read()
-        buf[:min(len(data), HEX_SIZE)] = data[:HEX_SIZE]
+        buf = bytearray(data)
+        if len(buf) < HEX_SIZE:
+            buf.extend(b'\xff' * (HEX_SIZE - len(buf)))
     else:  # Intel HEX
+        buf = bytearray(b'\xff' * HEX_SIZE)
         ext_addr = 0
         for line in open(path, errors="ignore"):
             line = line.strip()
@@ -44,12 +44,24 @@ def load_firmware(path: str) -> bytearray:
                 ext_addr = int(line[9:13], 16) << 16
     return buf
 
+def flash_size(buf: bytearray) -> int:
+    """Возвращает размер данных в байтах, округлённый до 1024 (последний непустой блок)."""
+    # Ищем последний не-0xFF байт
+    end = len(buf)
+    while end > 0 and buf[end - 1] == 0xFF:
+        end -= 1
+    if end == 0:
+        return 0
+    # Округляем до 1024
+    return ((end + 1023) // 1024) * 1024
+
 
 class Flasher:
     def __init__(self, port_name, firmware, use_iradio=False):
         self.port_name = port_name
         self.firmware  = firmware
         self.use_iradio = use_iradio
+        self.total_blocks = HEX_SIZE // 1024
 
         self.send_connect = SEND_CONNECT_IRADIO if use_iradio else SEND_CONNECT_DEFAULT
         self.send_end     = SEND_END_IRADIO     if use_iradio else SEND_END_DEFAULT
@@ -135,10 +147,10 @@ class Flasher:
             self.flg_connect = True
 
     def _print_progress(self):
-        pct  = self.g_block / TOTAL_BLOCKS * 100
+        pct  = self.g_block / self.total_blocks * 100
         done = int(pct / 2)
         bar  = "#" * done + "-" * (50 - done)
-        print(f"\r  [{bar}] {pct:5.1f}%  {self.g_block}/{TOTAL_BLOCKS}", end="", flush=True)
+        print(f"\r  [{bar}] {pct:5.1f}%  {self.g_block}/{self.total_blocks}", end="", flush=True)
 
     def _read_loop(self):
         buf = bytearray(1)

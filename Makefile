@@ -1,4 +1,4 @@
-TARGET  := rt880_blink
+TARGET  := rt880-fw-by-fagci
 BUILD   := build
 
 PREFIX  := arm-none-eabi

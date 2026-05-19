@@ -1,19 +1,17 @@
 #include "simple_scanner.h"
-#include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
-#include "../helper/log.h"
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
-#include "../ui/finput.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "vfo.h"
+#include "printf.h"
 #include <stdlib.h>
 
 #define STATUS_H 24

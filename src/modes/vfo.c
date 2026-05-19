@@ -1,19 +1,22 @@
 #include "vfo.h"
+#include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
-#include "../helper/log.h"
 #include "../helper/measurements.h"
+#include "../helper/log.h"
+#include "../misc.h"
 #include "../radio.h"
-#include "../ui/finput.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
+#include "../ui/spectrum.h"
 #include "../ui/statusline.h"
-#include "analyser.h"
-#include "fc.h"
+#include "mode.h"
 #include "radio.h"
 #include "scanner.h"
-#include <stdlib.h>
+#include "fc.h"
+#include "analyser.h"
+#include "printf.h"
 #include <string.h>
 
 #define VFO_H 64
@@ -165,9 +168,6 @@ static void render(Mode_t *self) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
     ctx.prevMod[i] = vfos[i].modulation;
   ctx.inited = true;
-
-  if (gFInputActive)
-    FINPUT_render();
 
   renderFilterList();
 
