@@ -63,6 +63,7 @@ static SI47XX_MODE modToSiMode(ModulationType mod) {
 }
 
 static ModulationType Radio_AutoModulation(uint32_t f) {
+  if (f >= 150000 && f < 2000000) return MOD_AM;
   if (f >= 2000000 && f <= 30000000) return MOD_AM;
   if (f > 30000000 && f < 80000000)  return MOD_FM;
   if (f >= 88000000 && f <= 108000000) return MOD_WFM;

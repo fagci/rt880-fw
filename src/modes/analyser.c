@@ -199,6 +199,7 @@ static void drawCursorZone(void) {
 
 static void onFreqInput(uint32_t val) {
   if (val >= BK4819_F_MIN && val <= BK4819_F_MAX) {
+    Radio_TuneToAuto(val);
     uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
     uint32_t span = step * SP_MAX_POINTS;
     ctx.range.start = val;
