@@ -6,7 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define NUMVAL_BUF 13
+#define NUMVAL_BUF 24
 #define NUMVAL_MAX_FRAC 6
 
 typedef void (*NumVal_CB)(uint32_t value);

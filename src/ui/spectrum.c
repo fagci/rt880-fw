@@ -181,11 +181,6 @@ static void renderWf(uint32_t f, uint16_t val) {
 
 static uint16_t nsy[SP_MAX_POINTS] = {0};
 
-static uint8_t spDirty[SP_MAX_POINTS];
-
-// Буфер для одной строки спектра: 240 пикселей × 2 байта = 480 байт
-static uint16_t sp_line_buf[SP_MAX_POINTS];
-
 // 2 × 240 × 2 = 960 байт — буферы уже в big-endian для SPI
 #define SP_BYTES (SP_MAX_POINTS * 2)
 static uint8_t sp_buf[2][SP_BYTES];

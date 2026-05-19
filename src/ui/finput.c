@@ -33,7 +33,7 @@ uint32_t gFInputValue1;
 uint32_t gFInputValue2;
 FInputCallback *gFInputCallback;
 
-#define MAX_INPUT_LENGTH 10
+#define MAX_INPUT_LENGTH 24
 
 static char inputBuffer[MAX_INPUT_LENGTH] = "";
 static uint8_t cursorPos = 0;

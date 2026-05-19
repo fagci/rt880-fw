@@ -41,7 +41,7 @@ static const BandRange KV_BANDS[] = {
     {1510000, 1580000}, // 19 м  (15.1 – 15.8 МГц)
 };
 
-uint8_t rssis[955];
+static uint8_t rssis[512];
 
 #define KV_BANDS_COUNT (sizeof(KV_BANDS) / sizeof(KV_BANDS[0]))
 
@@ -90,7 +90,7 @@ int scanner_step(Scanner *s) {
   return 0;
 }
 
-uint16_t scanIndex;
+static uint16_t scanIndex;
 
 static void update(Mode_t *self);
 static void render(Mode_t *self);

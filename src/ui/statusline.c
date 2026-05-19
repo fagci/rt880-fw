@@ -65,36 +65,11 @@ void STATUSLINE_render(void) {
   }
 }
 
-static uint8_t previousBatteryLevel = 255;
-static bool showBattery = true;
-static uint32_t lastEepromWrite = 0;
-static uint32_t lastTickerUpdate = 0;
-static char statuslineText[32] = {0};
-static char statuslineTicker[32] = {0};
-
 void STATUSLINE_SetText(const char *pattern, ...) {
-  char statuslineTextNew[32] = {0};
+  char statuslineText[32] = {0};
   va_list args;
   va_start(args, pattern);
-  vsnprintf(statuslineTextNew, 31, pattern, args);
+  vsnprintf(statuslineText, 31, pattern, args);
   va_end(args);
-  if (strcmp(statuslineText, statuslineTextNew)) {
-    strcpy(statuslineText, statuslineTextNew);
-    // gRedrawScreen = true;
-  }
+  (void)statuslineText;
 }
-
-void STATUSLINE_SetTickerText(const char *pattern, ...) {
-  char statuslineTextNew[32] = {0};
-  va_list args;
-  va_start(args, pattern);
-  vsnprintf(statuslineTextNew, 31, pattern, args);
-  va_end(args);
-  if (strcmp(statuslineTicker, statuslineTextNew)) {
-    strcpy(statuslineTicker, statuslineTextNew);
-    // gRedrawScreen = true;
-  }
-  lastTickerUpdate = millis();
-}
-
-void STATUSLINE_update(void) { const uint32_t now = millis(); }
