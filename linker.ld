@@ -1,18 +1,17 @@
 /* Radtel RT-880 — bare metal linker script
- * Flash: 0x08000000, 246K (251904 bytes)
- * RAM:   0x20000000, 37K  (0x9400 bytes)
- * Bootloader занимает первые 0x2AC0 байт Flash
- * Наш код начинается с 0x08002AC0
+ * Flash total: 256K at 0x08000000
+ * Bootloader:  first 0x2800 bytes (10KB)
+ * Our code:    starts at 0x08002800
+ * RAM:         48K at 0x20000000
  *
- * ЕСЛИ пишем с нуля (без стокового bootloader) — стартуем с 0x08000000
- * ЕСЛИ хотим жить рядом со стоковым BL — менять ORIGIN на 0x08002AC0
+ * Для запуска без стокового bootloader — ORIGIN = 0x08000000, LENGTH = 256K
  */
 
 _estack = 0x20009A68;   /* из стоковой прошивки */
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08002800, LENGTH = 246K
+    FLASH (rx)  : ORIGIN = 0x08002800, LENGTH = 256K - 0x2800
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 48K
 }
 
@@ -65,22 +64,23 @@ SECTIONS
         _ebss = .;
     } >RAM
 
-    /* Куча (heap) */
+    /* Куча (heap) — для sprintf/при необходимости */
     .heap (NOLOAD) :
     {
         . = ALIGN(8);
         _sheap = .;
-        . = . + 0x400;   /* 1K heap для начала */
+        . = . + 0x800;   /* 2KB */
         _eheap = .;
         end = .;
     } >RAM
 
-    /* Удалить ненужные секции */
+    /* Сбросить секции, не используемые в проекте */
     /DISCARD/ :
     {
-        libc.a ( * )
-        libm.a ( * )
-        libgcc.a ( * )
+        *(.ARM.exidx*)
+        *(.ARM.extab*)
+        *(.comment)
+        *(.note.*)
     }
 
     .ARM.attributes 0 : { *(.ARM.attributes) }

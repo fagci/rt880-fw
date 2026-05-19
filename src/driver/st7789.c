@@ -2,6 +2,12 @@
 #include "at32f423.h"
 #include "board.h"
 
+#define DWT_TIMEOUT_MS 100
+#define DWT_TIMEOUT_CYCLES (DWT_TIMEOUT_MS * (SystemCoreClock / 1000U))
+
+static uint32_t dwt_start(void) { return DWT->CYCCNT; }
+static bool dwt_expired(uint32_t start) { return (DWT->CYCCNT - start) > DWT_TIMEOUT_CYCLES; }
+
 #define PIN_DCX GPIO_PINS_13
 #define PORT_DCX GPIOC
 #define PIN_RESET GPIO_PINS_14
@@ -104,20 +110,23 @@ static void spi_dma_init(void) {
 }
 
 static void spi_write(uint8_t data) {
+  uint32_t t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_TDBE_FLAG) == RESET)
-    ;
+    if (dwt_expired(t)) return;
 
   spi_i2s_data_transmit(SPI1, data);
 
+  t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_RDBF_FLAG) == RESET)
-    ;
+    if (dwt_expired(t)) return;
 
   (void)spi_i2s_data_receive(SPI1);
 }
 
 static void spi1_tx_dma(const uint8_t *buf, uint16_t len) {
+  uint32_t t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
-    ;
+    if (dwt_expired(t)) return;
 
   dma_channel_enable(ST7789_DMA_CH, FALSE);
   dma_flag_clear(ST7789_DMA_GL_FLAG);
@@ -127,14 +136,16 @@ static void spi1_tx_dma(const uint8_t *buf, uint16_t len) {
 
   dma_channel_enable(ST7789_DMA_CH, TRUE);
 
+  t = dwt_start();
   while (dma_flag_get(ST7789_DMA_TC_FLAG) == RESET)
-    ;
+    if (dwt_expired(t)) { dma_channel_enable(ST7789_DMA_CH, FALSE); return; }
 
   dma_flag_clear(ST7789_DMA_TC_FLAG);
   dma_channel_enable(ST7789_DMA_CH, FALSE);
 
+  t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
-    ;
+    if (dwt_expired(t)) return;
 }
 
 void st7789_backlight_off() { PIN_CLR(PORT_BL, PIN_BL); }
@@ -161,23 +172,25 @@ void st7789_write_data16(uint16_t data) {
 }
 
 void st7789_dma_start(const uint8_t *buf, uint16_t byte_count) {
+  uint32_t t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
-    ;
+    if (dwt_expired(t)) return;
   dma_channel_enable(ST7789_DMA_CH, FALSE);
   dma_flag_clear(ST7789_DMA_GL_FLAG);
   ST7789_DMA_CH->maddr = (uint32_t)buf;
   ST7789_DMA_CH->dtcnt = byte_count;
   dma_channel_enable(ST7789_DMA_CH, TRUE);
-  // не ждём TC
 }
 
 void st7789_dma_wait(void) {
+  uint32_t t = dwt_start();
   while (dma_flag_get(ST7789_DMA_TC_FLAG) == RESET)
-    ;
+    if (dwt_expired(t)) { dma_channel_enable(ST7789_DMA_CH, FALSE); return; }
   dma_flag_clear(ST7789_DMA_TC_FLAG);
   dma_channel_enable(ST7789_DMA_CH, FALSE);
+  t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
-    ;
+    if (dwt_expired(t)) return;
 }
 
 void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {

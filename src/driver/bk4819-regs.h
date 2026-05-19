@@ -4,7 +4,6 @@
 #include <stdint.h>
 
 typedef struct {
-  const char *name;
   uint8_t num;
   uint8_t offset;
   uint16_t mask;
@@ -12,7 +11,7 @@ typedef struct {
 } RegisterSpec;
 
 #define DECLARE_RS(name_, num_, offset_, mask_, inc_)                          \
-  static const RegisterSpec RS_##name_ = {#name_, num_, offset_, mask_, inc_}
+  static const RegisterSpec RS_##name_ = {num_, offset_, mask_, inc_}
 
 DECLARE_RS(AFC_DIS, 0x73, 4, 1, 1);
 DECLARE_RS(AF_OUT, 0x47, 8, 0xF, 1);
