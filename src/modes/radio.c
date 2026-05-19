@@ -133,6 +133,7 @@ static void scanBands() { scan_all_kv_bands(); }
 static void onFreqEntered(uint32_t f) { Radio_TuneToAuto(f); }
 
 static void enter(Mode_t *self) {
+  (void)self;
   UI_ClearScreen(C_BLACK);
   currentVfo = 2;
   Radio_TuneTo(10480000, true);
@@ -142,6 +143,7 @@ static void enter(Mode_t *self) {
 }
 
 static void update(Mode_t *self) {
+  (void)self;
   Radio_Update();
 
   if (vfos[currentVfo].rxF != NumVal_GetValue(&ctx.numVal))
@@ -155,9 +157,10 @@ static void render(Mode_t *self) {
   NumVal_Render(&ctx.numVal);
 }
 
-static void exitMode(Mode_t *self) {}
+static void exitMode(Mode_t *self) { (void)self; }
 
 static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
+  (void)self;
   if (NumVal_Key(&ctx.numVal, k, state))
     return true;
 
@@ -165,9 +168,11 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     switch (k) {
     case KEY_UP:
     case KEY_DOWN:
-      scanIndex = IncDecU(scanIndex, 0, 955, k == KEY_UP);
+      scanIndex = IncDecU(scanIndex, 0, 511, k == KEY_UP);
       Radio_TuneTo(kv_freq_by_step(scanIndex), true);
       return true;
+    default:
+      break;
     }
   }
 

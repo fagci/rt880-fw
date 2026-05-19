@@ -74,10 +74,10 @@ static void stopEdit(NumVal_t *nv, bool confirm) {
 // ──────────────────────────────────────────────
 // Публичный API
 
-void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, GFXfont *font,
+void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, const GFXfont *font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
                  uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
-                 GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH) {
+                 const GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH) {
   nv->x = x;
   nv->y = y;
   nv->font = font;

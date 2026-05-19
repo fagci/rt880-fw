@@ -14,7 +14,7 @@ static uint8_t menu_stack_top = 0;
 
 static Menu *active_menu = NULL;
 
-static void (*renderFn)(uint8_t x, uint8_t y, TextPos align, Color col,
+static void (*renderFn)(uint8_t x, uint16_t y, TextPos align, Color col,
                         Color bg, const GFXfont *font, const char *fmt, ...);
 
 // Вспомогательная функция для вычисления правой границы
@@ -119,8 +119,6 @@ void MENU_Render(void) {
 
   FillRect(ex - 3, y, 3, 3, C_WHITE);
 }
-
-static void setMenuIndex(uint16_t i) { active_menu->i = i - 1; }
 
 /* static bool handleNumNav(KEY_Code_t key, Key_State_t state) {
   if (gIsNumNavInput && key == KEY_EXIT) {

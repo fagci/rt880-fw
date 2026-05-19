@@ -29,7 +29,8 @@ static uint16_t GRADIENT_PALETTE[15];
 
 static void init_palette(void) {
   static bool inited = false;
-  if (inited) return; inited = true;
+  if (inited) return;
+  inited = true;
   for (uint8_t i = 0; i < 15; i++) {
     if (i == 0)       { GRADIENT_PALETTE[i] = 0x0000; continue; }
     if (i == 14)      { GRADIENT_PALETTE[i] = 0xFFFF; continue; }

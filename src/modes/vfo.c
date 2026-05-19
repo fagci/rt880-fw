@@ -81,6 +81,7 @@ static void renderVfoStep(uint8_t i, uint16_t sy) {
 }
 
 static void renderVfoRssi(uint8_t i, uint16_t sy, uint8_t w) {
+  (void)i;
   if (w)
     FillRect(8, sy + VFO_RSSI_Y, w, 8, C_GREEN);
   FillRect(8 + w, sy + VFO_RSSI_Y, VFO_RSSI_W - w, 8, BG());
@@ -187,6 +188,8 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     case KEY_DOWN:
       Radio_TuneStep(-1);
       return true;
+    default:
+      break;
     }
   }
 

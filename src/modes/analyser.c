@@ -18,9 +18,9 @@
 #include <string.h>
 
 #define STATUS_H 24
-#define SPECTRUM_H 54
+#define SP_H 54
 #define SPECTRUM_Y (STATUS_H + 14)
-#define CURSOR_Y (SPECTRUM_Y + SPECTRUM_H + 1)
+#define CURSOR_Y (SPECTRUM_Y + SP_H + 1)
 #define CURSOR_H 11
 #define WF_Y (CURSOR_Y + CURSOR_H)
 
@@ -136,7 +136,7 @@ static void zoomOut(void) {
     ctx.range.end = BK4819_F_MAX;
     ctx.range.start = ctx.range.end - newSpan;
   }
-  if (ctx.range.end - ctx.range.start >= step * 10)
+  if ((uint32_t)(ctx.range.end - ctx.range.start) >= step * 10)
     onRangeChanged();
 }
 
@@ -175,9 +175,9 @@ static void eraseCursorZone(void) {
   uint8_t x1 = ctx.prevCursorEnd;
 
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
-  DrawHLine(x0, SPECTRUM_Y + SPECTRUM_H - 1, x1 - x0 + 1, C_BLACK);
-  DrawVLine(x0, SPECTRUM_Y, SPECTRUM_H, C_BLACK);
-  DrawVLine(x1, SPECTRUM_Y, SPECTRUM_H, C_BLACK);
+  DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_BLACK);
+  DrawVLine(x0, SPECTRUM_Y, SP_H, C_BLACK);
+  DrawVLine(x1, SPECTRUM_Y, SP_H, C_BLACK);
 
   ctx.prevCursorActive = false;
 }
@@ -187,9 +187,9 @@ static void drawCursorZone(void) {
   uint8_t x1 = getCursorEnd();
 
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
-  DrawHLine(x0, SPECTRUM_Y + SPECTRUM_H - 1, x1 - x0 + 1, C_CYAN);
-  DrawVLine(x0, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
-  DrawVLine(x1, SPECTRUM_Y, SPECTRUM_H, C_CYAN);
+  DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_CYAN);
+  DrawVLine(x0, SPECTRUM_Y, SP_H, C_CYAN);
+  DrawVLine(x1, SPECTRUM_Y, SP_H, C_CYAN);
 
   ctx.prevCursorStart = x0;
   ctx.prevCursorEnd = x1;
@@ -313,7 +313,7 @@ static void render(Mode_t *self) {
 
   bool spectrumRedrawn = false;
   if (ctx.spectrumReady || millis() - lastSpectrumRender >= 500) {
-    SP_Render(&ctx.range, STATUS_H + 14, SPECTRUM_H);
+    SP_Render(&ctx.range, STATUS_H + 14, SP_H);
     lastSpectrumRender = millis();
     spectrumRedrawn = true;
   }

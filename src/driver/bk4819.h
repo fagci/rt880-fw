@@ -115,5 +115,12 @@ typedef enum { FREQ_SCAN_50MS, FREQ_SCAN_100MS, FREQ_SCAN_200MS, F_SC_T_COUNT } 
 void BK4819_EnableFrequencyScanEx(FreqScanTime time);
 void BK4819_EnableFrequencyScanEx2(FreqScanTime time, uint16_t hz);
 void BK4819_DisableFrequencyScan(void);
+void BK4819_SelectChip(uint8_t chip);
+void BK4819_SelectB(bool on);
+void BK4819_SelectFilterByFrequency(uint32_t f);
+void BK4819_ToggleFilter(Filter flt, bool on);
+void BK4819_SelectFilterEx(Filter filter);
+uint16_t BK4819_GetFilter(void);
+bool BK4819_GetFrequencyScanResult(uint32_t *pFrequency);
 
 #endif

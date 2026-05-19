@@ -14,8 +14,8 @@ typedef void (*NumVal_CB)(uint32_t value);
 typedef struct {
   // положение и шрифт
   uint16_t x, y;
-  GFXfont *font;
-  uint8_t charW, charH; // пиксельный размер одного символа
+  const GFXfont *font;
+  uint8_t charW, charH;
 
   // выравнивание текста
   TextPos pos;
@@ -46,17 +46,17 @@ typedef struct {
 
   /* Доп. точность: 2 маленьких знака справа */
   bool extraPrecision;
-  GFXfont *extraFont;
+  const GFXfont *extraFont;
   uint8_t extraCharW, extraCharH;
 } NumVal_t;
 
 // multiplier и fracDigits выводятся из unit
 // pos — выравнивание: POS_L, POS_C, POS_R
 // extraFont/extraCharW/extraCharH — NULL/0 если доп. знаки не нужны
-void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, GFXfont *font,
+void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, const GFXfont *font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
                  uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
-                 GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH);
+                 const GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH);
 
 // вызывать периодически — управляет морганием курсора
 void NumVal_Update(NumVal_t *nv);

@@ -17,7 +17,7 @@
 #include <stdlib.h>
 
 #define STATUS_H 24
-#define SPECTRUM_H 64
+#define SP_H 64
 #define SPECTRUM_Y (STATUS_H + 2 + 12)
 
 static FRange range = {
@@ -43,7 +43,7 @@ static void onRangeChanged() {
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
-  FillRect(0, STATUS_H, LCD_WIDTH, SPECTRUM_Y + SPECTRUM_H - STATUS_H, C_BLACK);
+  FillRect(0, STATUS_H, LCD_WIDTH, SPECTRUM_Y + SP_H - STATUS_H, C_BLACK);
   NumVal_Invalidate(&ctx.numVal[0]);
   NumVal_Invalidate(&ctx.numVal[1]);
   stepCount = 0;
@@ -93,13 +93,14 @@ static void enter(Mode_t *self) {
   BK4819_SquelchType(SQUELCH_RSSI_NOISE_GLITCH);
 
   onRangeChanged();
-  FillRect(0, SPECTRUM_Y + SPECTRUM_H, LCD_WIDTH,
-           LCD_HEIGHT - (SPECTRUM_Y + SPECTRUM_H), C_BLACK);
+  FillRect(0, SPECTRUM_Y + SP_H, LCD_WIDTH,
+           LCD_HEIGHT - (SPECTRUM_Y + SP_H), C_BLACK);
 }
 
 #define SCAN_STEPS_PER_UPDATE 1
 
 static void update(Mode_t *self) {
+  (void)self;
   if (spectrumReady)
     return;
 
@@ -147,7 +148,7 @@ static void render(Mode_t *self) {
   NumVal_Render(&ctx.numVal[1]);
 
   if (spectrumReady || millis() - lastSpectrumRender >= 500) {
-    SP_Render(&range, STATUS_H + 14, SPECTRUM_H);
+    SP_Render(&range, STATUS_H + 14, SP_H);
 
     /* Индикаторы выбора start/end — минимальные зоны 32px */
     DrawHLine(8, SPECTRUM_Y, 32, endFSel ? C_BLACK : C_WHITE);
@@ -163,7 +164,7 @@ static void render(Mode_t *self) {
     rendered = true;
   }
   if (spectrumReady) {
-    WF_Render(SPECTRUM_Y + SPECTRUM_H, true);
+    WF_Render(SPECTRUM_Y + SP_H, true);
     spectrumReady = false;
     SP_Begin();
     rendered = true;

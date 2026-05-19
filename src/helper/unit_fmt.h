@@ -49,9 +49,11 @@ static inline uint8_t fmt_value(char *buf, uint8_t cap, uint32_t value,
   }
 
   while (fw > 0 && fp % 10 == 0) { fp /= 10; fw--; }
-  if (fw > 0)
+  if (fw > 0) {
+    if (fw > 6) fw = 6;
     return (uint8_t)snprintf(buf, cap, "%lu.%0*lu",
                               (unsigned long)ip, fw, (unsigned long)fp);
+  }
   return (uint8_t)snprintf(buf, cap, "%lu", (unsigned long)ip);
 }
 

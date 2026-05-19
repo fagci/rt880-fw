@@ -38,7 +38,7 @@ static const key_id_t KEY_MAP[16] = {
 /* ── Таблица прямых кнопок ──────────────────────────────────────────── */
 /* Индексы 16..19 — продолжение единого пространства кодов */
 #define DIRECT_BASE 16
-#define DIRECT_COUNT 1
+#define DIRECT_COUNT 4
 #define ADC_BASE DIRECT_BASE + DIRECT_COUNT
 #define ADC_COUNT 3
 

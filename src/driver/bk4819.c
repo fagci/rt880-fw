@@ -384,6 +384,9 @@ int8_t BK4819_GetAgcIndex() {
   return idx;
 }
 
+void BK4819_DisableDTMF(void);
+static inline uint16_t _ReadRegCached(uint8_t reg) { return regcache_read(reg); }
+
 uint8_t BK4819_GetAttenuation() {
   uint8_t reg = BK4819_REG_13;
   switch (BK4819_GetAgcIndex()) {
@@ -641,6 +644,7 @@ bool BK4819_IsSquelchOpen(void) {
 }
 
 void BK4819_SetupPowerAmplifier(uint8_t power, uint32_t freq) {
+  (void)freq;
   if (power == 0) {
     BK4819_WriteRegister(BK4819_REG_36, 0x0000);
     BK4819_WriteRegister(BK4819_REG_37, 0x1F0F);

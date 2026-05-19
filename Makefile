@@ -23,6 +23,7 @@ C_INCLUDES := \
 CFLAGS  := $(MCUFLAGS) -ffunction-sections -fdata-sections -Wall -Wextra -Os -g3 \
            -ffast-math \
            -Wno-enum-int-mismatch -Wno-aggressive-loop-optimizations \
+           -Wno-unused-function -Wno-unused-but-set-variable \
            $(C_DEFS) $(C_INCLUDES)
 ASFLAGS := $(MCUFLAGS) -x assembler-with-cpp -g3 $(C_DEFS) $(C_INCLUDES)
 LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
