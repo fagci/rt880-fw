@@ -161,7 +161,7 @@ static bool handleUpDownNavigation(KEY_Code_t key, Key_State_t state,
 
   // Force redraw for menus without items (like keymap submenu)
   /* if (!hasItems) {
-    gRedrawScreen = true;
+
   } */
 
   if (!hasItems && active_menu->action) {

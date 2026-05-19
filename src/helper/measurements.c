@@ -2,11 +2,6 @@
 #include "math_util.h"
 #include <stdint.h>
 
-#define SQ_HYSTERESIS 4 // Отклонение close от open thresholds
-
-static const char *SQ_FILE_VHF = "/vhf.sq";
-static const char *SQ_FILE_UHF = "/uhf.sq";
-
 long long Clamp(long long v, long long min, long long max) {
   return v <= min ? min : (v >= max ? max : v);
 }
@@ -103,37 +98,6 @@ SQL GetSql(uint8_t level) {
   sq.nc = sq.no + SQ_HYSTERESIS;
   sq.gc = sq.go + SQ_HYSTERESIS;
   return sq;
-}
-
-// ── Squelch preset file-based management ─────────────────────────────────────
-
-static void SQ_InitDefaults(SquelchPreset *presets) {
-  for (uint8_t i = 0; i < SQ_PRESETS_COUNT; i++) {
-    SQL sq = GetSql(i);
-    presets[i].ro = sq.ro;
-    presets[i].no = sq.no;
-    presets[i].go = sq.go;
-    presets[i].rc = sq.rc;
-    presets[i].nc = sq.nc;
-    presets[i].gc = sq.gc;
-  }
-}
-
-static void SQ_EnsureFileExists(const char *file) {
-  SquelchPreset p;
-  if (!SQ_LoadPreset(file, 0, &p)) {
-    // File doesn't exist - create with defaults
-    SquelchPreset presets[SQ_PRESETS_COUNT];
-    SQ_InitDefaults(presets);
-    for (uint8_t i = 0; i < SQ_PRESETS_COUNT; i++) {
-      SQ_SavePreset(file, i, &presets[i]);
-    }
-  }
-}
-
-void SQ_InitPresets(void) {
-  SQ_EnsureFileExists(SQ_FILE_VHF);
-  SQ_EnsureFileExists(SQ_FILE_UHF);
 }
 
 uint16_t Std(const uint16_t *data, size_t n) {

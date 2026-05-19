@@ -210,18 +210,6 @@ static inline void regcache_write(uint8_t reg, uint16_t data) {
     g_bk->reg30_cache = data;
     g_bk->reg30_cached = true;
     return;
-  /* case BK4819_REG_43:
-    g_bk->reg_cache_43 = data;
-    return;
-  case BK4819_REG_47:
-    g_bk->reg_cache_47 = data;
-    return;
-  case BK4819_REG_7E:
-    g_bk->reg_cache_7E = data;
-    return;
-  case 0x73:
-    g_bk->reg_cache_73 = data;
-    return; */
   default:
     return;
   }
@@ -231,14 +219,6 @@ static inline uint16_t regcache_read(uint8_t reg) {
   switch (reg) {
   case BK4819_REG_30:
     return g_bk->reg30_cached ? g_bk->reg30_cache : 0xFFFF;
-  /* case BK4819_REG_43:
-    return g_bk->reg_cache_43;
-  case BK4819_REG_47:
-    return g_bk->reg_cache_47;
-  case BK4819_REG_7E:
-    return g_bk->reg_cache_7E;
-  case 0x73:
-    return g_bk->reg_cache_73; */
   default:
     return 0xFFFF;
   }
@@ -461,7 +441,6 @@ void BK4819_SetAGC(bool fm, uint8_t gainIndex) {
   BK4819_WriteRegister(BK4819_REG_14, reg14);
 
   BK4819_WriteRegister(BK4819_REG_49, reg49);
-  // BK4819_WriteRegister(BK4819_REG_7B, 0x8420);
   BK4819_WriteRegister(BK4819_REG_7E, reg7E);
 }
 

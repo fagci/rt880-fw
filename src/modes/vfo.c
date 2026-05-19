@@ -67,10 +67,6 @@ static void initNumVals(void) {
 static void renderVfoLabel(uint8_t i, uint16_t sy, bool active) {
   Color clr = active ? C_GREEN : C_GRAY;
 
-  // FillRect(8, sy + VFO_LABEL_Y - 10, VFO_LABEL_W, 12, BG());
-  // PrintfT(8, sy + VFO_LABEL_Y, text_style(clr, C_BLACK, POS_L, F_SM), "%c",
-  //         'A' + i);
-
   FillRect(EXTRA_X, sy + VFO_LABEL_Y - 10, EXTRA_COL_W, 12, BG());
   PrintfT(LCD_WIDTH - 8, sy + VFO_LABEL_Y,
           text_style(clr, C_BLACK, POS_R, F_SM), "%3s",
@@ -79,7 +75,6 @@ static void renderVfoLabel(uint8_t i, uint16_t sy, bool active) {
 
 static void renderVfoStep(uint8_t i, uint16_t sy) {
   uint32_t step = StepFrequencyTable[vfos[i].step];
-  // FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
   PrintfT(LCD_WIDTH - 8, sy + VFO_STEP_Y,
           text_style(C_YELLOW, C_BLACK, POS_R, F_SM), "%3u.%02uk", step / 100,
           step % 100);
@@ -110,7 +105,6 @@ static void renderVfo(uint8_t i) {
     }
   } else {
     if (wasActive) {
-      //  FillRect(EXTRA_X, sy + VFO_STEP_Y - 10, EXTRA_COL_W, 12, BG());
     }
   }
 

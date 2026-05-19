@@ -118,19 +118,16 @@ void rt880_adc_init(void) {
 
   // Калибровка
   adc_calibration_init(ADC1);
-  while (adc_calibration_init_status_get(ADC1))
-    ;
+  for (uint32_t _t = 50000; adc_calibration_init_status_get(ADC1) && --_t; );
   adc_calibration_start(ADC1);
-  while (adc_calibration_status_get(ADC1))
-    ;
+  for (uint32_t _t = 50000; adc_calibration_status_get(ADC1) && --_t; );
 }
 
 uint16_t rt880_adc_read_battery(void) {
   // PA7 = ADC1_IN7 на AT32F423
   adc_ordinary_channel_set(ADC1, ADC_CHANNEL_7, 1, ADC_SAMPLETIME_47_5);
   adc_ordinary_software_trigger_enable(ADC1, TRUE);
-  while (!adc_flag_get(ADC1, ADC_OCCE_FLAG))
-    ;
+  for (uint32_t _t = 50000; !adc_flag_get(ADC1, ADC_OCCE_FLAG) && --_t; );
   return adc_ordinary_conversion_data_get(ADC1);
 }
 
@@ -146,8 +143,7 @@ uint16_t rt880_adc_read_keyin(void) {
   // Канал 12 = PC2 (уточни по datasheet AT32F423)
   adc_ordinary_channel_set(ADC1, ADC_CHANNEL_12, 1, ADC_SAMPLETIME_47_5);
   adc_ordinary_software_trigger_enable(ADC1, TRUE);
-  while (!adc_flag_get(ADC1, ADC_OCCE_FLAG))
-    ;
+  for (uint32_t _t = 50000; !adc_flag_get(ADC1, ADC_OCCE_FLAG) && --_t; );
   return adc_ordinary_conversion_data_get(ADC1);
 }
 

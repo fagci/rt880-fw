@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-bool gRedrawScreen;
 bool gInverted;
 
 #define FB_W ST7789_WIDTH

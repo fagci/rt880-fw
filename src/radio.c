@@ -50,81 +50,25 @@ uint8_t squelchLevel = 4;
 /* Состояние AFDAC и SI4732 — пишем только при изменении */
 static bool bk0DacOn = false;
 static bool siUnmuted = false;
+static bool afMuteOn = false; // PIN_AF_MUTE last state
 
-/* ── Band plan ──────────────────────────────────────────────── */
-
-#define F_KHZ(x) ((uint32_t)(x) * 100U)
-#define F_MHZ(x) ((uint32_t)(x) * 100000U)
-
-typedef struct {
-  uint32_t lo;
-  uint32_t hi;
-  ModulationType mod;
-} BandEntry_t;
-
-static const BandEntry_t BAND_PLAN[] = {
-    {F_KHZ(148), F_KHZ(283), MOD_AM},      // LW
-    {F_KHZ(530), F_KHZ(1700), MOD_AM},     // MW
-    {F_KHZ(1800), F_KHZ(2000), MOD_LSB},   // HAM 160m
-    {F_KHZ(2300), F_KHZ(2495), MOD_AM},    // SW 120m
-    {F_KHZ(3200), F_KHZ(3400), MOD_AM},    // SW 90m
-    {F_KHZ(3500), F_KHZ(3800), MOD_LSB},   // HAM 80m
-    {F_KHZ(3900), F_KHZ(4000), MOD_AM},    // SW 75m
-    {F_KHZ(4750), F_KHZ(5060), MOD_AM},    // SW 60m
-    {F_KHZ(5900), F_KHZ(6200), MOD_AM},    // SW 49m
-    {F_KHZ(7000), F_KHZ(7200), MOD_LSB},   // HAM 40m
-    {F_KHZ(7200), F_KHZ(7450), MOD_AM},    // SW 41m
-    {F_KHZ(9400), F_KHZ(9900), MOD_AM},    // SW 31m
-    {F_KHZ(11600), F_KHZ(12100), MOD_AM},  // SW 25m
-    {F_KHZ(13570), F_KHZ(13870), MOD_AM},  // SW 22m
-    {F_KHZ(14000), F_KHZ(14350), MOD_USB}, // HAM 20m
-    {F_KHZ(15100), F_KHZ(15800), MOD_AM},  // SW 19m
-    {F_KHZ(17480), F_KHZ(17900), MOD_AM},  // SW 16m
-    {F_KHZ(18068), F_KHZ(18168), MOD_USB}, // HAM 17m
-    {F_KHZ(18900), F_KHZ(19020), MOD_AM},  // SW 15m вещ.
-    {F_KHZ(21000), F_KHZ(21450), MOD_USB}, // HAM 15m
-    {F_KHZ(21450), F_KHZ(21850), MOD_AM},  // SW 13m
-    {F_KHZ(24890), F_KHZ(24990), MOD_USB}, // HAM 12m
-    {F_KHZ(25600), F_KHZ(26100), MOD_AM},  // SW 11m
-    {F_KHZ(28000), F_KHZ(29700), MOD_USB}, // HAM 10m
-    {F_MHZ(76), F_MHZ(108), MOD_WFM},      // FM вещалки
-    {F_MHZ(144), F_MHZ(148), MOD_FM},      // HAM 2m
-    {F_MHZ(430), F_MHZ(440), MOD_FM},      // HAM 70cm
-};
-
-ModulationType Radio_AutoModulation(uint32_t f) {
-  for (uint8_t i = 0; i < sizeof(BAND_PLAN) / sizeof(BAND_PLAN[0]); i++) {
-    if (f >= BAND_PLAN[i].lo && f < BAND_PLAN[i].hi)
-      return BAND_PLAN[i].mod;
+/* Применить mute-состояние. Пишет в железо только при изменении. */
+static SI47XX_MODE modToSiMode(ModulationType mod) {
+  switch (mod) {
+    case MOD_AM: return SI47XX_AM;
+    case MOD_LSB: return SI47XX_LSB;
+    case MOD_USB: return SI47XX_USB;
+    default: return SI47XX_FM;
   }
-  if (f < F_MHZ(30))
-    return MOD_AM;
-  if (f < F_MHZ(76))
-    return MOD_FM;
-  if (f < F_MHZ(108))
-    return MOD_WFM;
+}
+
+static ModulationType Radio_AutoModulation(uint32_t f) {
+  if (f >= 2000000 && f <= 30000000) return MOD_AM;
+  if (f > 30000000 && f < 80000000)  return MOD_FM;
+  if (f >= 88000000 && f <= 108000000) return MOD_WFM;
   return MOD_FM;
 }
 
-/* ── Helpers ────────────────────────────────────────────────── */
-
-static SI47XX_MODE modToSiMode(ModulationType mod) {
-  switch (mod) {
-  case MOD_USB:
-    return SI47XX_USB;
-  case MOD_LSB:
-    return SI47XX_LSB;
-  case MOD_FM:
-  case MOD_WFM:
-    return SI47XX_FM;
-  default:
-    return SI47XX_AM;
-  }
-}
-
-/* Применить mute-состояние. Пишет в железо только при изменении.
-   PIN_AF_MUTE выставляется один раз в Radio_Init и больше не трогается —
-   дёрганье этой линии каждый кадр даёт треск. */
 static void applyMute(bool sqOpen) {
   bool wantBk0 = (vfos[currentVfo].radio == RADIO_BK4819A) && sqOpen;
   if (wantBk0 != bk0DacOn) {
@@ -140,10 +84,9 @@ static void applyMute(bool sqOpen) {
     siUnmuted = wantSi;
   }
 
-  if (sqOpen) {
-    gpio_pin_set(&PIN_AF_MUTE);
-  } else {
-    gpio_pin_clr(&PIN_AF_MUTE);
+  if (sqOpen != afMuteOn) {
+    gpio_pin_write(&PIN_AF_MUTE, sqOpen);
+    afMuteOn = sqOpen;
   }
 }
 

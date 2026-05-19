@@ -228,7 +228,7 @@ void FINPUT_init() {
 void FINPUT_update() {
   if (millis() - lastUpdate >= 500) {
     blinkState = !blinkState;
-    gRedrawScreen = true;
+
     lastUpdate = millis();
   }
 }
@@ -238,7 +238,7 @@ void FINPUT_deinit(void) {}
 bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
   if (state == KEY_LONG_PRESSED && key == KEY_EXIT) {
     reset();
-    gRedrawScreen = true;
+
     return true;
   }
 
@@ -271,7 +271,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
           inputBuffer[cursorPos++] = '.';
           inputBuffer[cursorPos] = '\0';
           dotEntered = true;
-          gRedrawScreen = true;
+      
         }
 
         if (cursorPos < MAX_INPUT_LENGTH - 1) {
@@ -285,7 +285,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
           } else {
             gFInputValue2 = convertFromDisplayValue();
           }
-          gRedrawScreen = true;
+      
         }
       }
       return true;
@@ -296,7 +296,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
         inputBuffer[cursorPos++] = '.';
         inputBuffer[cursorPos] = '\0';
         dotEntered = true;
-        gRedrawScreen = true;
+    
         return true;
       }
       if (currentConfig.is_range && cursorPos > 0 &&
@@ -304,7 +304,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
         gFInputValue1 = convertFromDisplayValue();
         inputStage = INPUT_SECOND_VALUE;
         resetInputBuffer();
-        gRedrawScreen = true;
+    
         return true;
       }
       break;
@@ -315,7 +315,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
           inputStage = INPUT_FIRST_VALUE;
           resetInputBuffer();
           fillFromCurrentValue();
-          gRedrawScreen = true;
+      
           return true;
         }
         gFInputCallback = NULL;
@@ -336,7 +336,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
         } else {
           gFInputValue2 = convertFromDisplayValue();
         }
-        gRedrawScreen = true;
+    
       }
       return true;
 
@@ -349,7 +349,7 @@ bool FINPUT_key(KEY_Code_t key, Key_State_t state) {
         if (currentConfig.is_range) {
           inputStage = INPUT_SECOND_VALUE;
           resetInputBuffer();
-          gRedrawScreen = true;
+      
           return true;
         }
       }

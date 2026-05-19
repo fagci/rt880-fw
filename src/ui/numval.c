@@ -181,7 +181,7 @@ void NumVal_Update(NumVal_t *nv) {
   if (millis() - nv->lastBlink >= 500) {
     nv->blinkState = !nv->blinkState;
     nv->lastBlink = millis();
-    gRedrawScreen = true;
+
     nv->dirty = true;
   }
 }
@@ -254,7 +254,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
   // Длинный EXIT — отмена редактирования
   if (state == KEY_LONG_PRESSED && key == KEY_EXIT && nv->editing) {
     stopEdit(nv, false);
-    gRedrawScreen = true;
+
     nv->dirty = true;
     return true;
   }
@@ -317,7 +317,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
     if (nv->dotEntered)
       nv->fracDigits++;
 
-    gRedrawScreen = true;
+
     nv->dirty = true;
     return true;
   }
@@ -329,7 +329,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
       nv->buf[nv->cursor++] = '.';
       nv->buf[nv->cursor] = '\0';
       nv->dotEntered = true;
-      gRedrawScreen = true;
+  
       nv->dirty = true;
     }
     return true;
@@ -337,7 +337,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
   case KEY_EXIT:
     if (nv->cursor == 0) {
       stopEdit(nv, false);
-      gRedrawScreen = true;
+  
       nv->dirty = true;
       return true;
     }
@@ -348,7 +348,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
       nv->fracDigits--;
     }
     nv->buf[--nv->cursor] = '\0';
-    gRedrawScreen = true;
+
     nv->dirty = true;
     return true;
 
@@ -357,7 +357,7 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
   case KEY_PTT:
     if (nv->editing) {
       stopEdit(nv, true);
-      gRedrawScreen = true;
+  
       nv->dirty = true;
       return true;
     }

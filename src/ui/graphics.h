@@ -31,7 +31,6 @@
 typedef enum { POS_L, POS_C, POS_R } TextPos;
 typedef uint16_t Color;
 
-extern bool gRedrawScreen;
 extern bool gInverted;
 
 /* Текущий цвет фона (учитывает инверсию) */
