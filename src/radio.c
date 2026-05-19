@@ -121,7 +121,7 @@ void Radio_Init(void) {
   BK4819_SetAFC(0);
   BK4819_SetAGC(true, 1);
   BK4819_SetFilterBandwidth(vfos[0].bw);
-  BK4819_TuneTo(vfos[0].rxF, true);
+  Radio_TuneTo(vfos[0].rxF, true);
   BK4819_SetModulation(vfos[0].modulation);
   SQL sq = GetSql(squelchLevel);
   BK4819_SetupSquelch(sq, 1, 1);

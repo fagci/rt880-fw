@@ -348,6 +348,7 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_37, 0x1D0F);
 
   g_bk->gpioOutState = 0;
+  lastBand = BAND_UNSET;
   BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
 
   BK4819_SetupPowerAmplifier(0, 0);
@@ -385,7 +386,9 @@ int8_t BK4819_GetAgcIndex() {
 }
 
 void BK4819_DisableDTMF(void);
-static inline uint16_t _ReadRegCached(uint8_t reg) { return regcache_read(reg); }
+static inline uint16_t _ReadRegCached(uint8_t reg) {
+  return regcache_read(reg);
+}
 
 uint8_t BK4819_GetAttenuation() {
   uint8_t reg = BK4819_REG_13;
