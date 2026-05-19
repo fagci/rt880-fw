@@ -213,8 +213,7 @@ static bool key(Mode_t *self, key_id_t k, key_evt_type_t state) {
     case KEY_6:
       vfos[currentVfo].modulation =
           (vfos[currentVfo].modulation + 1) % (MOD_WFM + 1);
-      Radio_TuneStep(+1);
-      Radio_TuneStep(-1);
+      Radio_TuneTo(vfos[currentVfo].rxF, true);
       return true;
     case KEY_SIDE2:
       gInverted = !gInverted;
