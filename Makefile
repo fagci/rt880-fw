@@ -2,6 +2,7 @@ TARGET  := rt880-fw-by-fagci
 BUILD   := build
 
 PREFIX  := arm-none-eabi
+CXX     := $(PREFIX)-g++
 CC      := $(PREFIX)-gcc
 OBJCOPY := $(PREFIX)-objcopy
 SIZE    := $(PREFIX)-size
@@ -20,15 +21,16 @@ C_INCLUDES := \
   -Isrc/external/drivers/inc \
   -Isrc/external/printf
 
-CFLAGS  := $(MCUFLAGS) -ffunction-sections -fdata-sections -Wall -Wextra -Os -g3 \
+CXXFLAGS := $(MCUFLAGS) -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -Wall -Wextra -Os -g3 \
            -ffast-math \
            -Wno-enum-int-mismatch -Wno-aggressive-loop-optimizations \
            -Wno-unused-function -Wno-unused-but-set-variable \
            $(C_DEFS) $(C_INCLUDES)
 ASFLAGS := $(MCUFLAGS) -x assembler-with-cpp -g3 $(C_DEFS) $(C_INCLUDES)
 LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map --specs=nano.specs
-LIBS    := -lc
+LIBS    := -lc -lstdc++
 
+SRCS_CXX := $(shell find src -name '*.cpp' ! -path '*/external/*' | sort)
 SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_adc.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_crm.c' \
@@ -44,7 +46,8 @@ SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
 # Ищем оба варианта расширения: *.s и *.S
 SRCS_S := $(shell find src \( -name '*.s' -o -name '*.S' \) ! -path '*/external/*' | sort)
 
-OBJS := $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C)) \
+OBJS := $(patsubst %.cpp,$(BUILD)/%.o,$(SRCS_CXX)) \
+        $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C)) \
         $(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS_S))) \
         $(patsubst %.s,$(BUILD)/%.o,$(filter %.s,$(SRCS_S)))
 
@@ -52,7 +55,7 @@ all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).bin $(BUILD)/$(TARGET).hex
 
 $(BUILD)/$(TARGET).elf: $(OBJS)
 	@mkdir -p $(dir $@)
-	$(CC) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
+	$(CXX) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
 	$(SIZE) $@
 
 $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
@@ -61,9 +64,13 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	$(OBJCOPY) -O ihex $< $@
 
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) -c $(CXXFLAGS) $< -o $@
+
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) -c $(CFLAGS) $< -o $@
+	$(CC) -c $(CXXFLAGS) $< -o $@
 
 # Оба правила нужны: GNU make не делает case-insensitive match
 $(BUILD)/%.o: %.S

@@ -1,4 +1,4 @@
 #pragma once
 #include "mode.h"
 
-extern Mode_t MODE_RADIO;
+extern Mode &MODE_RADIO;

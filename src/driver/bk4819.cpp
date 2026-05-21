@@ -24,7 +24,7 @@
 #define BK2_SCK_PIN GPIO_PINS_8
 #define BK2_SCK_PORT GPIOC
 
-static const uint16_t MOD_TYPE_REG47_VALUES[] = {
+static const BK4819_AF_Type_t MOD_TYPE_REG47_VALUES[] = {
     [MOD_FM] = BK4819_AF_FM,      [MOD_AM] = BK4819_AF_FM,
     [MOD_LSB] = BK4819_AF_USB,    [MOD_USB] = BK4819_AF_USB,
     [MOD_BYP] = BK4819_AF_BYPASS, [MOD_RAW] = BK4819_AF_RAW,
@@ -54,7 +54,7 @@ static BK4819_Chip g_chips[2] = {
             .selectedFilter = 255,
             .freqCacheLow = 0,
             .freqCacheHigh = 0,
-            .lastModulation = 255,
+            .lastModulation = MOD_WFM,
             .reg30_cached = false,
             .reg30_cache = 0,
         },
@@ -64,7 +64,7 @@ static BK4819_Chip g_chips[2] = {
             .selectedFilter = 255,
             .freqCacheLow = 0,
             .freqCacheHigh = 0,
-            .lastModulation = 255,
+            .lastModulation = MOD_WFM,
             .reg30_cached = false,
             .reg30_cache = 0,
         },
@@ -371,7 +371,7 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_7D, 0xE940 | 10); // mic
   BK4819_WriteRegister(0x74, 0xAF1F);
 
-  BK4819_DisableDTMF();
+  BK4819_WriteRegister(BK4819_REG_24, 0);
 
   BK4819_WriteRegister(0x40, (BK4819_ReadRegister(0x40) & ~(0x7FF)) |
                                  (50 * 10) | (1 << 12));

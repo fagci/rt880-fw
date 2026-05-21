@@ -168,10 +168,10 @@ void board_init(void) {
   gpio_pin_clr(&PIN_RX_TS);
   gpio_pin_clr(&PIN_FM_POWER);
 
-  gpio_pin_init_input(&PIN_KEY_M1, true);
-  gpio_pin_init_input(&PIN_KEY_M2, true);
-  gpio_pin_init_input(&PIN_KEY_M3, true);
-  gpio_pin_init_input(&PIN_KEY_M4, true);
+  gpio_pin_init_input(&PIN_KEY_M1, GPIO_PULL_UP);
+  gpio_pin_init_input(&PIN_KEY_M2, GPIO_PULL_UP);
+  gpio_pin_init_input(&PIN_KEY_M3, GPIO_PULL_UP);
+  gpio_pin_init_input(&PIN_KEY_M4, GPIO_PULL_UP);
   gpio_pin_init_output(&PIN_KEY_O1);
   gpio_pin_init_output(&PIN_KEY_O2);
   gpio_pin_init_output(&PIN_KEY_O3);
@@ -181,9 +181,24 @@ void board_init(void) {
   gpio_pin_set(&PIN_KEY_O3);
   gpio_pin_set(&PIN_KEY_O4);
 
+  gpio_pin_set(&PIN_LED_RED);
+
+  // Test point 1: after GPIO init
+  gpio_pin_clr(&PIN_LED_GREEN);
+  gpio_pin_set(&PIN_LED_GREEN);
+
   rt880_adc_init();
 
+  // Test point 2: after ADC
+  gpio_pin_clr(&PIN_LED_GREEN);
+  gpio_pin_set(&PIN_LED_GREEN);
+
   st7789_init();
+
+  // Test point 3: after LCD init
+  gpio_pin_clr(&PIN_LED_GREEN);
+  gpio_pin_set(&PIN_LED_GREEN);
+
   UI_ClearScreen(C_BLACK);
 
   st7789_backlight_on();

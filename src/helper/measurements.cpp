@@ -2,6 +2,22 @@
 #include "math_util.h"
 #include <stdint.h>
 
+extern uint32_t _sheap;
+extern uint32_t _eheap;
+static uint32_t heap_ptr = 0;
+
+extern "C" void *_sbrk(ptrdiff_t incr) {
+  if (heap_ptr == 0) {
+    heap_ptr = reinterpret_cast<uint32_t>(&_sheap);
+  }
+  if (incr > 0 && heap_ptr + incr > reinterpret_cast<uint32_t>(&_eheap)) {
+    return reinterpret_cast<void *>(-1);
+  }
+  void *prev = reinterpret_cast<void *>(heap_ptr);
+  heap_ptr += incr;
+  return prev;
+}
+
 long long Clamp(long long v, long long min, long long max) {
   return v <= min ? min : (v >= max ? max : v);
 }

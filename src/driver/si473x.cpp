@@ -92,6 +92,7 @@ static void i2c_stop(void) {
 
 static bool i2c_write_byte(uint8_t data) {
   sda_output();
+  uint32_t timeout = 1000;
   for (int i = 0; i < 8; i++) {
     if (data & 0x80)
       PIN_SET(PORT_SDA, PIN_SDA);
@@ -102,26 +103,38 @@ static bool i2c_write_byte(uint8_t data) {
     i2c_delay();
     PIN_CLR(PORT_SCL, PIN_SCL);
     data <<= 1;
+    if (--timeout == 0) {
+      i2c_stop(); // Emergency recovery
+      return false;
+    }
   }
   sda_input();
+  PIN_SET(PORT_SDA, PIN_SDA); // release SDA for ACK
   PIN_SET(PORT_SCL, PIN_SCL);
   i2c_delay();
-  bool ack = (PIN_GET(PORT_SDA, PIN_SDA) == 0);
+  uint32_t ack_timeout = 1000;
+  while (PIN_GET(PORT_SDA, PIN_SDA) != 0 && --ack_timeout) // Wait for ACK (SDA pulled low by slave)
+    ;
   PIN_CLR(PORT_SCL, PIN_SCL);
   i2c_delay();
-  return ack;
+  return ack_timeout > 0; // ACK received if timeout not hit
 }
 
 static uint8_t i2c_read_byte(bool send_ack) {
   sda_input();
   uint8_t data = 0;
+  uint32_t timeout = 1000;
   for (int i = 0; i < 8; i++) {
     data <<= 1;
     PIN_SET(PORT_SCL, PIN_SCL);
-    i2c_delay();
+    uint32_t t = 100;
+    while (!PIN_GET(PORT_SCL, PIN_SCL) && --t)
+      ; // wait for SCL rise
     if (PIN_GET(PORT_SDA, PIN_SDA))
       data |= 1;
     PIN_CLR(PORT_SCL, PIN_SCL);
+    if (--timeout == 0)
+      return 0; // timeout
     i2c_delay();
   }
   /* ACK/NACK */
@@ -306,17 +319,21 @@ void RSQ_GET(void) {
 
 /* ─── Power up/down ────────────────────────────────────────────── */
 void SI47XX_PowerUp(void) {
+  /* If chip is not responding, skip power up to avoid busy-wait */
+  if (!SI47XX_IsAlive()) {
+    Log("SI47XX: not responding, skipping power up");
+    return;
+  }
+
   /* FIX #5: RST HIGH (деассертировать сброс) → фиксированная задержка
-             → только потом POWER_UP, и уже после — waitToSend()        */
+               → только потом POWER_UP, и уже после — waitToSend        */
   PIN_SET(PORT_RST, PIN_RST);
   delay_ms(10); /* минимум 100 мкс после RST по даташиту, берём с запасом */
 
   uint8_t mode_arg = (si4732mode == SI47XX_AM) ? (FLG_XOSCEN | FUNC_AM)
-                                               : (FLG_XOSCEN | FUNC_FM);
+                                                : (FLG_XOSCEN | FUNC_FM);
   uint8_t cmd[3] = {CMD_POWER_UP, mode_arg, OUT_ANALOG};
   SI47XX_WriteBuffer(cmd, 3); /* НЕ waitToSend перед первым POWER_UP */
-  delay_ms(500);
-
   isSi4732On = true;
   SI47XX_SetVolume(63);
 
@@ -330,6 +347,8 @@ void SI47XX_PowerUp(void) {
   }
 
   SI47XX_SetFreq(siCurrentFreq);
+
+  gpio_pin_clr(&PIN_LED_GREEN); // Test: SI47XX_PowerUp done
 }
 
 void SI47XX_PatchPowerUp(void) {
@@ -345,7 +364,7 @@ void SI47XX_PatchPowerUp(void) {
 
   SI47XX_downloadPatch();
 
-  SI47XX_SsbSetup(2, 1, 0, 1, 0, 1);
+  SI47XX_SsbSetup(SI47XX_SSB_BW_3_kHz, 1, 0, 1, 0, 1);
   setAvcAmMaxGain(42);
   SI47XX_SetVolume(63);
   SI47XX_SetFreq(siCurrentFreq);
@@ -508,6 +527,7 @@ void SI47XX_SetAMFrontendAGC(uint8_t minGainIdx, uint8_t attnBackup) {
 }
 
 bool SI47XX_IsAlive(void) {
+  // Quick I2C check with timeout
   i2c_start();
   bool ack = i2c_write_byte(I2C_ADDR << 1); // 0x44, W
   i2c_stop();
