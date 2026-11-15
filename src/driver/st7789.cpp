@@ -373,5 +373,9 @@ void st7789_scroll_reset(void) {
   // Выход из режима скролла
   st7789_write_cmd(0x13); // NORON
 
+  // Сбросить смещение скролла, иначе весь экран остаётся сдвинутым
+  st7789_write_cmd(0x37); // VSCRSADD
+  st7789_write_data16(0);
+
   st7789_cs_high();
 }

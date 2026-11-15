@@ -15,7 +15,7 @@
  *
  * Клавиши: 0-9 — ввод границы (фокус — '#' короткий), MENU — захватить
  * частоту в VFO и выйти, EXIT — выход, '#' длинный — пауза/продолжить
- * (в паузе UP/DOWN — ручная перестройка), '*' — водопад вкл/выкл,
+ * (в паузе UP/DOWN — ручная перестройка), '*' — ввод границы, SIDE1 — водопад вкл/выкл,
  * UP/DOWN — выдержка на частоте (скорость сканирования).
  */
 #include "scanner.h"
@@ -78,6 +78,8 @@ static uint32_t lastWfRender;
 
 static void onRangeChanged() {
   WF_Reset();
+  /* чистим всё под статусом: мусор прошлого экрана и старый водопад */
+  FillRect(0, STATUS_H, LCD_WIDTH, LCD_HEIGHT - STATUS_H, C_BLACK);
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   curF = range.start;
@@ -207,11 +209,13 @@ public:
     BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
     dacOn = false;
     gpio_pin_write(&PIN_AF_MUTE, false);
-    FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
   }
 
   void update() override {
-    if (scanning)
+    NumVal_Update(&numVal[0]);
+    NumVal_Update(&numVal[1]);
+    bool editing = NumVal_IsEditing(&numVal[0]) || NumVal_IsEditing(&numVal[1]);
+    if (scanning && !editing)
       scanStep();
 
     uint32_t now = millis();
@@ -263,12 +267,6 @@ public:
         setAudio(!scanning); /* в паузе слышно текущую частоту */
         return true;
       }
-      if (k == KEY_STAR) { /* водопад вкл/выкл */
-        waterfall = !waterfall;
-        if (!waterfall)
-          FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
-        return true;
-      }
       return false;
     }
 
@@ -287,6 +285,13 @@ public:
     case KEY_HASH:
       if (!NumVal_IsEditing(&numVal[endFSel ? 1 : 0]))
         endFSel = !endFSel;
+      return true;
+    case KEY_SIDE1: /* водопад вкл/выкл */
+      waterfall = !waterfall;
+      if (!waterfall) {
+        WF_Reset();
+        FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+      }
       return true;
     case KEY_STAR:
       NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);

@@ -302,7 +302,8 @@ void WF_Render(uint8_t wy, bool wfDown) {
 
   // Новая строка = wfScroll, она должна быть снизу
   // Верхняя видимая = следующая строка после неё
-  uint16_t vsp = wy + (wfScroll + 1) % wh;
+  // wfDown: новая строка сверху (индексы убывают); иначе снизу
+  uint16_t vsp = wfDown ? (wy + wfScroll) : (wy + (wfScroll + 1) % wh);
   st7789_set_vscroll_start(vsp);
 }
 
@@ -310,9 +311,7 @@ void WF_Reset(void) {
   wfScrollInited = false;
   wfScroll = 0;
   // Выключить scroll до следующего WF_InitScroll
-  st7789_cs_low();
-  st7789_write_cmd(0x13); // NORON
-  st7789_cs_high();
+  st7789_scroll_reset();
 }
 
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh) {
