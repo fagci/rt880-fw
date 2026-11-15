@@ -4,6 +4,7 @@
 #include "../ui/graphics.h"
 #include "../helper/unit_fmt.h"
 #include "gfxfont.h"
+#include "lvgl.h"
 #include <string.h>
 
 // Парсит buf до cursor → нативное значение
@@ -103,6 +104,11 @@ void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, const GFXfont *font,
   memset(nv->buf, 0, NUMVAL_BUF);
 }
 
+void NumVal_BindNative(NumVal_t *nv, void *lv_label) {
+  nv->lvLabel = lv_label;
+  nv->dirty = true;
+}
+
 void NumVal_Update(NumVal_t *nv) {
   if (!nv->editing)
     return;
@@ -129,31 +135,29 @@ void NumVal_Render(NumVal_t *nv) {
     (void)str;
   }
 
+  /* Нативный путь: только обновляем текст лейбла. Выравнивание и
+     затирание — внутри LVGL (фиксированная ширина + text align). */
+  if (nv->lvLabel) {
+    lv_label_set_text(static_cast<lv_obj_t *>(nv->lvLabel), str);
+    return;
+  }
+
   uint8_t len = strlen(str);
-  uint8_t clearLen = len > nv->prevLen ? len : nv->prevLen;
 
-  /* Для правого выравнивания с фиксированным форматом (MHz, 3 знака)
-     всегда очищаем полную ширину 9 символов, чтобы короткие значения
-     не оставляли хвостов слева. */
-  if (nv->pos == POS_R && nv->unit == UNIT_MHZ) {
-    clearLen = 9;
-  }
+  /* Печатаем от фиксированного правого края (nv->x, POS_R): при вводе
+     лейбл двигается, а LVGL сам затирает освободившееся место.
+     Пустой буфер — пробелом: ужимание лейбла инвалидирует старый bbox. */
+  PrintfEx(nv->x, nv->y, POS_R, C_WHITE, C_BLACK, nv->font, "%s",
+           len ? str : " ");
 
-  // Затираем предыдущую область с учётом выравнивания
-  uint16_t clearX = renderX(nv, clearLen);
-  FillRect(clearX, nv->y - nv->charH + 1, clearLen * nv->charW + 1, nv->charH,
-           BG());
-
-  if (len > 0) {
-    uint16_t drawX = renderX(nv, len);
-    PrintfEx(drawX, nv->y, POS_L, C_WHITE, C_BLACK, nv->font, "%s", str);
-  }
-
-  // Курсор — вертикальная черта после последнего введённого символа
-  if (nv->editing && nv->blinkState) {
-    uint16_t baseX = renderX(nv, nv->cursor);
-    uint16_t cx = baseX + nv->cursor * nv->charW;
-    FillRect(cx, nv->y - nv->charH + 1, 1, nv->charH, C_YELLOW);
+  /* Курсор — вертикальная черта после последнего введённого символа.
+     Позиция считается от того же правого края (исходный код рисовал
+     его всегда у края — baseX + cursor*charW сокращалось до nv->x). */
+  if (nv->editing) {
+    uint16_t cx = (nv->pos == POS_R) ? nv->x - nv->cursor * nv->charW
+                                     : nv->x + nv->cursor * nv->charW;
+    FillRect(cx, nv->y - nv->charH + 1, 1, nv->charH,
+             nv->blinkState ? C_YELLOW : BG());
   }
 
   nv->prevLen = len;
@@ -163,19 +167,8 @@ void NumVal_Render(NumVal_t *nv) {
     /* value в 10 Гц. fracPart = value % 100000 (в единицах 0.00001 МГц).
      * Первые 3 знака: fracPart / 100, доп. 2 знака: fracPart % 100 */
     uint8_t extra = (nv->value % 100000) % 100;
-
-    if (extra != nv->prevExtra) {
-      uint8_t ew = 2 * nv->extraCharW + 1;
-      /* Позиция: сразу справа от якоря основной частоты (nv->x),
-       * с отступом 2px. Y — середина основной строки. */
-      uint16_t ex = nv->x + 2;
-      uint16_t ey = nv->y - nv->extraCharH;
-
-      FillRect(ex, ey, ew, nv->extraCharH, BG());
-      PrintfEx(ex, ey + nv->extraCharH, POS_L, C_GRAY, BG(), nv->extraFont,
-               "%02d", extra);
-      nv->prevExtra = extra;
-    }
+    PrintfEx(nv->x + 2, nv->y, POS_L, C_GRAY, BG(), nv->extraFont, "%02d",
+             extra);
   }
 }
 

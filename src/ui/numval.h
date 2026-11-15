@@ -44,11 +44,19 @@ typedef struct {
 
   bool dirty;
 
+  /* Нативный рендер: если не NULL, NumVal_Render обновляет этот LVGL-лейбл
+     (фиксированной ширины, выравнивание текста — внутри LVGL) вместо
+     PrintfEx/FillRect. Курсор и позиционирование — забота владельца. */
+  void *lvLabel;
+
   /* Доп. точность: 2 маленьких знака справа */
   bool extraPrecision;
   const GFXfont *extraFont;
   uint8_t extraCharW, extraCharH;
 } NumVal_t;
+
+// Привязать LVGL-лейбл для нативного отображения (NULL — отвязать)
+void NumVal_BindNative(NumVal_t *nv, void *lv_label);
 
 // multiplier и fracDigits выводятся из unit
 // pos — выравнивание: POS_L, POS_C, POS_R

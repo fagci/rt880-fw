@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define ST7789_WIDTH 240
 #define ST7789_HEIGHT 320
 
@@ -46,5 +50,9 @@ void st7789_write_pixels_dma(const uint16_t *pixels, uint32_t count);
 void st7789_set_vscroll_area(uint16_t tfa, uint16_t vsa, uint16_t bfa);
 void st7789_set_vscroll_start(uint16_t vsp);
 void st7789_scroll_reset(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

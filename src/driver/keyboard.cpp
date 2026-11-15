@@ -36,9 +36,13 @@ static const key_id_t KEY_MAP[16] = {
 };
 
 /* ── Таблица прямых кнопок ──────────────────────────────────────────── */
-/* Индексы 16..19 — продолжение единого пространства кодов */
+/* Индексы 16.. — продолжение единого пространства кодов.
+ * ВНИМАНИЕ: SIDE1/SIDE2/ALARM — НЕ цифровые кнопки! Они читаются по ADC
+ * (резистивная лестница на линии KEY/VC-ADIN, см. ADC_KEYS ниже).
+ * PC0/PC1 — линии SI4732 (SCL/SDA), PC2 — сама аналоговая линия
+ * лестницы: цифровой опрос этих пинов давал фантомные нажатия. */
 #define DIRECT_BASE 16
-#define DIRECT_COUNT 4
+#define DIRECT_COUNT 1
 #define ADC_BASE DIRECT_BASE + DIRECT_COUNT
 #define ADC_COUNT 3
 
@@ -48,10 +52,7 @@ typedef struct {
 } direct_key_def_t;
 
 static const direct_key_def_t DIRECT[DIRECT_COUNT] = {
-    {&PIN_KEY_PTT, KEY_PTT},     /* PB6, idx=16 */
-    {&PIN_KEY_SIDE1, KEY_SIDE1}, /* PC0, idx=17 */
-    {&PIN_KEY_SIDE2, KEY_SIDE2}, /* PC1, idx=18 */
-    {&PIN_KEY_ALARM, KEY_ALARM}, /* PC2, idx=19 */
+    {&PIN_KEY_PTT, KEY_PTT}, /* PB6, idx=16 */
 };
 
 /* ── Общее состояние (матрица + прямые + ADC как единый массив) ────── */

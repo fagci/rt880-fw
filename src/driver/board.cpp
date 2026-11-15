@@ -55,6 +55,7 @@ static void dwt_init(void) {
 
 void SysTick_Handler(void) {
   tick_ms++;
+  lv_tick_inc(1);
   if ((tick_ms % KEY_SCAN_PERIOD_MS) == 0)
     keyboard_scan_tick();
 }

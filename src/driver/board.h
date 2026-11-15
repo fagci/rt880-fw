@@ -63,6 +63,7 @@ extern "C" {
 #endif
 
 void SysTick_Handler(void); /* определён в board.cpp, вектор из startup_at32f423.s */
+void lv_tick_inc(uint32_t tick_period); /* LVGL, из lv_hal_tick.c */
 
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);

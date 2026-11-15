@@ -3,6 +3,7 @@
 #include "driver/bk4819.h"
 #include "driver/board.h"
 #include "driver/gpio.h"
+#include "driver/si473x.h"
 #include "helper/log.h"
 #include "helper/measurements.h"
 #include "ui/graphics.h"
@@ -29,8 +30,15 @@ const char *const STEP_NAMES[STEP_COUNT] = {
 
 uint8_t squelchLevel = 4;
 
-static bool bk0DacOn = false;
-static bool afMuteOn = false; // PIN_AF_MUTE last state
+static bool bkDacOn[2] = {false, false};
+static bool siMuted = true; /* SI стартует замьюченным (громкость 0) */
+static bool afMuteOn = false;
+static bool s_pendingApply; /* SwitchToVfo отложил тяжёлое применение */
+
+/* Как часто BK «бегает» по закреплённым VFO и сколько сидит на каждом */
+#define MON_DWELL_MS 120
+#define MON_SETTLE_MS 8
+static uint32_t s_lastMon;
 
 static ModulationType Radio_AutoModulation(uint32_t f) {
   if (f >= 150000 && f < 2000000) return MOD_AM;
@@ -40,31 +48,165 @@ static ModulationType Radio_AutoModulation(uint32_t f) {
   return MOD_FM;
 }
 
-static void applyMute(bool sqOpen) {
-  bool wantBk0 = (vfos[currentVfo].radio == RADIO_BK4819A) && sqOpen;
-  if (wantBk0 != bk0DacOn) {
-    BK4819_ToggleAFDAC(wantBk0);
-    bk0DacOn = wantBk0;
-  }
+/* ── Выбор приёмника ───────────────────────────────────────────
+ * f — в единицах 10 Гц.
+ * SI4732: AM/SSB ниже 30 МГц. После первой загрузки SSB-патча чип
+ * живёт в патч-режиме постоянно (патч покрывает AM+SSB) — переходы
+ * между ними без re-power и без повторной 10-секундной заливки.
+ * WFM 74–108 — на BK4819: мгновенное переключение, а SI для WFM
+ * требовал бы выхода из патч-режима (= перезаливка патча каждый раз).
+ * BK4819B: HF-тракт ниже 30 МГц (всё, что не взял SI).
+ * BK4819A: всё остальное (V/UHF + FM-вещание). */
+Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
+  if (f < 3000000 && (mod == MOD_AM || mod == MOD_LSB || mod == MOD_USB))
+    return RADIO_SI4732;
+  if (f < 3000000)
+    return RADIO_BK4819B;
+  return RADIO_BK4819A;
+}
 
-  if (sqOpen != afMuteOn) {
-    gpio_pin_write(&PIN_AF_MUTE, sqOpen);
-    afMuteOn = sqOpen;
+static SI47XX_MODE modToSi(uint8_t mod) {
+  switch (mod) {
+    case MOD_AM:  return SI47XX_AM;
+    case MOD_LSB: return SI47XX_LSB;
+    case MOD_USB: return SI47XX_USB;
+    default:      return SI47XX_FM;
   }
 }
 
+/* Включает SI4732 при первом использовании; держит его в патч-режиме
+   (патч покрывает AM+SSB): повторной заливки между AM↔SSB нет.
+   Переходы внутри патч-режима — только смена глобалки si4732mode
+   (драйвер сам кладёт её в аргументы команд). Re-power только если
+   чип не в патче, а нужен SSB. При отсутствии чипа — откат на BK. */
+/* SI4732: питание и нужный continuous-патч через SI47XX_Acquire.
+ * Переходы AM↔SSB внутри патча — мгновенные; смена патча — re-power
+ * (~1-2 с). При отсутствии чипа — откат VFO на BK. */
+static void siEnsure(VFO *v) {
+  SI47XX_MODE want = modToSi(v->modulation);
+  if (!SI47XX_Acquire(want)) {
+    Log("SI4732: not responding, fallback to BK");
+    v->radio = Radio_PickDevice(v->rxF, MOD_FM);
+  }
+}
+
+/* ── Аудиотракт ────────────────────────────────────────────────
+ * BK AF DAC — по кристаллу активного VFO (звук только активного).
+ * SI4732 суммируется в тракт аналогово: слышен, когда активный VFO
+   на нём (громкость 63), иначе глушим SetVolume(0) — чип живым.
+ * AF_MUTE — общий гейт усилителя: для SI всегда открыт (шумодава
+   у SI пока нет), для BK — по squelch. */
+static void applyMute(bool sqOpen) {
+  Radio ar = vfos[currentVfo].radio;
+  bool activeSi = (ar == RADIO_SI4732);
+
+  if (activeSi == siMuted) {
+    SI47XX_SetVolume(activeSi ? 63 : 0);
+    siMuted = !activeSi;
+  }
+
+  uint8_t chip = (ar == RADIO_BK4819B) ? 1 : 0;
+  bool wantBk = !activeSi && sqOpen;
+  for (uint8_t c = 0; c < 2; c++) {
+    bool want = (c == chip) && wantBk;
+    if (want != bkDacOn[c]) {
+      BK4819_SelectChip(c);
+      BK4819_ToggleAFDAC(want);
+      bkDacOn[c] = want;
+    }
+  }
+
+  bool unmute = activeSi ? true : sqOpen;
+  if (unmute != afMuteOn) {
+    gpio_pin_write(&PIN_AF_MUTE, unmute);
+    afMuteOn = unmute;
+  }
+}
+
+static uint8_t vfoChip(uint8_t idx) {
+  return (vfos[idx].radio == RADIO_BK4819B) ? 1 : 0;
+}
+
 /* precise=true: полное применение (смена VFO, ручной ввод).
-   precise=false: только частота (сканирование) — пропускаем SetModulation
-                  и applyMute, чтобы не тормозить. */
+   precise=false: только частота (сканирование, мониторинг). */
 static void applyVfo(bool precise) {
   VFO *v = &vfos[currentVfo];
-  uint32_t f = v->rxF;
+  v->radio = Radio_PickDevice(v->rxF, v->modulation);
 
-  BK4819_SelectFilterByFrequency(f);
-  BK4819_TuneTo(f, precise);
+  if (v->radio == RADIO_SI4732) {
+    siEnsure(v); /* может откатить v->radio на BK */
+    if (v->radio == RADIO_SI4732) {
+      SI47XX_TuneTo(v->rxF); /* единицы 10 Гц — как и раньше */
+      SI47XX_SetAutomaticGainControl(1, 0);
+    }
+  }
+
+  if (v->radio != RADIO_SI4732) {
+    uint8_t chip = vfoChip(currentVfo);
+    BK4819_SelectChip(chip);
+    BK4819_SelectFilterByFrequency(v->rxF);
+    BK4819_TuneTo(v->rxF, precise);
+    if (precise) {
+      /* WFM на BK — широкополосный FM (BW до 18k вместо 12k) */
+      ModulationType m = (v->modulation == MOD_WFM) ? MOD_FM
+                         : static_cast<ModulationType>(v->modulation);
+      BK4819_SetModulation(m);
+      BK4819_SetFilterBandwidth(
+          static_cast<BK4819_FilterBandwidth_t>(v->bw));
+      BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
+      audio_path_set(chip);
+    }
+  }
 
   if (precise)
     applyMute(true);
+}
+
+/* ── Мониторинг: один BK крутится по закреплённым VFO ──────────
+ * Кандидаты — VFO с флагом monitor, НЕ активные, на BK и на кристалле,
+ * отличном от активного (один кристалл = один частотный тракт).
+ * По открывшемуся шумодаву монитор становится активным VFO. */
+static void monitorTick(void) {
+  uint32_t now = millis();
+  if (now - s_lastMon < MON_DWELL_MS)
+    return;
+  s_lastMon = now;
+
+  Radio ar = vfos[currentVfo].radio;
+  uint8_t cand[DEVICE_VFO_COUNT];
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
+    if (i == currentVfo || !vfos[i].monitor)
+      continue;
+    vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
+    if (vfos[i].radio == RADIO_SI4732 || vfos[i].radio == ar)
+      continue;
+    cand[n++] = i;
+  }
+  if (!n)
+    return;
+
+  static uint8_t slot;
+  slot = (slot + 1) % n;
+  uint8_t i = cand[slot];
+  VFO *m = &vfos[i];
+  uint8_t chip = vfoChip(i);
+
+  BK4819_SelectChip(chip);
+  BK4819_TuneTo(m->rxF, false);
+  BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
+  delay_ms(MON_SETTLE_MS);
+  bool open = BK4819_IsSquelchOpen();
+  if (bkDacOn[chip]) { /* монитор не должен звучать */
+    BK4819_ToggleAFDAC(false);
+    bkDacOn[chip] = false;
+  }
+
+  if (open) {
+    Log("mon: vfo %u sq open", i);
+    currentVfo = i;
+    applyVfo(true);
+  }
 }
 
 /* ── Public API ─────────────────────────────────────────────── */
@@ -72,50 +214,63 @@ static void applyVfo(bool precise) {
 void Radio_Init(void) {
   memset(vfos, 0, sizeof(vfos));
 
-  vfos[0].radio = RADIO_BK4819A;
-  vfos[0].rxF = 17230000;
+  /* Дефолты без SI на старте: SSB-патч грузится лениво (один раз за
+     включение) при первом переходе на КВ, чтобы старт был мгновенным */
+  vfos[0].rxF = 14550000; /* 145.5 МГц FM → BK A */
   vfos[0].step = STEP_25_0kHz;
   vfos[0].modulation = MOD_FM;
-  vfos[0].bw = BK4819_FILTER_BW_12k;
-  vfos[1].radio = RADIO_BK4819A;
-  vfos[1].rxF = 43400000;
-  vfos[1].step = STEP_25_0kHz;
-  vfos[1].modulation = MOD_FM;
-  vfos[1].bw = BK4819_FILTER_BW_12k;
-  // RT-880 doesn't have SI4732 - use BK4819A for VFO2 as well
-  vfos[2].radio = RADIO_BK4819A;
-  vfos[2].rxF = 10480000;
+  vfos[1].rxF = 14200000; /* 14.2 МГц USB → SI4732 (лениво) */
+  vfos[1].step = STEP_1_0kHz;
+  vfos[1].modulation = MOD_USB;
+  vfos[2].rxF = 10480000; /* 104.8 МГц WFM → BK A */
   vfos[2].step = STEP_100_0kHz;
-  vfos[2].modulation = MOD_FM;
-  vfos[2].bw = BK4819_FILTER_BW_12k;
+  vfos[2].modulation = MOD_WFM;
+  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
+    vfos[i].bw = BK4819_FILTER_BW_12k;
+    vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
+  }
 
-  BK4819_SelectChip(0);
-  BK4819_Init();
-  BK4819_RX_TurnOn();
-  BK4819_SetAFC(0);
-  BK4819_SetAGC(true, 1);
-  BK4819_SetFilterBandwidth(static_cast<BK4819_FilterBandwidth_t>(vfos[0].bw));
-  Radio_TuneTo(vfos[0].rxF, true);
-  BK4819_SetModulation(static_cast<ModulationType>(vfos[0].modulation));
-  SQL sq = GetSql(squelchLevel);
-  BK4819_SetupSquelch(sq, 1, 1);
+  for (uint8_t c = 0; c < 2; c++) {
+    BK4819_SelectChip(c);
+    BK4819_Init();
+    BK4819_RX_TurnOn();
+    BK4819_SetAFC(0);
+    BK4819_SetAGC(true, 1);
+  }
 
-/* Начальное состояние: активен VFO 0 (BK4819A) */
-  bk0DacOn = false;
-  applyMute(true);
+  /* RST и бит-банг I2C SI4732 — без этого чип в ресете, IsAlive = false */
+  SI47XX_Init();
+
+  currentVfo = 0;
+  s_pendingApply = false;
+  siMuted = true; /* SI ещё не включён: при включении включим громкость */
+  bkDacOn[0] = bkDacOn[1] = false;
+  applyVfo(true);
 }
 
-/* Вызывается каждый update-цикл. Опрашивает шумодав и обновляет AFDAC
-     только если состояние изменилось — SPI не пишется вхолостую. */
+/* Каждый update-цикл: шумодав активного VFO + мониторинг. */
 void Radio_Update(void) {
-  bool sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+  Radio ar = vfos[currentVfo].radio;
+  bool sqOpen = true;
+  if (ar != RADIO_SI4732) {
+    BK4819_SelectChip(vfoChip(currentVfo));
+    sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+  }
   applyMute(sqOpen);
+
+  monitorTick();
+
+  /* monitorTick мог переключить кристаллы — вернём контекст активного */
+  if (vfos[currentVfo].radio != RADIO_SI4732)
+    BK4819_SelectChip(vfoChip(currentVfo));
 }
 
 void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;
-  SQL sq = GetSql(level);
-  BK4819_SetupSquelch(sq, 1, 1);
+  for (uint8_t c = 0; c < 2; c++) {
+    BK4819_SelectChip(c);
+    BK4819_SetupSquelch(GetSql(level), 1, 1);
+  }
 }
 
 void Radio_TuneTo(uint32_t f, bool precise) {
@@ -134,9 +289,30 @@ void Radio_TuneStep(int8_t dir) {
   Radio_TuneTo(vfos[currentVfo].rxF + step * dir, false);
 }
 
-void Radio_NextVfo(void) {
-  currentVfo = (currentVfo + 1) % DEVICE_VFO_COUNT;
-  applyVfo(true);
+void Radio_NextVfo(void) { Radio_SwitchToVfo(currentVfo + 1); }
+
+void Radio_SwitchToVfo(uint8_t idx) {
+  currentVfo = idx % DEVICE_VFO_COUNT;
+  /* Тяжёлое применение (инициализация кристалла, SSB-патч SI4732)
+     откладываем — экран успеет перерисовать новый активный ряд,
+     радио догоняет через Radio_ApplyPending. */
+  s_pendingApply = true;
+}
+
+/* Вызывать ПОСЛЕ отрисовки (из render режима): выполняет отложенное
+   применение VFO, не блокируя перерисовку. */
+void Radio_ApplyPending(void) {
+  if (s_pendingApply) {
+    s_pendingApply = false;
+    applyVfo(true);
+  }
+}
+
+void Radio_ToggleMonitor(uint8_t idx) {
+  if (idx == currentVfo)
+    return; /* активный не мониторится — он и так на своём приёмнике */
+  vfos[idx].monitor = !vfos[idx].monitor;
+  Log("mon: vfo %u %s", idx, vfos[idx].monitor ? "on" : "off");
 }
 
 void Radio_NextStep(void) {

@@ -569,7 +569,8 @@ typedef union {
 
 void SI47XX_Init(void);
 void SI47XX_PowerUp();
-void SI47XX_PatchPowerUp();
+void SI47XX_PatchPowerUp(bool ssb);
+bool SI47XX_Acquire(SI47XX_MODE mode);
 void SI47XX_PowerDown();
 void SI47XX_SetFreq(uint16_t freq);
 void SI47XX_ReadRDS(uint8_t buf[13]);

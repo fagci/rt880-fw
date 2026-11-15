@@ -11,10 +11,12 @@ MCUFLAGS := -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
 
 C_DEFS := \
   -DAT32F423RCT7 \
-  -DUSE_STDPERIPH_DRIVER
+  -DUSE_STDPERIPH_DRIVER \
+  -DLV_CONF_INCLUDE_SIMPLE
 
 C_INCLUDES := \
   -Isrc \
+  -Isrc/external/lvgl \
   -Iinc \
   -Isrc/external/cmsis/cm4/core_support \
   -Isrc/external/cmsis/cm4/device_support \
@@ -31,6 +33,12 @@ LDFLAGS := $(MCUFLAGS) -Tlinker.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET)
 LIBS    := -lc -lstdc++
 
 SRCS_CXX := $(shell find src -name '*.cpp' ! -path '*/external/*' | sort)
+SRCS_LVGL := $(shell find src/external/lvgl/src -name '*.c' ! -path '*/extra/*' \
+  ! -path '*/draw/nxp/*' ! -path '*/draw/sdl/*' ! -path '*/draw/arm2d/*' \
+  ! -path '*/draw/renesas/*' ! -path '*/draw/stm32_dma2d/*' \
+  ! -path '*/draw/swm341_dma2d/*' ! -name 'lv_font_montserrat_*' \
+  ! -name 'lv_font_dejavu_*' ! -name 'lv_font_simsun_*' ! -name 'lv_font_unscii_*' | sort)
+
 SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_adc.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_crm.c' \
@@ -48,6 +56,7 @@ SRCS_S := $(shell find src \( -name '*.s' -o -name '*.S' \) ! -path '*/external/
 
 OBJS := $(patsubst %.cpp,$(BUILD)/%.o,$(SRCS_CXX)) \
         $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C)) \
+        $(patsubst %.c,$(BUILD)/%.o,$(SRCS_LVGL)) \
         $(patsubst %.S,$(BUILD)/%.o,$(filter %.S,$(SRCS_S))) \
         $(patsubst %.s,$(BUILD)/%.o,$(filter %.s,$(SRCS_S)))
 

@@ -66,6 +66,8 @@ typedef struct {
   CodeRXTX code;
   bool fixedBoundsMode : 1;
   bool isChMode : 1;
+  bool monitor : 1; /* VFO закреплён за фоновым мониторингом */
+  uint8_t reserved3 : 1;
   uint8_t gainIndex : 5;
   uint8_t deviation;
   uint32_t upconverter;
@@ -83,10 +85,16 @@ extern uint8_t filterIndex;
 extern const uint16_t StepFrequencyTable[15];
 
 void Radio_Init(void);
+/* Автовыбор приёмника по частоте (10 Гц) и модуляции */
+Radio Radio_PickDevice(uint32_t f, uint8_t mod);
 void Radio_TuneTo(uint32_t f, bool precise);
 void Radio_TuneToAuto(uint32_t f);
 void Radio_TuneStep(int8_t dir);
 void Radio_NextVfo(void);
+void Radio_SwitchToVfo(uint8_t idx);
+/* Выполнить отложенное применение VFO — вызывать после отрисовки */
+void Radio_ApplyPending(void);
+void Radio_ToggleMonitor(uint8_t idx);
 void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
 void Radio_Update(void);
