@@ -272,6 +272,10 @@ void Radio_Update(void) {
     BK4819_SelectChip(vfoChip(currentVfo));
 }
 
+/* Звук сканера: тот же путь, что и у VFO — учёт DAC/AF_MUTE общий,
+   иначе после выхода из сканера VFO думает, что DAC включён, и молчит. */
+void Radio_ScanAudio(bool on) { applyMute(on); }
+
 void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;
   for (uint8_t c = 0; c < 2; c++) {

@@ -43,7 +43,10 @@
 #define SPECTRUM_Y (STATUS_H + 14)
 #define SP_H 52
 #define STATE_Y (SPECTRUM_Y + SP_H + 2) /* строка состояния */
-#define WF_Y (STATE_Y + 14)             /* водопад отсюда и до низа */
+/* LVGL-лейбл F_SM занимает [y-11, y+4]: строка состояния (baseline
+ * STATE_Y+12) кончается на STATE_Y+16. Водопад начинаем ниже — иначе
+ * перерисовка лейбла (чёрный фон) пишет в память зоны скролла. */
+#define WF_Y (STATE_Y + 18)             /* водопад отсюда и до низа */
 
 #define LISTEN_TIMEOUT_MS 5000
 #define SQL_DELAY_MS 30
@@ -107,8 +110,9 @@ static void onEndEntered(uint32_t f) {
 }
 
 static void initNumVals() {
-  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
-              range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0,
+  /* NumVal печатает от ПРАВОГО края x: левому полю задаём правый край */
+  NumVal_Init(&numVal[0], 8 + 9 * 11, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
+              range.start, 0, 1340 * MHZ, onStartEntered, POS_R, nullptr, 0,
               0);
   NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
@@ -117,9 +121,8 @@ static void initNumVals() {
 
 static void setAudio(bool on) {
   if (on != dacOn) {
-    BK4819_ToggleAFDAC(on);
     dacOn = on;
-    gpio_pin_write(&PIN_AF_MUTE, on);
+    Radio_ScanAudio(on); /* через applyMute — общий учёт DAC/AF_MUTE */
   }
 }
 
@@ -206,7 +209,7 @@ public:
     onRangeChanged();
     BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
     dacOn = false;
-    gpio_pin_write(&PIN_AF_MUTE, false);
+    Radio_ScanAudio(false);
   }
 
   void update() override {

@@ -21,7 +21,7 @@
 #define SP_H 54
 #define SPECTRUM_Y (STATUS_H + 14)
 #define CURSOR_Y (SPECTRUM_Y + SP_H + 1)
-#define CURSOR_H 11
+#define CURSOR_H 16 /* лейбл F_SM = [y-11,y+4]: с запасом до WF_Y */
 #define WF_Y (CURSOR_Y + CURSOR_H)
 
 #define CURSOR_TIMEOUT_MS 5000
@@ -217,9 +217,9 @@ public:
     memset(&anaCtx, 0, sizeof(anaCtx));
     /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
      * в фиксированной зоне над водопадом (строка cursor info). */
-    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER, WF_Y - 1, F_SM, 11, 12,
+    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, WF_Y - 5, F_SM, 11, 12,
                 UNIT_MHZ, vfos[currentVfo].rxF, BK4819_F_MIN, BK4819_F_MAX,
-                onFreqInput, POS_C, nullptr, 0, 0);
+                onFreqInput, POS_R, nullptr, 0, 0);
     initRange();
     onRangeChanged();
 
@@ -375,7 +375,7 @@ private:
   void renderCursorInfo() {
     FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
 
-    uint16_t textY = WF_Y - 1;
+    uint16_t textY = WF_Y - 5;
 
     if (anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout) {
       uint8_t x0 = getCursorStart();
