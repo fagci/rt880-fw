@@ -188,6 +188,7 @@ class VfoMode : public Mode {
 public:
   void enter() override {
     Log("vfo enter inv=%u", gInverted);
+    Log("build %s %s", __DATE__, __TIME__);
     UI_ClearScreen(C_BLACK);
     Radio_Init();
     buildScreen();

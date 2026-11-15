@@ -366,6 +366,10 @@ void st7789_scroll_reset(void) {
   st7789_write_data16(320); // VSA = вся frame memory
   st7789_write_data16(0);   // BFA
 
+  // Старт скролла в ноль — без этого экран оставался сдвинутым
+  st7789_write_cmd(0x37); // VSCRSADD
+  st7789_write_data16(0);
+
   // Выход из режима скролла
   st7789_write_cmd(0x13); // NORON
 

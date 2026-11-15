@@ -212,6 +212,13 @@ static void monitorTick(void) {
 /* ── Public API ─────────────────────────────────────────────── */
 
 void Radio_Init(void) {
+  /* Идемпотентно: повторные входы в режимы не сбрасывают VFO
+     и не переинициализируют кристаллы */
+  static bool inited;
+  if (inited)
+    return;
+  inited = true;
+
   memset(vfos, 0, sizeof(vfos));
 
   /* Дефолты без SI на старте: SSB-патч грузится лениво (один раз за

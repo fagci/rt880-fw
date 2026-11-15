@@ -1,7 +1,28 @@
+/* Сканер — алгоритм заимствован из s0v4 (src/helper/scan.c):
+ *
+ * - адаптивный порог шумодава (sqLevel) тянется к noise floor;
+ * - открытие подтверждается повторным замером через SQL_DELAY («thinking»),
+ *   ложные срабатывания поднимают порог;
+ * - HOLD: стоим на открытой частоте и слушаем (AF DAC вкл), пока шумодав
+ *   не закроется или не истечёт LISTEN_TIMEOUT_MS;
+ * - закрытая частота — сразу дальше; каждые 64 закрытых шага порог
+ *   дрейфует вниз;
+ * - частоты-кратные 1.3 МГц (гармоники ПЧ) пропускаются;
+ * - каждый замер попадает в спектр (SP_AddPoint), водопад — по строке.
+ *
+ * Только BK4819: используется VFO на BK (при необходимости временно
+ * переключаемся на него, восстанавливаем на выходе).
+ *
+ * Клавиши: 0-9 — ввод границы (фокус — '#' короткий), MENU — захватить
+ * частоту в VFO и выйти, EXIT — выход, '#' длинный — пауза/продолжить
+ * (в паузе UP/DOWN — ручная перестройка), '*' — водопад вкл/выкл,
+ * UP/DOWN — выдержка на частоте (скорость сканирования).
+ */
 #include "scanner.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
+#include "../helper/log.h"
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -10,42 +31,63 @@
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
-#include "vfo.h"
 #include "printf.h"
+#include "vfo.h"
 #include <stdlib.h>
+#include <string.h>
 
+/* Раскладка экрана. ВАЖНО: водопад использует hardware vscroll зоны
+ * [WF_Y, HEIGHT) — ниже этой линии нельзя размещать никакой текст/виджеты,
+ * они будут «плыть» вместе с водопадом. */
 #define STATUS_H 24
-#define SP_H 64
-#define SPECTRUM_Y (STATUS_H + 2 + 12)
-#define SCAN_STEPS_PER_UPDATE 128
+#define SPECTRUM_Y (STATUS_H + 14)
+#define SP_H 52
+#define STATE_Y (SPECTRUM_Y + SP_H + 2) /* строка состояния */
+#define WF_Y (STATE_Y + 14)             /* водопад отсюда и до низа */
 
-static FRange range = {
-    .start = 400 * MHZ,
-    .end = 470 * MHZ,
-};
+#define LISTEN_TIMEOUT_MS 5000
+#define SQL_DELAY_MS 30
+#define CPS_BATCH 64
 
-struct {
-  NumVal_t numVal[2];
-} scannerCtx;
+static FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
 
-static bool spectrumReady;
+static NumVal_t numVal[2];
 static bool endFSel;
 static uint8_t savedVfo;
+static uint32_t savedFreq; /* частота сканирующего VFO на входе */
+
+/* скорость сканирования: выдержка на частоте до замера RSSI */
+static const uint16_t DWELL_US[] = {0, 200, 500, 1000};
+static uint8_t dwellIdx = 1;
 
 static uint32_t stepCount;
-static uint32_t lastStepTime;
+static uint32_t lastCpsTime;
 static uint32_t stepsPerSec;
+
+/* состояние сканирования */
+static uint32_t curF;        /* текущая позиция */
+static uint16_t sqLevel;     /* адаптивный порог (сырой RSSI) */
+static bool isListening;     /* HOLD: стоим и слушаем */
+static bool scanning = true; /* false = пауза (ручная перестройка) */
+static bool waterfall = true;
+static bool dacOn;
+static uint32_t listenUntil;
+static uint8_t closedSteps;
+static uint32_t lastSpRender;
+static uint32_t lastWfRender;
 
 static void onRangeChanged() {
   WF_Reset();
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
-  Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step], true);
-  FillRect(0, STATUS_H, LCD_WIDTH, SPECTRUM_Y + SP_H - STATUS_H, C_BLACK);
-  NumVal_Invalidate(&scannerCtx.numVal[0]);
-  NumVal_Invalidate(&scannerCtx.numVal[1]);
+  curF = range.start;
+  sqLevel = 0;
+  isListening = false;
+  closedSteps = 0;
+  NumVal_Invalidate(&numVal[0]);
+  NumVal_Invalidate(&numVal[1]);
   stepCount = 0;
-  lastStepTime = millis();
+  lastCpsTime = millis();
   stepsPerSec = 0;
 }
 
@@ -59,116 +101,219 @@ static void onEndEntered(uint32_t f) {
 }
 
 static void initNumVals() {
-  NumVal_Init(&scannerCtx.numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
-              range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0, 0);
-  NumVal_Init(&scannerCtx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
-              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr, 0,
+  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
+              range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0,
               0);
+  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
+              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
+              0, 0);
+}
+
+static void setAudio(bool on) {
+  if (on != dacOn) {
+    BK4819_ToggleAFDAC(on);
+    dacOn = on;
+    gpio_pin_write(&PIN_AF_MUTE, on);
+  }
+}
+
+static void advance() {
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  curF += step;
+  if (curF > range.end)
+    curF = range.start;
+  vfos[currentVfo].rxF = curF;
+}
+
+static void tuneHere() {
+  vfos[currentVfo].rxF = curF;
+  BK4819_TuneTo(curF, false);
+}
+
+/* Один шаг сканирования: замер, решение, движение. */
+static void scanStep() {
+  tuneHere();
+  delay_us(DWELL_US[dwellIdx]);
+  uint16_t rssi = BK4819_GetRSSI();
+  bool open;
+
+  if (!sqLevel)
+    sqLevel = rssi ? rssi - 1 : 0;
+
+  /* порог тянется к noise floor */
+  if (sqLevel > rssi) {
+    uint16_t mid = (sqLevel + rssi) / 2;
+    if (mid && (sqLevel - rssi) * 100 / mid >= 25)
+      sqLevel = rssi - 1;
+  }
+
+  open = (rssi >= sqLevel);
+  if (curF % 1300000 == 0)
+    open = false; /* гармоники ПЧ — мусор */
+
+  if (open && !isListening) {
+    /* подтверждение: повторный замер через паузу */
+    delay_ms(SQL_DELAY_MS);
+    open = BK4819_GetRSSI() >= sqLevel;
+    if (!open)
+      sqLevel++;
+  }
+
+  if (isListening && !open)
+    sqLevel = SP_GetNoiseFloor();
+
+  Loot m = {.f = curF, .rssi = rssi, .noise = 0, .open = open};
+  SP_AddPoint(&m);
+  stepCount++;
+
+  if (open) {
+    if (!isListening) {
+      isListening = true;
+      listenUntil = millis() + LISTEN_TIMEOUT_MS;
+    }
+    setAudio(true);
+    if (millis() > listenUntil) {
+      isListening = false;
+      setAudio(false);
+      advance();
+    }
+  } else {
+    if (isListening) {
+      isListening = false;
+      setAudio(false);
+    }
+    if (++closedSteps >= CPS_BATCH) {
+      closedSteps = 0;
+      if (sqLevel)
+        sqLevel--;
+    }
+    advance();
+  }
 }
 
 class ScannerMode : public Mode {
 public:
   void enter() override {
     savedVfo = currentVfo;
-    if (vfos[currentVfo].radio != RADIO_BK4819A)
-      currentVfo = 0;
-    initNumVals();
+    savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
+    if (vfos[currentVfo].radio != RADIO_BK4819A &&
+        vfos[currentVfo].radio != RADIO_BK4819B)
+      currentVfo = 0;
+    savedFreq = vfos[currentVfo].rxF; /* после Radio_Init */
 
+    initNumVals();
     onRangeChanged();
-    FillRect(0, SPECTRUM_Y + SP_H, LCD_WIDTH,
-             LCD_HEIGHT - (SPECTRUM_Y + SP_H), C_BLACK);
+    BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
+    dacOn = false;
+    gpio_pin_write(&PIN_AF_MUTE, false);
+    FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
   }
 
   void update() override {
-    if (spectrumReady)
-      return;
-
-    for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
-      Radio_TuneStep(+1);
-      Loot m = {
-          .f = vfos[currentVfo].rxF,
-          .rssi = BK4819_GetRSSI(),
-          .noise = 0,
-          .open = false,
-      };
-      SP_AddPoint(&m);
-      stepCount++;
-
-      if (vfos[currentVfo].rxF >= range.end) {
-        spectrumReady = true;
-        Radio_TuneTo(range.start - StepFrequencyTable[vfos[currentVfo].step],
-                     false);
-        break;
-      }
-    }
+    if (scanning)
+      scanStep();
 
     uint32_t now = millis();
-    if (now - lastStepTime >= 1000) {
-      stepsPerSec = stepCount * 1000 / (now - lastStepTime);
+    if (now - lastCpsTime >= 1000) {
+      stepsPerSec = stepCount * 1000 / (now - lastCpsTime);
       stepCount = 0;
-      lastStepTime = now;
+      lastCpsTime = now;
     }
   }
 
   void render() override {
     STATUSLINE_render();
-    NumVal_Render(&scannerCtx.numVal[0]);
-    NumVal_Render(&scannerCtx.numVal[1]);
+    NumVal_Render(&numVal[0]);
+    NumVal_Render(&numVal[1]);
 
-    if (spectrumReady || millis() - lastSpectrumRender >= 500) {
-      SP_Render(&range, STATUS_H + 14, SP_H);
+    uint32_t now = millis();
+    if (now - lastSpRender >= 300) {
+      SP_Render(&range, SPECTRUM_Y, SP_H);
+      lastSpRender = now;
+    }
+    if (waterfall && now - lastWfRender >= 100) {
+      WF_Render(WF_Y, true);
+      lastWfRender = now;
+    }
 
-      DrawHLine(8, SPECTRUM_Y, 32, endFSel ? C_BLACK : C_WHITE);
-      DrawHLine(LCD_WIDTH - 8 - 32, SPECTRUM_Y, 32, !endFSel ? C_BLACK : C_WHITE);
-
-      {
-        int16_t tw = TextWidth("9999/s", F_SM);
-        FillRect(LCD_XCENTER - tw / 2, SPECTRUM_Y - 14, tw, 12, BG());
-        PrintfT(LCD_XCENTER, SPECTRUM_Y - 2,
-                text_style(C_WHITE, C_BLACK, POS_C, F_SM), "%4u/s", stepsPerSec);
-      }
-      rendered = true;
-    }
-    if (spectrumReady) {
-      WF_Render(SPECTRUM_Y + SP_H, true);
-      spectrumReady = false;
-      SP_Begin();
-      rendered = true;
-    }
-    if (rendered) {
-      lastSpectrumRender = millis();
-      rendered = false;
-    }
+    /* строка состояния: SCAN/HOLD/PAUSE + частота + скорость */
+    char state[6];
+    strcpy(state, !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN"));
+    PrintfT(4, STATE_Y + 12, text_style(C_GREEN, C_BLACK, POS_L, F_SM),
+            "%s %u.%05u", state, curF / 100000, curF % 100000);
+    PrintfT(LCD_WIDTH - 4, STATE_Y + 12,
+            text_style(C_YELLOW, C_BLACK, POS_R, F_SM), "%4u/s", stepsPerSec);
   }
 
   void exit() override {
+    setAudio(false);
+    vfos[currentVfo].rxF = savedFreq; /* не тащим позицию скана в VFO */
     currentVfo = savedVfo;
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
-    if (NumVal_Key(&scannerCtx.numVal[endFSel], k, state))
+    if (NumVal_Key(&numVal[endFSel ? 1 : 0], k, state))
       return true;
 
-    if (state != KEY_EVT_RELEASE)
+    if (state == KEY_LONG_PRESSED) {
+      if (k == KEY_HASH) { /* пауза/продолжить */
+        scanning = !scanning;
+        isListening = false;
+        setAudio(!scanning); /* в паузе слышно текущую частоту */
+        return true;
+      }
+      if (k == KEY_STAR) { /* водопад вкл/выкл */
+        waterfall = !waterfall;
+        if (!waterfall)
+          FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+        return true;
+      }
+      return false;
+    }
+
+    if (state != KEY_RELEASED)
       return false;
 
     switch (k) {
-case KEY_MENU:
-       Mode_Switch(MODE_VFO);
-       return true;
+    case KEY_MENU: /* захватить в VFO и выйти */
+      currentVfo = savedVfo;
+      Radio_TuneToAuto(curF);
+      Mode_Switch(MODE_VFO);
+      return true;
     case KEY_EXIT:
-      endFSel = !endFSel;
+      Mode_Switch(MODE_VFO);
+      return true;
+    case KEY_HASH:
+      if (!NumVal_IsEditing(&numVal[endFSel ? 1 : 0]))
+        endFSel = !endFSel;
+      return true;
+    case KEY_STAR:
+      NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);
+      return true;
+    case KEY_UP:
+      if (!scanning) { /* ручная перестройка в паузе */
+        advance();
+        tuneHere();
+      } else {
+        dwellIdx = (dwellIdx + 1) % 4;
+      }
+      return true;
+    case KEY_DOWN:
+      if (!scanning) {
+        uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+        curF = (curF <= range.start + step) ? range.end
+                                            : curF - step;
+        tuneHere();
+      } else {
+        dwellIdx = (dwellIdx + 3) % 4;
+      }
       return true;
     default:
       break;
     }
     return false;
   }
-
-private:
-  uint32_t lastSpectrumRender = 0;
-  bool rendered = false;
 };
 
 ScannerMode scannerModeInstance;

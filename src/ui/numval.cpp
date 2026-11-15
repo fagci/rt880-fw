@@ -294,6 +294,17 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state) {
 
 bool NumVal_IsEditing(const NumVal_t *nv) { return nv->editing; }
 
+void NumVal_StartEdit(NumVal_t *nv) {
+  if (nv->editing)
+    return;
+  nv->editing = true;
+  nv->cursor = 0;
+  nv->dotEntered = false;
+  nv->fracDigits = 0;
+  memset(nv->buf, 0, NUMVAL_BUF);
+  nv->dirty = true;
+}
+
 void NumVal_Invalidate(NumVal_t *nv) { nv->dirty = true; }
 
 uint32_t NumVal_GetValue(NumVal_t *nv) { return nv->value; }

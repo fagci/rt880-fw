@@ -77,6 +77,9 @@ bool NumVal_Key(NumVal_t *nv, KEY_Code_t key, Key_State_t state);
 
 bool NumVal_IsEditing(const NumVal_t *nv);
 
+/* Программный вход в режим редактирования (например, по клавише) */
+void NumVal_StartEdit(NumVal_t *nv);
+
 void NumVal_Invalidate(NumVal_t *nv);
 
 uint32_t NumVal_GetValue(NumVal_t *nv);
