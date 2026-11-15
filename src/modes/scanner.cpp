@@ -1,6 +1,6 @@
 /* Сканер — алгоритм заимствован из s0v4 (src/helper/scan.c):
  *
- * - адаптивный порог шумодава (sqLevel) тянется к noise floor;
+ * - адаптивный порог шумодава (floorRssi) тянется к noise floor;
  * - открытие подтверждается повторным замером через SQL_DELAY («thinking»),
  *   ложные срабатывания поднимают порог;
  * - HOLD: стоим на открытой частоте и слушаем (AF DAC вкл), пока шумодав
@@ -47,7 +47,9 @@
 
 #define LISTEN_TIMEOUT_MS 5000
 #define SQL_DELAY_MS 30
-#define CPS_BATCH 64
+#define SQL_MARGIN 10 /* ~5 дБ над шумом (RSSI: 2 ед. = 1 дБ) */
+#define SQL_HYST 4
+#define BATCH_STEPS 32 /* шагов за один проход главного цикла */
 
 static FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
 
@@ -66,7 +68,8 @@ static uint32_t stepsPerSec;
 
 /* состояние сканирования */
 static uint32_t curF;        /* текущая позиция */
-static uint16_t sqLevel;     /* адаптивный порог (сырой RSSI) */
+static uint16_t floorRssi;   /* noise floor (сырой RSSI) */
+static bool sweepDone;       /* проход завершён — рисуем строку водопада */
 static bool isListening;     /* HOLD: стоим и слушаем */
 static bool scanning = true; /* false = пауза (ручная перестройка) */
 static bool waterfall = true;
@@ -83,7 +86,8 @@ static void onRangeChanged() {
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   curF = range.start;
-  sqLevel = 0;
+  floorRssi = 0;
+  sweepDone = false;
   isListening = false;
   closedSteps = 0;
   NumVal_Invalidate(&numVal[0]);
@@ -122,8 +126,10 @@ static void setAudio(bool on) {
 static void advance() {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
   curF += step;
-  if (curF > range.end)
+  if (curF > range.end) {
     curF = range.start;
+    sweepDone = true;
+  }
   vfos[currentVfo].rxF = curF;
 }
 
@@ -132,37 +138,34 @@ static void tuneHere() {
   BK4819_TuneTo(curF, false);
 }
 
-/* Один шаг сканирования: замер, решение, движение. */
+/* Один шаг сканирования: замер, решение, движение.
+ * Порог = noise floor (EMA по закрытым замерам) + SQL_MARGIN.
+ * Раньше порог брался из Std() и был в разы ниже RSSI — всё считалось
+ * «открытым» и сканер висел в HOLD/паузах. */
 static void scanStep() {
   tuneHere();
   delay_us(DWELL_US[dwellIdx]);
   uint16_t rssi = BK4819_GetRSSI();
-  bool open;
 
-  if (!sqLevel)
-    sqLevel = rssi ? rssi - 1 : 0;
+  if (!floorRssi)
+    floorRssi = rssi;
+  uint16_t thr = floorRssi + SQL_MARGIN;
 
-  /* порог тянется к noise floor */
-  if (sqLevel > rssi) {
-    uint16_t mid = (sqLevel + rssi) / 2;
-    if (mid && (sqLevel - rssi) * 100 / mid >= 25)
-      sqLevel = rssi - 1;
-  }
-
-  open = (rssi >= sqLevel);
+  /* гистерезис: уже открытый канал закрываем чуть ниже порога */
+  bool open = isListening ? (rssi + SQL_HYST >= thr) : (rssi >= thr);
   if (curF % 1300000 == 0)
     open = false; /* гармоники ПЧ — мусор */
 
   if (open && !isListening) {
     /* подтверждение: повторный замер через паузу */
     delay_ms(SQL_DELAY_MS);
-    open = BK4819_GetRSSI() >= sqLevel;
-    if (!open)
-      sqLevel++;
+    open = BK4819_GetRSSI() >= thr;
+    if (!open && floorRssi < 0xFFFF - SQL_MARGIN)
+      floorRssi++; /* ложное срабатывание — порог выше */
   }
 
-  if (isListening && !open)
-    sqLevel = SP_GetNoiseFloor();
+  if (!open)
+    floorRssi = (uint16_t)(((uint32_t)floorRssi * 15 + rssi + 8) / 16);
 
   Loot m = {.f = curF, .rssi = rssi, .noise = 0, .open = open};
   SP_AddPoint(&m);
@@ -183,11 +186,6 @@ static void scanStep() {
     if (isListening) {
       isListening = false;
       setAudio(false);
-    }
-    if (++closedSteps >= CPS_BATCH) {
-      closedSteps = 0;
-      if (sqLevel)
-        sqLevel--;
     }
     advance();
   }
@@ -215,8 +213,15 @@ public:
     NumVal_Update(&numVal[0]);
     NumVal_Update(&numVal[1]);
     bool editing = NumVal_IsEditing(&numVal[0]) || NumVal_IsEditing(&numVal[1]);
-    if (scanning && !editing)
-      scanStep();
+    if (scanning && !editing) {
+      /* пачка шагов — иначе один шаг на итерацию главного цикла (LVGL,
+       * рендер) даёт единицы-десятки шагов/с */
+      for (uint8_t i = 0; i < BATCH_STEPS; i++) {
+        scanStep();
+        if (isListening || sweepDone)
+          break;
+      }
+    }
 
     uint32_t now = millis();
     if (now - lastCpsTime >= 1000) {
@@ -236,9 +241,10 @@ public:
       SP_Render(&range, SPECTRUM_Y, SP_H);
       lastSpRender = now;
     }
-    if (waterfall && now - lastWfRender >= 100) {
-      WF_Render(WF_Y, true);
-      lastWfRender = now;
+    if (sweepDone) { /* строка водопада — раз за полный проход */
+      sweepDone = false;
+      if (waterfall)
+        WF_Render(WF_Y, true);
     }
 
     /* строка состояния: SCAN/HOLD/PAUSE + частота + скорость */
