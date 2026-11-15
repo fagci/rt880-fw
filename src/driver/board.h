@@ -58,6 +58,12 @@ static const gpio_pin_t PIN_KEY_ALARM =
 static const gpio_pin_t PIN_BAT =
     GPIO_PIN(GPIOA, GPIO_PINS_7, CRM_GPIOA_PERIPH_CLOCK);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void SysTick_Handler(void); /* определён в board.cpp, вектор из startup_at32f423.s */
+
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 uint32_t millis(void);
@@ -70,5 +76,9 @@ void board_init(void);
 uint16_t rt880_adc_read_keyin(void);
 uint16_t rt880_adc_read_battery(void);
 uint16_t battery_voltage_cv(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

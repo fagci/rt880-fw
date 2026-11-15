@@ -39,6 +39,16 @@ SECTIONS
         _etext = .;
     } >FLASH
 
+    /* C++ static constructors (SysTick_Handler and other ISR names live in C linkage) */
+    .init_array :
+    {
+        . = ALIGN(4);
+        __init_array_start = .;
+        KEEP(*(.init_array*))
+        __init_array_end = .;
+        . = ALIGN(4);
+    } >FLASH
+
     /* Инициализированные глобальные переменные (хранятся во Flash, копируются в RAM) */
     _sidata = LOADADDR(.data);
 
