@@ -215,7 +215,9 @@ public:
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
     memset(&anaCtx, 0, sizeof(anaCtx));
-    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER, LCD_HEIGHT - 20, F_SM, 11, 12,
+    /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
+     * в фиксированной зоне над водопадом (строка cursor info). */
+    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER, WF_Y - 1, F_SM, 11, 12,
                 UNIT_MHZ, vfos[currentVfo].rxF, BK4819_F_MIN, BK4819_F_MAX,
                 onFreqInput, POS_C, nullptr, 0, 0);
     initRange();
@@ -279,8 +281,8 @@ public:
     if (anaCtx.spectrumReady) {
       WF_Render(WF_Y, true);
       anaCtx.spectrumReady = false;
-      SP_ResetHistory();
-      SP_ResetRender();
+      /* историю не сбрасываем: osy должен совпадать с тем, что на экране,
+       * иначе старые пики остаются «призраками». SP_AddPoint перезапишет. */
       SP_Begin();
       anaCtx.scanF = anaCtx.range.start;
     }
@@ -350,7 +352,14 @@ public:
           : (vfos[currentVfo].step + STEP_COUNT - 1) % STEP_COUNT);
       onRangeChanged();
       return true;
+    case KEY_STAR: /* ввод частоты */
+      FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
+      anaCtx.cursorActive = false;
+      NumVal_StartEdit(&anaCtx.freqVal);
+      return true;
     case KEY_0:
+      FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
+      anaCtx.cursorActive = false;
       NumVal_Key(&anaCtx.freqVal, KEY_0, KEY_RELEASED);
       return true;
     case KEY_EXIT:
