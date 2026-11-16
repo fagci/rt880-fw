@@ -417,6 +417,10 @@ public:
   void exit() override {
     setAudio(false);
     LOOT_Standby();
+    if (probeB) { /* тест B включён — усыпить на выходе */
+      probeB = false;
+      Radio_BkBWake(false);
+    }
     /* BK остаётся настроенным на последнюю частоту скана (и её фильтр
      * диапазона) — возвращаем VFO сканера его частоту и настраиваем чип,
      * иначе шумодав в VFO читается по чужой частоте. Исключение: MENU
@@ -495,6 +499,7 @@ public:
       return true;
     case KEY_ALARM: /* тест второго BK: RSSI A и B на одной частоте */
       probeB = !probeB;
+      Radio_BkBWake(probeB); /* B обычно спит — будим только на время теста */
       return true;
     case KEY_STAR:
       NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);

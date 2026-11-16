@@ -143,6 +143,31 @@ bool Radio_ApplyBandPlan(uint32_t f) {
   return true;
 }
 
+/* ── BK4819 B (U400) ───────────────────────────────────────────
+ * Приёмного входа у B нет (схема RT880 V2, замер: ≈ −133 дБм на любом
+ * сигнале), передачи прошивка пока не делает — B спит, как в стоке
+ * (sleep_b: REG_30 = 0x0000, REG_37 = 0x1D00; экономит порядка 15–20 мА).
+ * BK_RX_CHIPS — сколько чипов участвует в приёме/звуке/шумодаве. */
+#define BK_RX_CHIPS 1
+
+static void bkSleepB(void) {
+  BK4819_SelectChip(1);
+  BK4819_WriteRegister(BK4819_REG_30, 0x0000);
+  BK4819_WriteRegister(BK4819_REG_37, 0x1D00);
+}
+
+/* Разбудить/усыпить B на время теста (ALARM в сканере). */
+void Radio_BkBWake(bool on) {
+  BK4819_SelectChip(1);
+  if (on) {
+    BK4819_RX_TurnOn();
+    BK4819_ToggleAFDAC(false); /* звук B не нужен — только RSSI */
+  } else {
+    bkSleepB();
+  }
+  BK4819_SelectChip(0); /* активный приёмник — всегда A */
+}
+
 /* ── Выбор приёмника ───────────────────────────────────────────
  * f — в единицах 10 Гц.
  * Факты о плате (схема RT880 V2 и разбор стока, uv98-rust/research/dual-rx,
@@ -212,7 +237,7 @@ static void applyMute(bool sqOpen) {
 
   uint8_t chip = (ar == RADIO_BK4819B) ? 1 : 0;
   bool wantBk = !activeSi && sqOpen;
-  for (uint8_t c = 0; c < 2; c++) {
+  for (uint8_t c = 0; c < BK_RX_CHIPS; c++) {
     bool want = (c == chip) && wantBk;
     if (want != bkDacOn[c]) {
       BK4819_SelectChip(c);
@@ -346,7 +371,11 @@ void Radio_Init(void) {
 
   for (uint8_t c = 0; c < 2; c++) {
     BK4819_SelectChip(c);
-    BK4819_Init();
+    BK4819_Init(); /* сброс чипа в известное состояние */
+    if (c == 1) {
+      bkSleepB(); /* B: не принимает (нет антенны), передачи пока нет — спит */
+      continue;
+    }
     BK4819_RX_TurnOn();
     BK4819_SetAFC(0);
     BK4819_SetAGC(true, 1);
@@ -354,6 +383,7 @@ void Radio_Init(void) {
        Иначе на старте шипит до первого опроса шумодава. */
     BK4819_ToggleAFDAC(false);
   }
+  BK4819_SelectChip(0);
 
   /* RST и бит-банг I2C SI4732 — без этого чип в ресете, IsAlive = false */
   SI47XX_Init();
@@ -391,7 +421,7 @@ void Radio_Update(void) {
    on=true — слышно активный BK (чип активного VFO); on=false — тишина везде. */
 void Radio_ScanAudio(bool on) {
   uint8_t chip = vfoChip(currentVfo);
-  for (uint8_t c = 0; c < 2; c++) {
+  for (uint8_t c = 0; c < BK_RX_CHIPS; c++) {
     bool want = on && c == chip;
     BK4819_SelectChip(c);
     BK4819_ToggleAFDAC(want);
@@ -409,7 +439,7 @@ void Radio_ScanAudio(bool on) {
 
 void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;
-  for (uint8_t c = 0; c < 2; c++) {
+  for (uint8_t c = 0; c < BK_RX_CHIPS; c++) {
     BK4819_SelectChip(c);
     BK4819_SetupSquelch(GetSql(level), 1, 1);
   }
