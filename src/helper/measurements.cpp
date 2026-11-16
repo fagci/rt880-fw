@@ -26,7 +26,12 @@ int ConvertDomain(int aValue, int aMin, int aMax, int bMin, int bMax) {
   const int aRange = aMax - aMin;
   const int bRange = bMax - bMin;
   aValue = Clamp(aValue, aMin, aMax);
-  return ((aValue - aMin) * bRange + aRange / 2) / aRange + bMin;
+  /* 10-Гц единицы частоты × ширина экрана переполняют int (470 МГц × 240):
+   * на таких диапазонах считаем в 64 бита (иначе индекс за массивом → fault) */
+  int p;
+  if (!__builtin_mul_overflow(aValue - aMin, bRange, &p))
+    return (p + aRange / 2) / aRange + bMin;
+  return (int)(((int64_t)(aValue - aMin) * bRange + aRange / 2) / aRange) + bMin;
 }
 
 uint8_t DBm2S(int dbm, bool isUHF) {

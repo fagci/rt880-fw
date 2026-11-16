@@ -119,6 +119,16 @@ static uint8_t getCursorEnd() {
   return e;
 }
 
+/* Шаг скана: шаг VFO, но не мельче span/240 — на широком диапазоне
+ * (100…470 МГц при 25 кГц это 14000 точек) проход иначе длится минуты,
+ * а точек всё равно больше, чем пикселей. */
+static uint32_t scanStep() {
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  uint32_t span = anaCtx.range.end - anaCtx.range.start;
+  uint32_t min = (span + SP_MAX_POINTS - 1) / SP_MAX_POINTS;
+  return step > min ? step : min;
+}
+
 static void initRange() {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
   anaCtx.range.start = DEFAULT_RANGE_START;
@@ -131,7 +141,7 @@ static void exitListen(void);
 static void onRangeChanged() {
   if (anaCtx.listen)
     exitListen(); /* диапазон сменился — курсор и сетка новые */
-  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  uint32_t step = scanStep();
   SP_Init(&anaCtx.range, step, anaCtx.range.end - anaCtx.range.start);
   NumVal_SetValue(&anaCtx.startVal, anaCtx.range.start);
   NumVal_SetValue(&anaCtx.endVal, anaCtx.range.end);
@@ -442,7 +452,7 @@ public:
       SP_AddPoint(&m);
       anaCtx.stepCount++;
 
-      uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+      uint32_t step = scanStep();
       anaCtx.scanF += step;
 
       if (anaCtx.scanF >= anaCtx.range.end) {
@@ -653,7 +663,7 @@ private:
       snprintf(b1, sizeof(b1), "%lu.%03lu", centerF / MHZ, (centerF % MHZ) / 1000);
       snprintf(b2, sizeof(b2), "%lu.%03lu", rightF / MHZ, (rightF % MHZ) / 1000);
     } else {
-      uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+      uint32_t step = scanStep();
       uint32_t span = anaCtx.range.end - anaCtx.range.start;
       mode = 0;
       snprintf(b0, sizeof(b0), "Step %lu.%02luk", step / 100, step % 100);
