@@ -99,7 +99,6 @@ static bool waterfall = true;
 static bool dacOn;
 static uint8_t warm;        /* шагов калибровки шума после смены диапазона */
 static uint8_t creepCnt;    /* медленный подъём порога в HOLD на «шуме» */
-static int8_t underShown = -1; /* какая граница подчёркнута (-1 = перерисовать) */
 static uint8_t savedStep;   /* шаг VFO сканера на входе */
 static bool monitorMode;  /* слушать и белый список */
 static bool captureOnExit; /* MENU: оставить частоту в VFO */
@@ -118,7 +117,6 @@ static void onRangeChanged() {
   floorRssi = 0;
   warm = WARM_STEPS;
   creepCnt = 0;
-  underShown = -1;
   sweepDone = false;
   isListening = false;
   closedSteps = 0;
@@ -345,12 +343,15 @@ public:
         WF_Render(WF_Y, true);
     }
 
-    /* подчёркивание редактируемой границы (желтое), у другой — стёрто */
-    if (underShown != (int8_t)endFSel) {
+    /* подчёркивание редактируемой границы (жёлтое), у другой — чёрное.
+     * Рисуется ПРЯМОЙ заливкой, а LVGL про неё не знает: любая его
+     * перерисовка пересекающейся области (смена текста, удаление объектов
+     * прошлого экрана) закрашивает её. Поэтому не «по смене», а каждый
+     * кадр — две заливки 99×2 px. */
+    {
       const int16_t uy = SPECTRUM_Y - 4, uw = 9 * 11;
       FillRect(8, uy, uw, 2, endFSel ? C_BLACK : C_YELLOW);
       FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2, endFSel ? C_YELLOW : C_BLACK);
-      underShown = endFSel;
     }
 
     /* шаг и выдержка на частоте — между полями границ (мелким шрифтом) */
