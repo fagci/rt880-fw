@@ -306,12 +306,10 @@ static void eraseCursorZone() {
   uint8_t x0 = anaCtx.prevCursorStart;
   uint8_t x1 = anaCtx.prevCursorEnd;
 
-  gMapColors = false; /* панель спектра тёмная в любой теме */
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
   DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_BLACK);
   DrawVLine(x0, SPECTRUM_Y, SP_H, C_BLACK);
   DrawVLine(x1, SPECTRUM_Y, SP_H, C_BLACK);
-  gMapColors = true;
 
   anaCtx.prevCursorActive = false;
 }
@@ -320,12 +318,10 @@ static void drawCursorZone() {
   uint8_t x0 = getCursorStart();
   uint8_t x1 = getCursorEnd();
 
-  gMapColors = false;
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
   DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_CYAN);
   DrawVLine(x0, SPECTRUM_Y, SP_H, C_CYAN);
   DrawVLine(x1, SPECTRUM_Y, SP_H, C_CYAN);
-  gMapColors = true;
 
   anaCtx.prevCursorStart = x0;
   anaCtx.prevCursorEnd = x1;

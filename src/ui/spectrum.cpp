@@ -24,25 +24,77 @@ static bool ticksRendered = false;
 static uint8_t wf[WF_YN][WF_XN] = {0};
 static uint16_t osy[SP_MAX_POINTS] = {0};
 
-// Авто-генерация палитры: от чёрного → синий → голубой → зелёный → жёлтый → красный → белый
+extern bool gThemeLight; /* graphics.cpp */
+
+/* Палитра водопада — без чёрного: в тёмной теме от тёмно-синего через
+ * голубой/зелёный/жёлтый к красному и белому; в светлой — «инверсия»:
+ * от белого, красный/коричневый сверху. */
 static uint16_t GRADIENT_PALETTE[15];
+static int8_t palTheme = -1;
+
+static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+  return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
 
 static void init_palette(void) {
-  static bool inited = false;
-  if (inited) return;
-  inited = true;
+  if (palTheme == (int8_t)gThemeLight)
+    return;
+  palTheme = gThemeLight;
   for (uint8_t i = 0; i < 15; i++) {
-    if (i == 0)       { GRADIENT_PALETTE[i] = 0x0000; continue; }
-    if (i == 14)      { GRADIENT_PALETTE[i] = 0xFFFF; continue; }
-    uint8_t t = (i * 255) / 14;
-    if (t < 85)       GRADIENT_PALETTE[i] = ((uint16_t)(255 - t * 3) << 5) | 0x001F;
-    else if (t < 170) GRADIENT_PALETTE[i] = ((uint16_t)((t - 85) * 3) << 10) | 0x07E0;
-    else              GRADIENT_PALETTE[i] = 0xF800 | ((uint16_t)(255 - (t - 170) * 3) >> 3);
+    /* базовая гамма: синий → голубой → зелёный → жёлтый → красный */
+    uint8_t t = (i * 255) / 14, r, g, b;
+    if (t < 85)       { r = 0;               g = t * 3;           b = 255; }
+    else if (t < 170) { r = (t - 85) * 3;    g = 255;             b = 255 - (t - 85) * 3; }
+    else              { r = 255;             g = 255 - (t - 170) * 3; b = 0; }
+    if (!gThemeLight) {
+      if (i == 0)  { GRADIENT_PALETTE[i] = rgb565(0, 0, 56); continue; }
+      if (i == 14) { GRADIENT_PALETTE[i] = 0xFFFF; continue; }
+      GRADIENT_PALETTE[i] = rgb565(r, g, b);
+    } else {
+      /* от белого (шум) постепенно в цвет, в конце — тёмно-красный */
+      uint8_t w = i < 4 ? 255 - i * 64 : 0; /* доля белого */
+      if (i == 14) { GRADIENT_PALETTE[i] = rgb565(110, 0, 0); continue; }
+      r = r + ((255 - r) * w) / 255;
+      g = g + ((255 - g) * w) / 255;
+      b = b + ((255 - b) * w) / 255;
+      GRADIENT_PALETTE[i] = rgb565(r, g, b);
+    }
   }
 }
 
+/* Адаптивные уровни водопада (единицы RSSI, 0.5 дБ): низ — медленно
+ * следящий пол шума, верх — медленно спадающий максимум, минимум размаха
+ * 24 дБ. Так картинка не «уходит в ноль» и не зашкаливает при смене
+ * диапазона/усиления. */
+static int32_t lvlLo, lvlHi;
+static bool lvlInit;
+#define LVL_MIN_SPAN 48
+
+static void update_levels(void) {
+  int32_t mn = INT32_MAX, mx = 0;
+  for (uint16_t x = 0; x < SP_MAX_POINTS; ++x) {
+    int32_t r = rssiHistory[x];
+    if (!r) continue; /* ещё не измерено */
+    if (r < mn) mn = r;
+    if (r > mx) mx = r;
+  }
+  if (mx == 0) return;
+  if (!lvlInit) {
+    lvlLo = mn;
+    lvlHi = mx;
+    lvlInit = true;
+    return;
+  }
+  lvlLo = mn < lvlLo ? mn : lvlLo + (mn - lvlLo) / 16;
+  lvlHi = mx > lvlHi ? mx : lvlHi - (lvlHi - mx) / 32;
+}
+
 static uint8_t getPalIndex(uint16_t rssi) {
-  return ConvertDomain(Rssi2DBm(rssi), dBmRange.min, dBmRange.max, 0, 14);
+  int32_t lo = lvlLo - 4; /* шум чуть выше нуля палитры */
+  int32_t span = lvlHi - lo;
+  if (span < LVL_MIN_SPAN) span = LVL_MIN_SPAN;
+  int32_t i = ((int32_t)rssi - lo) * 14 / span;
+  return i < 0 ? 0 : i > 14 ? 14 : (uint8_t)i;
 }
 
 static uint16_t v(uint8_t x) { return rssiHistory[x]; }
@@ -62,6 +114,7 @@ void SP_ResetHistory(void) {
   }
   filledPoints = 0;
   currentStep = 0;
+  lvlInit = false;
 }
 
 /* Пометить спектр «неактуальным»: следующий SP_Render перерисует всю
@@ -199,9 +252,12 @@ static void fill_sp_row(uint8_t *buf, int16_t row) {
     uint16_t c;
     if ((int16_t)nsy[x] > row) {
       // top pixel — bright yellow line; fill below — dark amber
-      c = ((int16_t)nsy[x] - 1 == row) ? 0xFFE0 : 0x8400;
+      if (gThemeLight)
+        c = ((int16_t)nsy[x] - 1 == row) ? 0xA460 : 0xFF38;
+      else
+        c = ((int16_t)nsy[x] - 1 == row) ? 0xFFE0 : 0x8400;
     } else {
-      c = C_BLACK;
+      c = gThemeLight ? C_WHITE : C_BLACK; /* фон темы */
     }
     buf[x * 2] = (uint8_t)(c >> 8);
     buf[x * 2 + 1] = (uint8_t)(c);
@@ -209,6 +265,7 @@ static void fill_sp_row(uint8_t *buf, int16_t row) {
 }
 
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
+  init_palette();
   const uint16_t vMin = (dBmRange.min + 160) * 2;
   const uint16_t vMax = (dBmRange.max + 160) * 2;
   dBmRange.min = Rssi2DBm(vMin);
@@ -286,6 +343,8 @@ void WF_Render(uint8_t wy, bool wfDown) {
   if (!wfScrollInited)
     WF_InitScroll(wy, wh);
 
+  init_palette();
+  update_levels();
   memset(wf[0], 0, WF_XN);
   for (uint32_t f = range.start; f <= range.end; f += step) {
     uint8_t x = f2x(f);
