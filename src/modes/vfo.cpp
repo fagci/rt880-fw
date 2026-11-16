@@ -99,8 +99,23 @@ static void setHidden(lv_obj_t *o, bool hidden) {
     lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* Цвета, читаемые и на чёрном, и на белом фоне (инверсия) */
-static Color fgAd(Color c) { return gInverted ? C_BLACK : c; }
+/* Светлая тема: цвета, читаемые на белом фоне (на чёрном — как есть).
+ * Раньше всё красилось в чёрный — а корневой фон оставался чёрным. */
+static Color fgAd(Color c) {
+  if (!gInverted)
+    return c;
+  if (c == C_WHITE)
+    return C_BLACK;
+  if (c == C_YELLOW)
+    return 0xC400; /* тёмно-оранжевый */
+  if (c == C_GREEN)
+    return 0x0400; /* тёмно-зелёный */
+  if (c == C_CYAN)
+    return 0x0410; /* тёмно-бирюзовый */
+  if (c == C_GRAY)
+    return 0x7BEF; /* серый */
+  return c;
+}
 
 static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
                        lv_coord_t w, lv_coord_t h, Color bg, lv_opa_t opa) {
@@ -210,7 +225,7 @@ class VfoMode : public Mode {
 public:
   void enter() override {
     UI_ReleaseLabels();
-    UI_ClearScreen(C_BLACK);
+    UI_ClearScreen(BG());
     Radio_Init();
     buildScreen();
     initNumVals();
@@ -388,6 +403,10 @@ public:
         return true;
       case KEY_SIDE1: /* группа диапазонов: вещание → SSB → службы */
         Radio_NextGroup();
+        return true;
+      case KEY_SIDE2: /* светлая/тёмная тема (только VFO) */
+        gThemeLight = !gThemeLight;
+        Mode_Switch(*Mode_Current()); /* пересбор экрана с новой темой */
         return true;
       case KEY_8: /* список находок */
         LOOTLIST_OpenFrom(MODE_VFO);

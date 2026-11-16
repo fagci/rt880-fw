@@ -24,6 +24,7 @@
 #include <string.h>
 
 bool gInverted;
+bool gThemeLight;
 
 #define FB_W ST7789_WIDTH
 #define FB_H ST7789_HEIGHT

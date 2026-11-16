@@ -2,6 +2,9 @@
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
 #include "../ui/spectrum.h"
+#include "../ui/statusline.h"
+#include "lvgl.h"
+#include "vfo.h"
 
 static Mode *current = nullptr;
 static Mode *next = nullptr;
@@ -18,6 +21,17 @@ void Mode_Update() {
      * чужого экрана и даже в память зоны аппаратного скролла (чёрные полосы
      * в водопаде по x-диапазонам надписей). Освобождаем при каждой смене. */
     UI_ReleaseLabels();
+    /* Светлая тема действует только в VFO (остальные режимы рисуют прямой
+     * заливкой на чёрном). Меняется тема — перекрашиваем корневой фон LVGL и
+     * сразу перерисовываем экран ДО enter(): иначе отложенная перерисовка
+     * LVGL затёрла бы то, что режим нарисует в enter()/первом render(). */
+    bool wasInv = gInverted;
+    gInverted = gThemeLight && next == &MODE_VFO;
+    if (gInverted != wasInv) {
+      UI_ClearScreen(BG());
+      lv_refr_now(NULL);
+      STATUSLINE_ApplyTheme();
+    }
     current = next;
     next = nullptr;
     if (current)

@@ -50,6 +50,14 @@ static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
   return o;
 }
 
+/* Светлая тема (только VFO): текст напряжения батареи — тёмный на белом.
+ * Остальное (серый, зелёный/жёлтый/красный) читается на обоих фонах. */
+void STATUSLINE_ApplyTheme(void) {
+  if (s_batText)
+    lv_obj_set_style_text_color(s_batText, lvc(gInverted ? C_BLACK : C_WHITE),
+                                LV_PART_MAIN);
+}
+
 static void build(void) {
   s_root = mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, 24, C_BLACK, LV_OPA_TRANSP);
   if (!s_root)

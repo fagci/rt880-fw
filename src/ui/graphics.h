@@ -31,7 +31,8 @@
 typedef enum { POS_L, POS_C, POS_R } TextPos;
 typedef uint16_t Color;
 
-extern bool gInverted;
+extern bool gInverted;   /* эффективная инверсия (светлая тема только в VFO) */
+extern bool gThemeLight; /* выбор пользователя: светлая тема (длинный SIDE2 в VFO) */
 
 /* Текущий цвет фона (учитывает инверсию) */
 static inline Color BG(void) { return gInverted ? C_WHITE : C_BLACK; }
