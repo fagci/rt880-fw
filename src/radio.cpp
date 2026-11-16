@@ -145,22 +145,25 @@ bool Radio_ApplyBandPlan(uint32_t f) {
 
 /* ── Выбор приёмника ───────────────────────────────────────────
  * f — в единицах 10 Гц.
- * SI4732: AM/SSB ниже 30 МГц. После первой загрузки SSB-патча чип
- * живёт в патч-режиме постоянно (патч покрывает AM+SSB) — переходы
- * между ними без re-power и без повторной 10-секундной заливки.
- * WFM 64–108 — тоже на SI4732 (FM-приёмник чипа: качество, стерео/RDS).
- * Цена: AM/SSB ↔ FM = re-power и перезаливка патча при возврате (1–2 с).
- * Нет SI — откат на BK4819A (siEnsure).
- * BK4819B: HF-тракт ниже 30 МГц (всё, что не взял SI).
- * BK4819A: всё остальное (V/UHF + FM-вещание). */
+ * Факты о плате (схема RT880 V2 и разбор стока, uv98-rust/research/dual-rx,
+ * проверено замером RSSI на BK B):
+ *  - BK4819 A (U201) — единственный приёмник на антенне: LNA/фильтры через
+ *    PF0/K200, диапазоны 18–660 и 840–1300 МГц (в т. ч. 27 МГц, CB);
+ *  - BK4819 B (U400) — вход LNAIN не подключён к антенне, выход EARO отключён
+ *    (C433 = NC): второй BK нужен для передачи/ретранслятора, а НЕ как
+ *    приёмник. Приём на B не выбираем;
+ *  - SI4732 — всё ниже 18 МГц (где BK не принимает), AM/SSB до 30 МГц и
+ *    FM-вещание 64–108 МГц (приёмник чипа: качество, стерео/RDS).
+ * Цена SI в FM: AM/SSB ↔ FM = re-power и перезаливка патча (≈0.2–0.8 с).
+ * Нет SI — откат на BK A (siEnsure). */
 Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
   if (mod == MOD_WFM && f >= 6400000 && f <= 10800000)
     return RADIO_SI4732;
+  if (f < 1800000) /* ниже 18 МГц BK4819 не принимает */
+    return RADIO_SI4732;
   if (f < 3000000 && (mod == MOD_AM || mod == MOD_LSB || mod == MOD_USB))
     return RADIO_SI4732;
-  if (f < 3000000)
-    return RADIO_BK4819B;
-  return RADIO_BK4819A;
+  return RADIO_BK4819A; /* 18–30 МГц FM/прочее (CB 27 МГц) — тоже BK A */
 }
 
 static SI47XX_MODE modToSi(uint8_t mod) {
@@ -182,9 +185,13 @@ static SI47XX_MODE modToSi(uint8_t mod) {
  * (~1-2 с). При отсутствии чипа — откат VFO на BK. */
 static void siEnsure(VFO *v) {
   SI47XX_MODE want = modToSi(v->modulation);
+  /* FM-приёмник SI4732 — только 64–108 МГц; ниже (КВ) при «FM»-модуляции
+   * работаем в AM */
+  if (want == SI47XX_FM && v->rxF < 6400000)
+    want = SI47XX_AM;
   if (!SI47XX_Acquire(want)) {
-    Log("SI4732: not responding, fallback to BK");
-    v->radio = Radio_PickDevice(v->rxF, MOD_FM);
+    Log("SI4732: not responding, fallback to BK A");
+    v->radio = RADIO_BK4819A; /* B без антенны — не вариант */
   }
 }
 
