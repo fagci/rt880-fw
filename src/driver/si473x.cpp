@@ -160,30 +160,39 @@ static uint8_t i2c_read_byte(bool send_ack) {
  * пробу, SI47XX_IsAlive переключается на него и логирует это. Аппаратный
  * I2C не требует маскировать прерывания и не зависит от задержек цикла. */
 #define HW_I2C I2C1
-#define HW_I2C_SPEED_HZ 100000u
-#define HW_I2C_TIMEOUT_MS 50u /* одна транзакция (≤ 9 байт при 100 кГц ≈ 1 мс) */
+#define HW_I2C_FAST_HZ 400000u /* SI4735 держит 400 кГц */
+#define HW_I2C_SLOW_HZ 100000u /* откат, если на 400 кГц ID патча не сошёлся */
+#define HW_I2C_TIMEOUT_MS 50u /* одна транзакция (≤ 9 байт ≈ 0.3 мс на 400 кГц) */
 
 static bool s_hw; /* true — шина аппаратная, false — бит-бэнг */
+static uint32_t s_hwSpeed = HW_I2C_FAST_HZ;
+static bool s_patchOk = true; /* ID патча после заливки сошёлся с ожидаемым */
 
 /* Значение CLKCTRL (формат как TIMINGR у STM32F0: PRESC[31:28] SCLDEL[23:20]
- * SDADEL[19:16] SCLH[15:8] SCLL[7:0]) под HW_I2C_SPEED_HZ и частоту PCLK1.
- * Префильтр: тик ≈ 133 нс; SCLDEL ≥ 250 нс (tSU;DAT стандартного режима). */
-static uint32_t hw_clkctrl(uint32_t pclk) {
-  uint32_t presc = (pclk + 7500000u - 1) / 7500000u;
+ * SDADEL[19:16] SCLH[15:8] SCLL[7:0]) под скорость и частоту PCLK1.
+ * Стандартный режим: тик ≈ 133 нс, tSU;DAT ≥ 250 нс, SCL 50/50.
+ * Быстрый (400 кГц): тик ≈ 53 нс, tSU;DAT ≥ 100 нс, SCLL ≥ 1.3 мкс (≈55%). */
+static uint32_t hw_clkctrl(uint32_t pclk, uint32_t speed) {
+  const bool fast = speed > 100000u;
+  const uint32_t tpTarget = fast ? 20000000u : 7500000u;
+  uint32_t presc = (pclk + tpTarget - 1) / tpTarget;
   if (presc < 1)
     presc = 1;
   if (presc > 16)
     presc = 16;
   uint32_t tp = pclk / presc; /* частота тика после делителя */
-  uint32_t n = tp / HW_I2C_SPEED_HZ; /* тиков на период SCL */
-  if (n < 8)
-    n = 8;
-  uint32_t sclh = n / 2 - 1, scll = n - n / 2 - 1;
+  uint32_t n = tp / speed;    /* тиков на период SCL */
+  if (n < 12)
+    n = 12;
+  uint32_t scllC = fast ? (n * 55 + 99) / 100 : n - n / 2;
+  uint32_t sclhC = n - scllC;
+  uint32_t scll = scllC - 1, sclh = sclhC - 1;
   if (sclh > 255)
     sclh = 255;
   if (scll > 255)
     scll = 255;
-  uint32_t scldel = (uint32_t)((uint64_t)tp * 250 / 1000000000ull) + 1;
+  uint32_t tsuNs = fast ? 100 : 250;
+  uint32_t scldel = (uint32_t)((uint64_t)tp * tsuNs / 1000000000ull) + 1;
   if (scldel > 15)
     scldel = 15;
   return ((presc - 1) << 28) | (scldel << 20) | (1u << 16) | (sclh << 8) | scll;
@@ -221,9 +230,17 @@ static void busUseHw(void) {
 
   crm_clocks_freq_type clk;
   crm_clocks_freq_get(&clk);
-  i2c_init(HW_I2C, 0x00, hw_clkctrl(clk.apb1_freq));
+  i2c_init(HW_I2C, 0x00, hw_clkctrl(clk.apb1_freq, s_hwSpeed));
   i2c_enable(HW_I2C, TRUE);
   s_hw = true;
+}
+
+static void hwSetSpeed(uint32_t hz) {
+  s_hwSpeed = hz;
+  crm_clocks_freq_type clk;
+  crm_clocks_freq_get(&clk);
+  i2c_init(HW_I2C, 0x00, hw_clkctrl(clk.apb1_freq, hz));
+  i2c_enable(HW_I2C, TRUE);
 }
 
 /* сброс автомата (PE=0 очищает флаги/состояние) */
@@ -368,7 +385,10 @@ void sendProperty(uint16_t prop, uint16_t value) {
                     (uint8_t)(prop >> 8),  (uint8_t)(prop & 0xFF),
                     (uint8_t)(value >> 8), (uint8_t)(value & 0xFF)};
   SI47XX_WriteBuffer(cmd, 6);
-  delay_ms(8); /* Si47xx requires ≥10 ms between SET_PROPERTY commands */
+  /* Раньше 8 мс «на всякий случай» (под медленный бит-бэнг). CTS всё равно
+   * ждётся перед следующей командой; PU2CLR обходится ~0.55 мс. 2 мс —
+   * с запасом. */
+  delay_ms(2);
 }
 
 uint16_t getProperty(uint16_t prop, bool *valid) {
@@ -516,6 +536,19 @@ void SI47XX_PatchPowerUp(bool ssb) {
   SI47XX_downloadPatch(ssb ? ssb_patch : am_patch,
                        ssb ? SSB_PATCH_LEN : AM_PATCH_LEN);
 
+  /* ID патча: GET_REV → байты 4..5 (как в стоке). Он же — контроль
+   * целостности заливки (последняя строка патча несёт его ID). */
+  {
+    const uint8_t *tail = (ssb ? ssb_patch : am_patch) +
+                          (ssb ? SSB_PATCH_LEN : AM_PATCH_LEN) - 2;
+    uint8_t cmd = CMD_GET_REV, rev[9] = {0};
+    waitToSend();
+    SI47XX_WriteBuffer(&cmd, 1);
+    waitToSend();
+    SI47XX_ReadBuffer(rev, 9);
+    s_patchOk = (rev[4] == tail[0] && rev[5] == tail[1]);
+  }
+
   if (ssb) {
     SI47XX_SsbSetup(SI47XX_SSB_BW_3_kHz, 1, 0, 1, 0, 1);
     setAvcAmMaxGain(42);
@@ -539,12 +572,24 @@ void SI47XX_PatchPowerUp(bool ssb) {
  * семейства: AM/SSB ↔ FM = re-power (+ заливка патча при возврате). */
 static void siPowerUpFor(uint8_t want) {
   uint32_t t0 = millis();
-  if (want == 3)
+  const char *nm = want == 3 ? "FM" : want == 2 ? "SSB" : "AM";
+  if (want == 3) {
     SI47XX_PowerUp(); /* FUNC_FM — по si4732mode */
-  else
+  } else {
     SI47XX_PatchPowerUp(want == 2);
-  Log("SI up %s: %lu ms, I2C %s", want == 3 ? "FM" : want == 2 ? "SSB" : "AM",
-      (unsigned long)(millis() - t0), s_hw ? "HW" : "bit-bang");
+    if (!s_patchOk && s_hw && s_hwSpeed > HW_I2C_SLOW_HZ) {
+      /* на быстрой шине заливка исказилась (ID не совпал) — на 100 кГц
+       * и заново; медленный режим остаётся до перезагрузки */
+      Log("SI: %s patch ID bad @%luk -> retry 100k", nm,
+          (unsigned long)(s_hwSpeed / 1000));
+      hwSetSpeed(HW_I2C_SLOW_HZ);
+      SI47XX_PowerDown();
+      SI47XX_PatchPowerUp(want == 2);
+    }
+  }
+  Log("SI up %s: %lu ms, I2C %s %luk%s", nm, (unsigned long)(millis() - t0),
+      s_hw ? "HW" : "bit-bang", (unsigned long)(s_hw ? s_hwSpeed / 1000 : 100),
+      (want != 3 && !s_patchOk) ? " PATCH?" : "");
 }
 
 bool SI47XX_Acquire(SI47XX_MODE mode) {
