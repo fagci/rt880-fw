@@ -55,6 +55,7 @@ static inline TextStyle text_style(Color fg, Color bg, TextPos align,
 #define STYLE_SS_DARK    text_style(C_DARK, C_BLACK, POS_C, F_SS)
 
 void UI_ClearScreen(Color bg);
+void UI_ReleaseLabels(void); /* удалить лейблы пула Printf* (см. graphics.cpp) */
 
 void PutPixel(int16_t x, int16_t y, Color c);
 void DrawVLine(int16_t x, int16_t y, int16_t h, Color c);

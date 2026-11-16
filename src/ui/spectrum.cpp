@@ -89,7 +89,7 @@ void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
   ticksRendered = false;
 }
 
-void SP_AddPoint(Loot *msm) {
+void SP_AddPoint(Measurement *msm) {
   uint8_t x = f2x(msm->f);
   if (lastX != x) {
     lastX = x;

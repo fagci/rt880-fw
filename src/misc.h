@@ -26,7 +26,7 @@ typedef struct {
   bool open;
   bool blacklist;
   bool goodKnown;
-} Loot;
+} Measurement;
 
 typedef struct {
   uint32_t start : 27;

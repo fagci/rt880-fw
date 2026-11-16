@@ -12,6 +12,7 @@
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
 #include "../helper/log.h"
+#include "../helper/lootlist.h"
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -21,6 +22,7 @@
 #include "../ui/lvgl_fonts/lv_font_tomthumb.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
+#include "loot_screen.h"
 #include "mode.h"
 #include "radio.h"
 #include "scanner.h"
@@ -202,6 +204,7 @@ public:
   void enter() override {
     Log("vfo enter inv=%u", gInverted);
     Log("build %s %s", __DATE__, __TIME__);
+    UI_ReleaseLabels();
     UI_ClearScreen(C_BLACK);
     Radio_Init();
     buildScreen();
@@ -392,6 +395,24 @@ public:
       case KEY_0:
         Mode_Switch(MODE_RADIO);
         return true;
+      case KEY_8: /* список находок */
+        LOOTLIST_OpenFrom(MODE_VFO);
+        return true;
+      case KEY_9: { /* текущая частота — в белый список находок */
+        VFO *v = &vfos[currentVfo];
+        Loot *it = LOOT_Add(v->rxF);
+        if (it) {
+          it->modulation = v->modulation;
+          it->bw = v->bw;
+          it->radio = v->radio;
+          it->blacklist = false;
+          it->whitelist = true;
+          Log("loot + %lu", (unsigned long)v->rxF);
+        } else {
+          Log("loot full");
+        }
+        return true;
+      }
       case KEY_1:
         Radio_ToggleMonitor(0);
         return true;

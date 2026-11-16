@@ -7,14 +7,14 @@
 
 #define SP_MAX_POINTS 240
 #define WF_XN 120
-#define WF_YN 45
+#define WF_YN 1 /* нужна только строка wf[0]: временный буфер палитры */
 
 typedef struct {
   int16_t min;
   int16_t max;
 } DBmRange;
 
-void SP_AddPoint(Loot *msm);
+void SP_AddPoint(Measurement *msm);
 void SP_ResetHistory(void);
 void SP_ResetRender(void);
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t bw);

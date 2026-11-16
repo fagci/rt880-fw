@@ -100,7 +100,7 @@ public:
 
       delay_ms(10);
 
-      Loot m = {
+      Measurement m = {
           .f = vfos[currentVfo].rxF,
           .rssi = BK4819_GetRSSI(),
           .noise = BK4819_GetNoise(),

@@ -13,16 +13,24 @@
  * Только BK4819: используется VFO на BK (при необходимости временно
  * переключаемся на него, восстанавливаем на выходе).
  *
- * Клавиши: 0-9 — ввод границы (фокус — '#' короткий), MENU — захватить
- * частоту в VFO и выйти, EXIT — выход, '#' длинный — пауза/продолжить
- * (в паузе UP/DOWN — ручная перестройка), '*' — ввод границы, SIDE1 — водопад вкл/выкл,
- * UP/DOWN — выдержка на частоте (скорость сканирования).
+ * Находки копятся в списке loot (helper/lootlist): каждый подтверждённый
+ * сигнал — запись с частотой, длительностью, пиком. Чёрный список
+ * (blacklist) сканер пропускает всегда, белый (whitelist) — пока не
+ * включён режим мониторинга.
+ *
+ * Клавиши: 0-9 / '*' — ввод границы (фокус — '#' короткий), MENU — захватить
+ * частоту в VFO и выйти, MENU длинный — список находок, EXIT — выход,
+ * '#' длинный — пауза/продолжить (в паузе UP/DOWN — ручная перестройка),
+ * SIDE1 — в чёрный список последнюю находку (и дальше), SIDE1 длинный —
+ * водопад вкл/выкл, SIDE2 — в белый список, SIDE2 длинный — мониторинг
+ * (слушать и белые), UP/DOWN — выдержка на частоте (скорость сканирования).
  */
 #include "scanner.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
 #include "../helper/log.h"
+#include "../helper/lootlist.h"
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -30,6 +38,7 @@
 #include "../ui/numval.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
+#include "loot_screen.h"
 #include "mode.h"
 #include "printf.h"
 #include "vfo.h"
@@ -48,7 +57,8 @@
 /* LVGL-лейбл F_SM занимает [y-11, y+4]: строка состояния (baseline
  * STATE_Y+12) кончается на STATE_Y+16. Водопад начинаем ниже — иначе
  * перерисовка лейбла (чёрный фон) пишет в память зоны скролла. */
-#define WF_Y (STATE_Y + 18)             /* водопад отсюда и до низа */
+#define INFO_Y (STATE_Y + 28)           /* строка находок (baseline) */
+#define WF_Y (STATE_Y + 33)             /* водопад отсюда и до низа */
 
 #define LISTEN_TIMEOUT_MS 5000
 #define SQL_DELAY_MS 30
@@ -83,6 +93,8 @@ static bool isListening;     /* HOLD: стоим и слушаем */
 static bool scanning = true; /* false = пауза (ручная перестройка) */
 static bool waterfall = true;
 static bool dacOn;
+static bool monitorMode;  /* слушать и белый список */
+static bool captureOnExit; /* MENU: оставить частоту в VFO */
 static uint32_t listenUntil;
 static uint8_t closedSteps;
 static uint32_t lastSpRender;
@@ -168,6 +180,14 @@ static void scanStep() {
   if (curF % 1300000 == 0)
     open = false; /* гармоники ПЧ — мусор */
 
+  /* чёрный (и белый вне мониторинга) список: не открываемся и не учим
+   * порог по сильному сигналу */
+  bool skipped = false;
+  if (open && !isListening && LOOT_IsSkipped(curF, monitorMode)) {
+    open = false;
+    skipped = true;
+  }
+
   if (open && !isListening) {
     /* подтверждение: повторный замер через паузу */
     delay_ms(SQL_DELAY_MS);
@@ -176,10 +196,10 @@ static void scanStep() {
       floorRssi++; /* ложное срабатывание — порог выше */
   }
 
-  if (!open)
+  if (!open && !skipped)
     floorRssi = (uint16_t)(((uint32_t)floorRssi * 15 + rssi + 8) / 16);
 
-  Loot m = {.f = curF, .rssi = rssi, .noise = 0, .open = open};
+  Measurement m = {.f = curF, .rssi = rssi, .noise = 0, .open = open};
   SP_AddPoint(&m);
   stepCount++;
 
@@ -188,19 +208,34 @@ static void scanStep() {
       isListening = true;
       listenUntil = millis() + LISTEN_TIMEOUT_MS;
     }
+    /* учёт находки: добавить/обновить, копить длительность */
+    LOOT_Hit(curF, rssi, vfos[currentVfo].modulation, vfos[currentVfo].bw,
+             vfos[currentVfo].radio);
     setAudio(true);
     if (millis() > listenUntil) {
       isListening = false;
       setAudio(false);
+      LOOT_Standby();
       advance();
     }
   } else {
     if (isListening) {
       isListening = false;
       setAudio(false);
+      LOOT_Standby();
     }
     advance();
   }
+}
+
+/* Закончить удержание и идти дальше (после занесения в список) */
+static void releaseHold() {
+  if (isListening) {
+    isListening = false;
+    setAudio(false);
+  }
+  LOOT_Standby();
+  advance();
 }
 
 class ScannerMode : public Mode {
@@ -219,6 +254,7 @@ public:
     BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
     dacOn = false;
     Radio_ScanAudio(false);
+    captureOnExit = false;
   }
 
   void update() override {
@@ -271,11 +307,30 @@ public:
             "%s %u.%05u", state, curF / 100000, curF % 100000);
     PrintfT(LCD_WIDTH - 4, STATE_Y + 12,
             text_style(C_YELLOW, C_BLACK, POS_R, F_SM), "%4u/s", stepsPerSec);
+
+    /* строка находок: последняя находка (+белый/-чёрный), сколько назад;
+     * справа — размер списка и режим мониторинга */
+    const Loot *ll = gLastActiveLoot;
+    if (ll) {
+      uint32_t ago = LOOT_SecondsAgo(ll);
+      PrintfT(4, INFO_Y, text_style(C_WHITE, C_BLACK, POS_L, F_SM),
+              "%c%u.%05u %2u:%02u", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ',
+              (unsigned)(ll->f / MHZ), (unsigned)(ll->f % MHZ),
+              (unsigned)(ago / 60 % 100), (unsigned)(ago % 60));
+    } else {
+      PrintfT(4, INFO_Y, text_style(C_GRAY, C_BLACK, POS_L, F_SM),
+              "no loot yet     ");
+    }
+    PrintfT(LCD_WIDTH - 4, INFO_Y,
+            text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_SS),
+            "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "    ");
   }
 
   void exit() override {
     setAudio(false);
-    vfos[currentVfo].rxF = savedFreq; /* не тащим позицию скана в VFO */
+    LOOT_Standby();
+    if (!captureOnExit)
+      vfos[currentVfo].rxF = savedFreq; /* не тащим позицию скана в VFO */
     currentVfo = savedVfo;
   }
 
@@ -284,13 +339,28 @@ public:
       return true;
 
     if (state == KEY_LONG_PRESSED) {
-      if (k == KEY_HASH) { /* пауза/продолжить */
+      switch (k) {
+      case KEY_HASH: /* пауза/продолжить */
         scanning = !scanning;
         isListening = false;
         setAudio(!scanning); /* в паузе слышно текущую частоту */
         return true;
+      case KEY_MENU: /* список находок */
+        LOOTLIST_OpenFrom(MODE_SCANNER);
+        return true;
+      case KEY_SIDE1: /* водопад вкл/выкл */
+        waterfall = !waterfall;
+        if (!waterfall) {
+          WF_Reset();
+          FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+        }
+        return true;
+      case KEY_SIDE2: /* мониторинг: слушать и белый список */
+        monitorMode = !monitorMode;
+        return true;
+      default:
+        return false;
       }
-      return false;
     }
 
     if (state != KEY_RELEASED)
@@ -300,6 +370,7 @@ public:
     case KEY_MENU: /* захватить в VFO и выйти */
       currentVfo = savedVfo;
       Radio_TuneToAuto(curF);
+      captureOnExit = true; /* exit() иначе вернул бы прежнюю частоту */
       Mode_Switch(MODE_VFO);
       return true;
     case KEY_EXIT:
@@ -309,11 +380,16 @@ public:
       if (!NumVal_IsEditing(&numVal[endFSel ? 1 : 0]))
         endFSel = !endFSel;
       return true;
-    case KEY_SIDE1: /* водопад вкл/выкл */
-      waterfall = !waterfall;
-      if (!waterfall) {
-        WF_Reset();
-        FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+    case KEY_SIDE1: /* в чёрный список и дальше */
+      if (gLastActiveLoot) {
+        LOOT_BlacklistLast();
+        releaseHold();
+      }
+      return true;
+    case KEY_SIDE2: /* в белый список и дальше */
+      if (gLastActiveLoot) {
+        LOOT_WhitelistLast();
+        releaseHold();
       }
       return true;
     case KEY_STAR:

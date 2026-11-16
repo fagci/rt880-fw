@@ -224,6 +224,21 @@ static uint32_t fnv1a(const char *s, uint16_t *len_out) {
   return h;
 }
 
+/* Удалить все лейблы пула (Printf*): нативные LVGL-экраны (VFO, список
+ * находок) не должны получать «призраков» чужого режима поверх себя.
+ * Следующий Printf* пересоздаст нужные лейблы лениво. */
+void UI_ReleaseLabels(void) {
+  if (!s_lvgl_ready)
+    return;
+  for (uint8_t i = 0; i < LABEL_POOL; i++) {
+    if (!s_pool[i].used)
+      continue;
+    if (s_pool[i].label)
+      lv_obj_del(s_pool[i].label);
+    s_pool[i] = LabelSlot{};
+  }
+}
+
 void UI_ClearScreen(Color bg) {
   if (s_lvgl_ready) {
     /* Не удаляем лейблы — сбрасываем хеши: при следующем PrintfEx текст

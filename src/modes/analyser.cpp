@@ -236,7 +236,7 @@ public:
     for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
       Radio_TuneTo(anaCtx.scanF, false);
       BK4819_SelectChip(0);
-      Loot m = {
+      Measurement m = {
           .f = anaCtx.scanF,
           .rssi = BK4819_GetRSSI(),
           .noise = 0,
