@@ -34,6 +34,7 @@ static bool bkDacOn[2] = {false, false};
 static bool siMuted = true; /* SI стартует замьюченным (громкость 0) */
 static bool afMuteOn = false;
 static bool s_pendingApply; /* SwitchToVfo отложил тяжёлое применение */
+static bool s_bootMute;     /* старт: не открывать звук до первого опроса шумодава */
 
 /* Как часто BK «бегает» по закреплённым VFO и сколько сидит на каждом */
 #define MON_DWELL_MS 120
@@ -159,7 +160,7 @@ static void applyVfo(bool precise) {
   }
 
   if (precise)
-    applyMute(true);
+    applyMute(!s_bootMute);
 }
 
 /* ── Мониторинг: один BK крутится по закреплённым VFO ──────────
@@ -243,6 +244,9 @@ void Radio_Init(void) {
     BK4819_RX_TurnOn();
     BK4819_SetAFC(0);
     BK4819_SetAGC(true, 1);
+    /* RX_TurnOn включает AF DAC — выключаем, учёт bkDacOn = false верен.
+       Иначе на старте шипит до первого опроса шумодава. */
+    BK4819_ToggleAFDAC(false);
   }
 
   /* RST и бит-банг I2C SI4732 — без этого чип в ресете, IsAlive = false */
@@ -252,7 +256,9 @@ void Radio_Init(void) {
   s_pendingApply = false;
   siMuted = true; /* SI ещё не включён: при включении включим громкость */
   bkDacOn[0] = bkDacOn[1] = false;
+  s_bootMute = true;
   applyVfo(true);
+  s_bootMute = false;
 }
 
 /* Каждый update-цикл: шумодав активного VFO + мониторинг. */
@@ -315,7 +321,9 @@ void Radio_SwitchToVfo(uint8_t idx) {
 void Radio_ApplyPending(void) {
   if (s_pendingApply) {
     s_pendingApply = false;
+    uint32_t t0 = millis();
     applyVfo(true);
+    Log("vfo apply %lu ms", (unsigned long)(millis() - t0));
   }
 }
 

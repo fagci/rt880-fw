@@ -351,7 +351,11 @@ public:
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
        радио-применение (патч SSB): переключение VFO отзывается
        мгновенно, загрузка патча идёт уже после кадра. */
+    uint32_t t0 = millis();
     lv_timer_handler();
+    uint32_t dt = millis() - t0;
+    if (dt > 15)
+      Log("lvgl %lu ms", (unsigned long)dt);
     Radio_ApplyPending();
   }
 
