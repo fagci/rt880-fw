@@ -7,6 +7,7 @@
  * курсор и позиционирование — здесь.
  */
 #include "vfo.h"
+#include "at32f423.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
@@ -203,6 +204,16 @@ public:
   void enter() override {
     Log("vfo enter inv=%u", gInverted);
     Log("build %s %s", __DATE__, __TIME__);
+    {
+      /* диагностика тактирования: SCLK/APB2 и реальная скорость цикла */
+      uint32_t t0 = millis();
+      for (volatile uint32_t i = 0; i < 200000; i++) {
+      }
+      Log("clk %lu MHz sel=%u ahb=%u apb2=%u", (unsigned long)(SystemCoreClock / 1000000UL),
+          (unsigned)CRM->cfg_bit.sclksts, (unsigned)CRM->cfg_bit.ahbdiv,
+          (unsigned)CRM->cfg_bit.apb2div);
+      Log("loop200k=%lu ms", (unsigned long)(millis() - t0));
+    }
     UI_ClearScreen(C_BLACK);
     Radio_Init();
     buildScreen();
