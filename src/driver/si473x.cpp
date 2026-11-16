@@ -64,14 +64,8 @@ static void sda_output(void) {
 }
 
 static void i2c_delay(void) {
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
-  __NOP();
+  /* Было 8 NOP — рассчитано на ядро 8 МГц. Теперь 150 МГц: по времени. */
+  delay_us(2);
 }
 
 static void i2c_start(void) {

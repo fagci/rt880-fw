@@ -209,9 +209,8 @@ public:
       uint32_t t0 = millis();
       for (volatile uint32_t i = 0; i < 200000; i++) {
       }
-      Log("clk %lu MHz sel=%u ahb=%u apb2=%u", (unsigned long)(SystemCoreClock / 1000000UL),
-          (unsigned)CRM->cfg_bit.sclksts, (unsigned)CRM->cfg_bit.ahbdiv,
-          (unsigned)CRM->cfg_bit.apb2div);
+      Log("clk %lu MHz sel=%u stage=%02X", (unsigned long)(SystemCoreClock / 1000000UL),
+          (unsigned)CRM->cfg_bit.sclksts, (unsigned)g_clockStage);
       Log("loop200k=%lu ms", (unsigned long)(millis() - t0));
     }
     UI_ClearScreen(C_BLACK);

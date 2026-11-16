@@ -8,41 +8,62 @@
 
 volatile uint32_t tick_ms = 0;
 
-// HEXT=8MHz → PLL → SCLK=150MHz
-// 150 = (8/1) * 150/4/2
+// SCLK=150 МГц: (8 МГц * 150 / 1) / 4 / 2. Источник PLL — HEXT; если кварц
+// не завёлся — HICK (тоже 8 МГц в этой конфигурации).
+// Раньше переключение выполнялось «в лоб» без auto step mode (обязателен
+// для >108 МГц): sclksts не становился PLL, цикл ожидания тихо истекал и
+// ядро оставалось на 8 МГц (SPI 4 Мбит/с, LVGL в ~19 раз медленнее).
+// g_clockStage — для диагностики: 1 HEXT ok, 2 PLL от HICK, 3 PLL залочен,
+// 4 SCLK=PLL; 0x8x — отказ на соответствующей стадии.
+uint8_t g_clockStage;
+
+static bool wait_flag(uint32_t flag, uint32_t n) {
+  while (crm_flag_get(flag) == RESET)
+    if (!--n)
+      return false;
+  return true;
+}
+
 static void clock_init(void) {
   flash_psr_set(FLASH_WAIT_CYCLE_4);
 
-  CRM->ctrl_bit.hexten = TRUE;
-  uint32_t t = 50000;
-  while (!CRM->ctrl_bit.hextstbl && --t)
-    ;
-  if (!t) {
+  crm_pll_clock_source_type src = CRM_PLL_SOURCE_HEXT;
+  crm_clock_source_enable(CRM_CLOCK_SOURCE_HEXT, TRUE);
+  if (wait_flag(CRM_HEXT_STABLE_FLAG, 200000)) {
+    g_clockStage = 1;
+  } else {
+    crm_clock_source_enable(CRM_CLOCK_SOURCE_HEXT, FALSE);
+    src = CRM_PLL_SOURCE_HICK;
+    g_clockStage = 2;
+  }
+
+  crm_pll_config(src, 150, 1, CRM_PLL_FR_4);
+  crm_clock_source_enable(CRM_CLOCK_SOURCE_PLL, TRUE);
+  if (!wait_flag(CRM_PLL_STABLE_FLAG, 200000)) {
+    g_clockStage |= 0x80;
     flash_psr_set(FLASH_WAIT_CYCLE_0);
     return;
   }
+  g_clockStage = 3;
 
-  CRM->pllcfg_bit.pllrcs = 1;
-  CRM->pllcfg_bit.pllms = 1;
-  CRM->pllcfg_bit.pllns = 150;
-  CRM->pllcfg_bit.pllfr = 2;
+  crm_ahb_div_set(CRM_AHB_DIV_1);
+  crm_apb1_div_set(CRM_APB1_DIV_2);
+  crm_apb2_div_set(CRM_APB2_DIV_1);
 
-  CRM->ctrl_bit.pllen = TRUE;
-  t = 50000;
-  while (!CRM->ctrl_bit.pllstbl && --t)
+  crm_auto_step_mode_enable(TRUE);
+  crm_sysclk_switch(CRM_SCLK_PLL);
+  uint32_t t = 200000;
+  while (crm_sysclk_switch_status_get() != CRM_SCLK_PLL && --t)
     ;
+  crm_auto_step_mode_enable(FALSE);
+
   if (!t) {
+    g_clockStage |= 0x80;
     flash_psr_set(FLASH_WAIT_CYCLE_0);
+    system_core_clock_update();
     return;
   }
-
-  CRM->cfg_bit.ahbdiv = 0;
-  CRM->cfg_bit.apb1div = 4;
-  CRM->cfg_bit.apb2div = 0;
-  CRM->cfg_bit.sclksel = CRM_SCLK_PLL;
-  t = 50000;
-  while (CRM->cfg_bit.sclksts != CRM_SCLK_PLL && --t)
-    ;
+  g_clockStage = 4;
 
   system_core_clock_update();
 }
@@ -106,6 +127,13 @@ void rt880_adc_init(void) {
   g.gpio_mode = GPIO_MODE_ANALOG;
   g.gpio_pins = GPIO_PINS_7;
   gpio_init(GPIOA, &g);
+
+  // Тактирование ADC: при 150 МГц ядра hclk/16 ≈ 9.4 МГц (раньше было 4 МГц
+  // на 8 МГц) — резистивная лестница клавиш требует длинного семплирования
+  adc_common_config_type adc_com;
+  adc_common_default_para_init(&adc_com);
+  adc_com.div = ADC_HCLK_DIV_16;
+  adc_common_config(&adc_com);
 
   // ADC: одиночное преобразование, без прерываний
   adc_base_config_type adc_cfg;

@@ -72,7 +72,7 @@ static void spi_hw_init(void) {
   spi_default_para_init(&s);
   s.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
   s.master_slave_mode = SPI_MODE_MASTER;
-  s.mclk_freq_division = SPI_MCLK_DIV_2;
+  s.mclk_freq_division = SPI_MCLK_DIV_4; /* 150/4 = 37.5 МГц */
   s.first_bit_transmission = SPI_FIRST_BIT_MSB;
   s.frame_bit_num = SPI_FRAME_8BIT;
   s.clock_polarity = SPI_CLOCK_POLARITY_LOW;

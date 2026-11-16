@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 extern volatile uint32_t tick_ms;
+extern uint8_t g_clockStage; /* стадия clock_init (диагностика) */
 
 static const gpio_pin_t PIN_LED_GREEN =
     GPIO_PIN(GPIOA, GPIO_PINS_13, CRM_GPIOA_PERIPH_CLOCK);

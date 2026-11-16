@@ -73,7 +73,7 @@ static BK4819_Chip g_chips[2] = {
 static BK4819_Chip *g_bk = &g_chips[0];
 
 // период полутакта SPI в нс
-#define BK_SPI_HALF_PERIOD_NS 16u // ~4 МГц SPI (безопасно, макс 8 МГц)
+#define BK_SPI_HALF_PERIOD_NS 125u // ~4 МГц SPI (макс 8 МГц); 125 нс = 1 такт при 8 МГц, как было отлажено
 
 static inline void bk_delay(void) {
   // cycles = (CoreClock_MHz * ns) / 1000
