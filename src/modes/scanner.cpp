@@ -101,6 +101,13 @@ static uint8_t warm;        /* шагов калибровки шума посл
 static uint8_t creepCnt;    /* медленный подъём порога в HOLD на «шуме» */
 static uint8_t savedStep;   /* шаг VFO сканера на входе */
 static bool monitorMode;  /* слушать и белый список */
+/* Тест второго BK (U400/B): на каждом шаге B настраивается на ту же частоту,
+ * на экране — RSSI обоих. По схеме RT880 V2 вход B к антенне не подключён
+ * (RSSI низкий); с сигналом на LNAIN/после доработки платы видно, слышит ли B
+ * и насколько согласован с A. ALARM — вкл/выкл (замедляет скан). */
+static bool probeB;
+static uint16_t probeRssiA, probeRssiB;
+static uint8_t scanChip; /* чип, которым сканируем (A) */
 static bool captureOnExit; /* MENU: оставить частоту в VFO */
 static uint32_t listenUntil;
 static uint8_t closedSteps;
@@ -188,6 +195,15 @@ static void scanStep() {
   tuneHere();
   delay_us(DWELL_US[dwellIdx]);
   uint16_t rssi = BK4819_GetRSSI();
+
+  if (probeB) { /* B на ту же частоту, замер, возврат на A */
+    probeRssiA = rssi;
+    BK4819_SelectChip(1);
+    BK4819_TuneTo(curF, false);
+    delay_us(DWELL_US[dwellIdx]);
+    probeRssiB = BK4819_GetRSSI();
+    BK4819_SelectChip(scanChip);
+  }
 
   /* калибровка шума после смены диапазона: быстрое усреднение, без поиска.
    * Иначе заниженная первая выборка давала порог ниже шума — «всё открыто»,
@@ -299,7 +315,9 @@ public:
 
     initNumVals();
     onRangeChanged();
-    BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
+    scanChip = vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0;
+    BK4819_SelectChip(scanChip);
+    probeB = false;
     dacOn = false;
     Radio_ScanAudio(false);
     captureOnExit = false;
@@ -384,9 +402,16 @@ public:
       PrintfT(4, INFO_Y, text_style(C_GRAY, C_BLACK, POS_L, F_SM),
               "no loot yet     ");
     }
-    PrintfT(LCD_WIDTH - 4, INFO_Y,
-            text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_SS),
-            "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "    ");
+    if (probeB) {
+      /* A и B: RSSI в дБм на текущей частоте (B ≈ A при подключённом входе) */
+      PrintfT(LCD_WIDTH - 4, INFO_Y,
+              text_style(C_YELLOW, C_BLACK, POS_R, F_SS), "A%d B%d  ",
+              (int)(probeRssiA >> 1) - 160, (int)(probeRssiB >> 1) - 160);
+    } else {
+      PrintfT(LCD_WIDTH - 4, INFO_Y,
+              text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_SS),
+              "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "    ");
+    }
   }
 
   void exit() override {
@@ -467,6 +492,9 @@ public:
         LOOT_WhitelistLast();
         releaseHold();
       }
+      return true;
+    case KEY_ALARM: /* тест второго BK: RSSI A и B на одной частоте */
+      probeB = !probeB;
       return true;
     case KEY_STAR:
       NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);
