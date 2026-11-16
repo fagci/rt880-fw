@@ -64,8 +64,12 @@ static uint8_t savedVfo;
 static uint32_t savedFreq; /* частота сканирующего VFO на входе */
 
 /* скорость сканирования: выдержка на частоте до замера RSSI */
-static const uint16_t DWELL_US[] = {0, 200, 500, 1000};
-static uint8_t dwellIdx = 1;
+/* На 8 МГц накладные расходы SPI/GPIO давали эффективную паузу в сотни мкс;
+ * на 150 МГц её нет — RSSI после перестройки не успевает устояться.
+ * По умолчанию 1000 мкс, UP/DOWN меняет (отображается в центре над спектром). */
+static const uint16_t DWELL_US[] = {250, 500, 1000, 2000, 4000};
+#define DWELL_N (sizeof(DWELL_US) / sizeof(DWELL_US[0]))
+static uint8_t dwellIdx = 2;
 
 static uint32_t stepCount;
 static uint32_t lastCpsTime;
@@ -255,6 +259,11 @@ public:
         WF_Render(WF_Y, true);
     }
 
+    /* выдержка на частоте — между полями границ (мелким шрифтом) */
+    PrintfT(LCD_XCENTER, SPECTRUM_Y - 6,
+            text_style(C_GRAY, C_BLACK, POS_C, F_SS), "%uus",
+            (unsigned)DWELL_US[dwellIdx]);
+
     /* строка состояния: SCAN/HOLD/PAUSE + частота + скорость */
     char state[6];
     strcpy(state, !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN"));
@@ -315,7 +324,7 @@ public:
         advance();
         tuneHere();
       } else {
-        dwellIdx = (dwellIdx + 1) % 4;
+        dwellIdx = (dwellIdx + 1) % DWELL_N;
       }
       return true;
     case KEY_DOWN:
@@ -325,7 +334,7 @@ public:
                                             : curF - step;
         tuneHere();
       } else {
-        dwellIdx = (dwellIdx + 3) % 4;
+        dwellIdx = (dwellIdx + DWELL_N - 1) % DWELL_N;
       }
       return true;
     default:
