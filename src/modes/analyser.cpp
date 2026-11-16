@@ -386,6 +386,7 @@ static NumVal_t *editingVal(void) {
 }
 
 #define SCAN_STEPS_PER_UPDATE 128
+#define ANA_DWELL_US 600 /* выдержка на точке перед чтением RSSI */
 
 class AnalyserMode : public Mode {
 public:
@@ -448,6 +449,9 @@ public:
       if (covered) {
         Radio_TuneTo(anaCtx.scanF, false);
         BK4819_SelectChip(0);
+        /* без паузы RSSI читается до установления ПЛЛ/АРУ и «размазывает»
+         * пики вдоль прохода (кривая горка) */
+        delay_us(ANA_DWELL_US);
       }
       Measurement m = {
           .f = anaCtx.scanF,

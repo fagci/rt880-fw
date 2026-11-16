@@ -85,8 +85,10 @@ static void update_levels(void) {
     lvlInit = true;
     return;
   }
-  lvlLo = mn < lvlLo ? mn : lvlLo + (mn - lvlLo) / 16;
-  lvlHi = mx > lvlHi ? mx : lvlHi - (lvlHi - mx) / 32;
+  /* медленно в обе стороны: один выброс не должен менять яркость всей
+   * строки (горизонтальные полосы в водопаде) */
+  lvlLo += (mn - lvlLo) / (mn < lvlLo ? 8 : 32);
+  lvlHi += (mx - lvlHi) / (mx > lvlHi ? 8 : 64);
 }
 
 static uint8_t getPalIndex(uint16_t rssi) {
