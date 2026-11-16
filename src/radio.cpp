@@ -46,42 +46,74 @@ static uint32_t s_lastMon;
  * VFO получает модуляцию и шаг по умолчанию для диапазона. Первое
  * совпадение выигрывает — узкие диапазоны стоят раньше общих.
  * Границы в кГц: начало включительно, конец исключительно. */
+/* Группы диапазонов: SIDE1/SIDE2 перебирают диапазоны своей группы.
+ * BC — вещание (AM/WFM), HAM — любительские SSB, SVC — службы (CB, авиа,
+ * 2 м/70 см, морской, PMR). Общие диапазоны вне групп. */
+typedef enum { CAT_BC, CAT_HAM, CAT_SVC, CAT_COUNT, CAT_NONE = 0xFF } BandCat;
+
 typedef struct {
   uint32_t startKhz;
   uint32_t endKhz;
   uint8_t mod;
   uint8_t step;
   const char *name;
+  uint8_t cat;
   bool loop; /* шаг UP/DOWN зацикливается внутри диапазона; выбирается SIDE1/2 */
 } BandPlan;
 
+#define BC(a, b, m, st, nm) {a, b, m, st, nm, CAT_BC, true}
+#define HAM(a, b, m, st, nm) {a, b, m, st, nm, CAT_HAM, true}
+#define SVC(a, b, m, st, nm) {a, b, m, st, nm, CAT_SVC, true}
+
+/* Первое совпадение выигрывает; общие диапазоны (loop=false) — в конце.
+ * V/UHF: пока везде FM и шаг 25 кГц (авиа — AM). */
 static const BandPlan PLAN[] = {
-    /* КВ-любительские: ниже 10 МГц LSB, выше USB */
-    {1800, 2000, MOD_LSB, STEP_1_0kHz, "160m", true},
-    {3500, 4000, MOD_LSB, STEP_1_0kHz, "80m", true},
-    {5300, 5410, MOD_USB, STEP_1_0kHz, "60m", true},
-    {7000, 7200, MOD_LSB, STEP_1_0kHz, "40m", true},
-    {7200, 7450, MOD_AM, STEP_5_0kHz, "41m BC", true},
-    {10100, 10150, MOD_USB, STEP_1_0kHz, "30m", true},
-    {14000, 14350, MOD_USB, STEP_1_0kHz, "20m", true},
-    {18068, 18168, MOD_USB, STEP_1_0kHz, "17m", true},
-    {21000, 21450, MOD_USB, STEP_1_0kHz, "15m", true},
-    {24890, 24990, MOD_USB, STEP_1_0kHz, "12m", true},
-    {26965, 27405, MOD_AM, STEP_10_0kHz, "CB", true},
-    {28000, 29700, MOD_USB, STEP_1_0kHz, "10m", true},
-    {150, 1800, MOD_AM, STEP_9_0kHz, "LW/MW", true},
-    {1800, 30000, MOD_AM, STEP_5_0kHz, "HF", false}, /* прочий КВ: вещание */
-    /* УКВ */
-    {64000, 108000, MOD_WFM, STEP_100_0kHz, "FM BC", true}, /* на SI4732 */
-    {118000, 136000, MOD_AM, STEP_25_0kHz, "AIR", true},
-    {144000, 146000, MOD_FM, STEP_12_5kHz, "2m", true},
-    {156000, 163000, MOD_FM, STEP_25_0kHz, "MARINE", true},
-    {30000, 1340000, MOD_FM, STEP_12_5kHz, "V/UHF", false},
+    /* вещание: ДВ/СВ и все КВ-вещательные */
+    BC(153, 279, MOD_AM, STEP_9_0kHz, "LW"),
+    BC(520, 1710, MOD_AM, STEP_9_0kHz, "MW"),
+    BC(2300, 2495, MOD_AM, STEP_5_0kHz, "120m BC"),
+    BC(3200, 3400, MOD_AM, STEP_5_0kHz, "90m BC"),
+    BC(3900, 4000, MOD_AM, STEP_5_0kHz, "75m BC"),
+    BC(4750, 5060, MOD_AM, STEP_5_0kHz, "60m BC"),
+    BC(5900, 6200, MOD_AM, STEP_5_0kHz, "49m BC"),
+    BC(7200, 7450, MOD_AM, STEP_5_0kHz, "41m BC"),
+    BC(9400, 9900, MOD_AM, STEP_5_0kHz, "31m BC"),
+    BC(11600, 12100, MOD_AM, STEP_5_0kHz, "25m BC"),
+    BC(13570, 13870, MOD_AM, STEP_5_0kHz, "22m BC"),
+    BC(15100, 15800, MOD_AM, STEP_5_0kHz, "19m BC"),
+    BC(17480, 17900, MOD_AM, STEP_5_0kHz, "16m BC"),
+    BC(18900, 19020, MOD_AM, STEP_5_0kHz, "15m BC"),
+    BC(21450, 21850, MOD_AM, STEP_5_0kHz, "13m BC"),
+    BC(25670, 26100, MOD_AM, STEP_5_0kHz, "11m BC"),
+    BC(64000, 108000, MOD_WFM, STEP_100_0kHz, "FM BC"), /* на SI4732 */
+    /* любительские КВ (SSB): ниже 10 МГц LSB, выше USB */
+    HAM(1800, 2000, MOD_LSB, STEP_1_0kHz, "160m"),
+    HAM(3500, 3800, MOD_LSB, STEP_1_0kHz, "80m"),
+    HAM(5300, 5410, MOD_USB, STEP_1_0kHz, "60m"),
+    HAM(7000, 7200, MOD_LSB, STEP_1_0kHz, "40m"),
+    HAM(10100, 10150, MOD_USB, STEP_1_0kHz, "30m"),
+    HAM(14000, 14350, MOD_USB, STEP_1_0kHz, "20m"),
+    HAM(18068, 18168, MOD_USB, STEP_1_0kHz, "17m"),
+    HAM(21000, 21450, MOD_USB, STEP_1_0kHz, "15m"),
+    HAM(24890, 24990, MOD_USB, STEP_1_0kHz, "12m"),
+    HAM(28000, 29700, MOD_USB, STEP_1_0kHz, "10m"),
+    /* службы */
+    SVC(26965, 27405, MOD_AM, STEP_10_0kHz, "CB"),
+    SVC(118000, 136000, MOD_AM, STEP_25_0kHz, "AIR"),
+    SVC(144000, 146000, MOD_FM, STEP_25_0kHz, "2m"),
+    SVC(156000, 163000, MOD_FM, STEP_25_0kHz, "MARINE"),
+    SVC(430000, 440000, MOD_FM, STEP_25_0kHz, "70cm"),
+    SVC(446000, 446200, MOD_FM, STEP_25_0kHz, "PMR446"),
+    /* общие: без зацикливания и без группы */
+    {100, 30000, MOD_AM, STEP_5_0kHz, "HF", CAT_NONE, false},
+    {30000, 1340000, MOD_FM, STEP_25_0kHz, "V/UHF", CAT_NONE, false},
 };
 #define PLAN_N (sizeof(PLAN) / sizeof(PLAN[0]))
 
 /* последняя частота в каждом диапазоне — при возврате SIDE1/2 */
 static uint32_t s_bandMem[PLAN_N];
+/* последний диапазон, где были в группе — при переключении группы */
+static int8_t s_groupLast[CAT_COUNT] = {-1, -1, -1};
 
 static int8_t findPlanIdx(uint32_t f) {
   uint32_t khz = f / 100; /* 10 Гц → кГц */
@@ -397,18 +429,41 @@ void Radio_TuneStep(int8_t dir) {
   Radio_TuneTo((uint32_t)nf, changed); /* смена модуляции — только precise */
 }
 
-/* Выбор диапазона: следующий/предыдущий по частоте среди «петлевых».
- * Частота возвращается к последней, на которой были в этом диапазоне. */
+/* Группа, в которой сейчас VFO: по диапазону, а вне диапазонов — по
+ * модуляции (SSB — любительские, AM/WFM — вещание, FM — службы). */
+static uint8_t currentCat(const VFO *v) {
+  int8_t i = findPlanIdx(v->rxF);
+  if (i >= 0 && PLAN[i].cat != CAT_NONE)
+    return PLAN[i].cat;
+  if (v->modulation == MOD_LSB || v->modulation == MOD_USB)
+    return CAT_HAM;
+  if (v->modulation == MOD_AM || v->modulation == MOD_WFM)
+    return CAT_BC;
+  return CAT_SVC;
+}
+
+static void gotoBand(int8_t t) {
+  uint32_t f = s_bandMem[t] ? s_bandMem[t] : PLAN[t].startKhz * 100;
+  s_groupLast[PLAN[t].cat] = t;
+  Radio_TuneToAuto(f); /* модуляция и шаг диапазона */
+}
+
+/* Выбор диапазона: следующий/предыдущий по частоте В СВОЕЙ ГРУППЕ
+ * (вещание — вещание, SSB — SSB-диапазоны). Частота возвращается к
+ * последней, на которой были в этом диапазоне. */
 void Radio_NextBand(int8_t dir) {
   VFO *v = &vfos[currentVfo];
   int8_t cur = findPlanIdx(v->rxF);
   if (cur >= 0)
     s_bandMem[cur] = v->rxF;
+  uint8_t cat = currentCat(v);
 
-  uint32_t key = cur >= 0 && PLAN[cur].loop ? PLAN[cur].startKhz : v->rxF / 100;
+  uint32_t key = (cur >= 0 && PLAN[cur].loop && PLAN[cur].cat == cat)
+                     ? PLAN[cur].startKhz
+                     : v->rxF / 100;
   int8_t best = -1, edge = -1; /* ближайший по направлению / крайний (оборот) */
   for (uint8_t i = 0; i < PLAN_N; i++) {
-    if (!PLAN[i].loop)
+    if (!PLAN[i].loop || PLAN[i].cat != cat)
       continue;
     uint32_t s = PLAN[i].startKhz;
     if (dir > 0) {
@@ -424,10 +479,28 @@ void Radio_NextBand(int8_t dir) {
     }
   }
   int8_t t = best >= 0 ? best : edge;
-  if (t < 0)
-    return;
-  uint32_t f = s_bandMem[t] ? s_bandMem[t] : PLAN[t].startKhz * 100;
-  Radio_TuneToAuto(f); /* модуляция и шаг диапазона */
+  if (t >= 0)
+    gotoBand(t);
+}
+
+/* Следующая группа (вещание → любительские → службы → ...): на последний
+ * диапазон, где были в этой группе, или на её самый низкий. */
+void Radio_NextGroup(void) {
+  VFO *v = &vfos[currentVfo];
+  int8_t cur = findPlanIdx(v->rxF);
+  if (cur >= 0)
+    s_bandMem[cur] = v->rxF;
+  uint8_t ng = (currentCat(v) + 1) % CAT_COUNT;
+
+  int8_t t = s_groupLast[ng];
+  if (t < 0) {
+    for (uint8_t i = 0; i < PLAN_N; i++)
+      if (PLAN[i].loop && PLAN[i].cat == ng &&
+          (t < 0 || PLAN[i].startKhz < PLAN[t].startKhz))
+        t = i;
+  }
+  if (t >= 0)
+    gotoBand(t);
 }
 
 void Radio_NextVfo(void) { Radio_SwitchToVfo(currentVfo + 1); }

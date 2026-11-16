@@ -413,6 +413,9 @@ public:
       case KEY_0:
         Mode_Switch(MODE_RADIO);
         return true;
+      case KEY_SIDE1: /* группа диапазонов: вещание → SSB → службы */
+        Radio_NextGroup();
+        return true;
       case KEY_8: /* список находок */
         LOOTLIST_OpenFrom(MODE_VFO);
         return true;

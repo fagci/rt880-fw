@@ -92,7 +92,8 @@ void Radio_TuneToAuto(uint32_t f);
 /* модуляция и шаг активного VFO по плану диапазонов; false — вне плана */
 bool Radio_ApplyBandPlan(uint32_t f);
 const char *Radio_BandName(uint32_t f); /* "40m", "AIR"...; "" вне плана */
-void Radio_NextBand(int8_t dir);        /* +1/-1: следующий/пред. диапазон */
+void Radio_NextBand(int8_t dir);        /* +1/-1: следующий/пред. диапазон группы */
+void Radio_NextGroup(void);             /* группа: вещание → SSB → службы */
 void Radio_TuneStep(int8_t dir);
 void Radio_NextVfo(void);
 void Radio_SwitchToVfo(uint8_t idx);
