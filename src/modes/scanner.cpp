@@ -71,6 +71,7 @@ static FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
 static NumVal_t numVal[2];
 static bool endFSel;
 static uint8_t savedVfo;
+static uint8_t scanVfo;    /* VFO, которым сканируем (BK) */
 static uint32_t savedFreq; /* частота сканирующего VFO на входе */
 
 /* скорость сканирования: выдержка на частоте до замера RSSI */
@@ -249,7 +250,8 @@ public:
     if (vfos[currentVfo].radio != RADIO_BK4819A &&
         vfos[currentVfo].radio != RADIO_BK4819B)
       currentVfo = 0;
-    savedFreq = vfos[currentVfo].rxF; /* после Radio_Init */
+    scanVfo = currentVfo;
+    savedFreq = vfos[scanVfo].rxF; /* после Radio_Init */
 
     initNumVals();
     onRangeChanged();
@@ -331,9 +333,18 @@ public:
   void exit() override {
     setAudio(false);
     LOOT_Standby();
-    if (!captureOnExit)
-      vfos[currentVfo].rxF = savedFreq; /* не тащим позицию скана в VFO */
+    /* BK остаётся настроенным на последнюю частоту скана (и её фильтр
+     * диапазона) — возвращаем VFO сканера его частоту и настраиваем чип,
+     * иначе шумодав в VFO читается по чужой частоте. Исключение: MENU
+     * забрал частоту в тот же VFO (там уже precise-настройка). */
+    if (!(captureOnExit && scanVfo == savedVfo)) {
+      currentVfo = scanVfo;
+      vfos[scanVfo].rxF = savedFreq;
+      Radio_TuneTo(savedFreq, true); /* заодно приёмник, модуляция, шумодав */
+    }
     currentVfo = savedVfo;
+    Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
+                               дальше решает шумодав в VFO (Radio_Update) */
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {

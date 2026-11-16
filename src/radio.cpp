@@ -375,9 +375,27 @@ void Radio_Update(void) {
     BK4819_SelectChip(vfoChip(currentVfo));
 }
 
-/* Звук сканера: тот же путь, что и у VFO — учёт DAC/AF_MUTE общий,
-   иначе после выхода из сканера VFO думает, что DAC включён, и молчит. */
-void Radio_ScanAudio(bool on) { applyMute(on); }
+/* Звук сканера. Железо задаём ЯВНО и приводим в соответствие учёт
+   (bkDacOn/afMuteOn), а не сравниваем «хочу» с учётом: после манипуляций
+   в VFO (смена модуляции, SI↔BK, VFO) учёт расходился с реальным DAC/AF_MUTE
+   — сканер шипел при «закрытом» звуке, а после выхода шумодав не закрывался.
+   on=true — слышно активный BK (чип активного VFO); on=false — тишина везде. */
+void Radio_ScanAudio(bool on) {
+  uint8_t chip = vfoChip(currentVfo);
+  for (uint8_t c = 0; c < 2; c++) {
+    bool want = on && c == chip;
+    BK4819_SelectChip(c);
+    BK4819_ToggleAFDAC(want);
+    bkDacOn[c] = want;
+  }
+  BK4819_SelectChip(chip);
+  if (!siMuted) { /* SI во время скана молчит */
+    SI47XX_SetVolume(0);
+    siMuted = true;
+  }
+  gpio_pin_write(&PIN_AF_MUTE, on);
+  afMuteOn = on;
+}
 
 void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;

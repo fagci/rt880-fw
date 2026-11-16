@@ -32,6 +32,9 @@ struct {
   FRange range;
   uint32_t scanF;
   uint8_t savedVfo;
+  uint8_t scanVfo;     /* VFO, которым сканируем (BK-A) */
+  uint32_t savedFreq;  /* его частота на входе */
+  uint32_t captureF;   /* MENU: частота курсора — в VFO (0 = нет) */
   bool spectrumReady;
   uint32_t cursorTimeout;
   uint8_t cursorCenter;
@@ -211,10 +214,15 @@ static void onFreqInput(uint32_t val) {
 class AnalyserMode : public Mode {
 public:
   void enter() override {
-    anaCtx.savedVfo = currentVfo;
+    /* ВАЖНО: memset обнуляет весь anaCtx, включая savedVfo — сохраняем
+     * до него и пишем после (раньше выход всегда уходил в VFO 0) */
+    uint8_t entryVfo = currentVfo;
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
     memset(&anaCtx, 0, sizeof(anaCtx));
+    anaCtx.savedVfo = entryVfo;
+    anaCtx.scanVfo = currentVfo;
+    anaCtx.savedFreq = vfos[currentVfo].rxF;
     /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
      * в фиксированной зоне над водопадом (строка cursor info). */
     NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, WF_Y - 5, F_SM, 11, 12,
@@ -298,7 +306,20 @@ public:
   }
 
   void exit() override {
+    /* BK и rxF остались на последней точке скана — возвращаем VFO сканера
+     * его частоту и настраиваем чип (иначе шумодав читается по чужой
+     * частоте, а VFO уезжает). MENU на курсоре — забрать его частоту. */
+    if (anaCtx.captureF && anaCtx.scanVfo == anaCtx.savedVfo) {
+      currentVfo = anaCtx.savedVfo;
+      Radio_TuneToAuto(anaCtx.captureF); /* модуляция и шаг диапазона */
+    } else {
+      currentVfo = anaCtx.scanVfo;
+      vfos[currentVfo].rxF = anaCtx.savedFreq;
+      Radio_TuneTo(anaCtx.savedFreq, true);
+    }
     currentVfo = anaCtx.savedVfo;
+    Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
+                               дальше решает шумодав в VFO */
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
@@ -325,6 +346,9 @@ public:
 
     switch (k) {
     case KEY_MENU:
+      anaCtx.captureF = (anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout)
+                            ? xToFreq(anaCtx.cursorCenter)
+                            : 0;
       Mode_Switch(MODE_VFO);
       return true;
     case KEY_UP:
