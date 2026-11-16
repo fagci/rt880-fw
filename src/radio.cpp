@@ -51,38 +51,54 @@ typedef struct {
   uint32_t endKhz;
   uint8_t mod;
   uint8_t step;
+  const char *name;
+  bool loop; /* шаг UP/DOWN зацикливается внутри диапазона; выбирается SIDE1/2 */
 } BandPlan;
 
 static const BandPlan PLAN[] = {
     /* КВ-любительские: ниже 10 МГц LSB, выше USB */
-    {1800, 2000, MOD_LSB, STEP_1_0kHz},    /* 160 м */
-    {3500, 4000, MOD_LSB, STEP_1_0kHz},    /* 80 м */
-    {5300, 5410, MOD_USB, STEP_1_0kHz},    /* 60 м */
-    {7000, 7200, MOD_LSB, STEP_1_0kHz},    /* 40 м */
-    {7200, 7450, MOD_AM, STEP_5_0kHz},     /* 41 м вещание */
-    {10100, 10150, MOD_USB, STEP_1_0kHz},  /* 30 м */
-    {14000, 14350, MOD_USB, STEP_1_0kHz},  /* 20 м */
-    {18068, 18168, MOD_USB, STEP_1_0kHz},  /* 17 м */
-    {21000, 21450, MOD_USB, STEP_1_0kHz},  /* 15 м */
-    {24890, 24990, MOD_USB, STEP_1_0kHz},  /* 12 м */
-    {26965, 27405, MOD_AM, STEP_10_0kHz},  /* CB */
-    {28000, 29700, MOD_USB, STEP_1_0kHz},  /* 10 м */
-    {150, 1800, MOD_AM, STEP_9_0kHz},      /* ДВ/СВ */
-    {1800, 30000, MOD_AM, STEP_5_0kHz},    /* прочий КВ: вещание */
+    {1800, 2000, MOD_LSB, STEP_1_0kHz, "160m", true},
+    {3500, 4000, MOD_LSB, STEP_1_0kHz, "80m", true},
+    {5300, 5410, MOD_USB, STEP_1_0kHz, "60m", true},
+    {7000, 7200, MOD_LSB, STEP_1_0kHz, "40m", true},
+    {7200, 7450, MOD_AM, STEP_5_0kHz, "41m BC", true},
+    {10100, 10150, MOD_USB, STEP_1_0kHz, "30m", true},
+    {14000, 14350, MOD_USB, STEP_1_0kHz, "20m", true},
+    {18068, 18168, MOD_USB, STEP_1_0kHz, "17m", true},
+    {21000, 21450, MOD_USB, STEP_1_0kHz, "15m", true},
+    {24890, 24990, MOD_USB, STEP_1_0kHz, "12m", true},
+    {26965, 27405, MOD_AM, STEP_10_0kHz, "CB", true},
+    {28000, 29700, MOD_USB, STEP_1_0kHz, "10m", true},
+    {150, 1800, MOD_AM, STEP_9_0kHz, "LW/MW", true},
+    {1800, 30000, MOD_AM, STEP_5_0kHz, "HF", false}, /* прочий КВ: вещание */
     /* УКВ */
-    {64000, 108000, MOD_WFM, STEP_100_0kHz}, /* FM-вещание — на SI4732 */
-    {118000, 136000, MOD_AM, STEP_25_0kHz},  /* авиа */
-    {144000, 146000, MOD_FM, STEP_12_5kHz},  /* 2 м */
-    {156000, 163000, MOD_FM, STEP_25_0kHz},  /* морской */
-    {30000, 1340000, MOD_FM, STEP_12_5kHz},  /* прочее V/UHF */
+    {64000, 108000, MOD_WFM, STEP_100_0kHz, "FM BC", true}, /* на SI4732 */
+    {118000, 136000, MOD_AM, STEP_25_0kHz, "AIR", true},
+    {144000, 146000, MOD_FM, STEP_12_5kHz, "2m", true},
+    {156000, 163000, MOD_FM, STEP_25_0kHz, "MARINE", true},
+    {30000, 1340000, MOD_FM, STEP_12_5kHz, "V/UHF", false},
 };
+#define PLAN_N (sizeof(PLAN) / sizeof(PLAN[0]))
+
+/* последняя частота в каждом диапазоне — при возврате SIDE1/2 */
+static uint32_t s_bandMem[PLAN_N];
+
+static int8_t findPlanIdx(uint32_t f) {
+  uint32_t khz = f / 100; /* 10 Гц → кГц */
+  for (uint8_t i = 0; i < PLAN_N; i++)
+    if (khz >= PLAN[i].startKhz && khz < PLAN[i].endKhz)
+      return (int8_t)i;
+  return -1;
+}
 
 static const BandPlan *findPlan(uint32_t f) {
-  uint32_t khz = f / 100; /* 10 Гц → кГц */
-  for (uint8_t i = 0; i < sizeof(PLAN) / sizeof(PLAN[0]); i++)
-    if (khz >= PLAN[i].startKhz && khz < PLAN[i].endKhz)
-      return &PLAN[i];
-  return nullptr;
+  int8_t i = findPlanIdx(f);
+  return i < 0 ? nullptr : &PLAN[i];
+}
+
+const char *Radio_BandName(uint32_t f) {
+  const BandPlan *b = findPlan(f);
+  return b ? b->name : "";
 }
 
 /* Выставить модуляцию и шаг активного VFO по плану. false — вне плана. */
@@ -353,16 +369,65 @@ void Radio_TuneToAuto(uint32_t f) {
 
 void Radio_TuneStep(int8_t dir) {
   VFO *v = &vfos[currentVfo];
-  uint32_t step = StepFrequencyTable[v->step];
-  uint32_t nf = v->rxF + step * dir;
-  /* перешли в другой диапазон плана — берём его модуляцию и шаг */
-  const BandPlan *a = findPlan(v->rxF), *b = findPlan(nf);
+  int64_t step = StepFrequencyTable[v->step];
+  int64_t nf = (int64_t)v->rxF + step * dir;
+  const BandPlan *a = findPlan(v->rxF);
+
+  /* внутри диапазона шаг зацикливается: вверх за край — на начало,
+   * вниз за начало — на последнюю точку сетки у края */
+  if (a && a->loop) {
+    int64_t lo = (int64_t)a->startKhz * 100, hi = (int64_t)a->endKhz * 100;
+    if (nf >= hi)
+      nf = lo;
+    else if (nf < lo)
+      nf = lo + ((hi - 1 - lo) / step) * step;
+    Radio_TuneTo((uint32_t)nf, false);
+    return;
+  }
+
+  /* вне «петли» (общие диапазоны): вошли в другой — берём его модуляцию и шаг */
+  if (nf < 0)
+    nf = 0;
+  const BandPlan *b = findPlan((uint32_t)nf);
   bool changed = b && a != b;
   if (changed) {
     v->modulation = b->mod;
     v->step = static_cast<Step>(b->step);
   }
-  Radio_TuneTo(nf, changed); /* смена модуляции — только precise */
+  Radio_TuneTo((uint32_t)nf, changed); /* смена модуляции — только precise */
+}
+
+/* Выбор диапазона: следующий/предыдущий по частоте среди «петлевых».
+ * Частота возвращается к последней, на которой были в этом диапазоне. */
+void Radio_NextBand(int8_t dir) {
+  VFO *v = &vfos[currentVfo];
+  int8_t cur = findPlanIdx(v->rxF);
+  if (cur >= 0)
+    s_bandMem[cur] = v->rxF;
+
+  uint32_t key = cur >= 0 && PLAN[cur].loop ? PLAN[cur].startKhz : v->rxF / 100;
+  int8_t best = -1, edge = -1; /* ближайший по направлению / крайний (оборот) */
+  for (uint8_t i = 0; i < PLAN_N; i++) {
+    if (!PLAN[i].loop)
+      continue;
+    uint32_t s = PLAN[i].startKhz;
+    if (dir > 0) {
+      if (s > key && (best < 0 || s < PLAN[best].startKhz))
+        best = i;
+      if (edge < 0 || s < PLAN[edge].startKhz)
+        edge = i;
+    } else {
+      if (s < key && (best < 0 || s > PLAN[best].startKhz))
+        best = i;
+      if (edge < 0 || s > PLAN[edge].startKhz)
+        edge = i;
+    }
+  }
+  int8_t t = best >= 0 ? best : edge;
+  if (t < 0)
+    return;
+  uint32_t f = s_bandMem[t] ? s_bandMem[t] : PLAN[t].startKhz * 100;
+  Radio_TuneToAuto(f); /* модуляция и шаг диапазона */
 }
 
 void Radio_NextVfo(void) { Radio_SwitchToVfo(currentVfo + 1); }

@@ -63,6 +63,8 @@ static lv_obj_t *s_extraLbl[DEVICE_VFO_COUNT];
 static lv_obj_t *s_badgeLbl[DEVICE_VFO_COUNT];
 static lv_obj_t *s_modLbl[DEVICE_VFO_COUNT];
 static lv_obj_t *s_stepLbl[DEVICE_VFO_COUNT];
+static lv_obj_t *s_bandLbl[DEVICE_VFO_COUNT];
+static const char *s_prevBand[DEVICE_VFO_COUNT];
 static lv_obj_t *s_rssiBar[DEVICE_VFO_COUNT];
 static lv_obj_t *s_cursor;
 static lv_obj_t *s_filtLbl; /* один многострочный лейбл */
@@ -167,6 +169,8 @@ static void buildScreen(void) {
                             sy + 8, 36, LV_TEXT_ALIGN_RIGHT);
     s_modLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_GREEN), COL_RIGHT - 40,
                           sy + 18, 40, LV_TEXT_ALIGN_RIGHT);
+    s_bandLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_CYAN), 8, sy + 38, 100,
+                           LV_TEXT_ALIGN_LEFT);
     s_stepLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_YELLOW), COL_RIGHT - 72,
                            sy + 38, 72, LV_TEXT_ALIGN_RIGHT);
   }
@@ -190,6 +194,10 @@ static void setRowActive(uint8_t i, bool active) {
   if (s_badgeLbl[i])
     lv_obj_set_style_text_color(s_badgeLbl[i],
                               lvc(fgAd(active ? C_YELLOW : C_DARK)),
+                                LV_PART_MAIN);
+  if (s_bandLbl[i])
+    lv_obj_set_style_text_color(s_bandLbl[i],
+                                lvc(fgAd(active ? C_CYAN : C_GRAY)),
                                 LV_PART_MAIN);
   if (s_modLbl[i])
     lv_obj_set_style_text_color(s_modLbl[i],
@@ -217,6 +225,7 @@ public:
     memset(s_prevMon, 0xFF, sizeof(s_prevMon));
     memset(s_prevRssi, 0xFF, sizeof(s_prevRssi));
     memset(s_prevExtra, 0xFF, sizeof(s_prevExtra));
+    memset(s_prevBand, 0, sizeof(s_prevBand));
     s_prevStep = 0xFF;
     s_inited = false;
   }
@@ -297,6 +306,15 @@ public:
         s_prevMod[i] = vfos[i].modulation;
         s_prevMon[i] = vfos[i].monitor;
         s_prevRadio[i] = vfos[i].radio;
+      }
+
+      /* название диапазона плана (40m, AIR, FM BC...) */
+      if (s_bandLbl[i]) {
+        const char *bn = Radio_BandName(vfos[i].rxF);
+        if (first || bn != s_prevBand[i]) {
+          lv_label_set_text_static(s_bandLbl[i], bn);
+          s_prevBand[i] = bn;
+        }
       }
 
       if (s_stepLbl[i]) {
@@ -448,6 +466,12 @@ public:
       return true;
     case KEY_DOWN:
       Radio_TuneStep(-1);
+      return true;
+    case KEY_SIDE1: /* следующий диапазон */
+      Radio_NextBand(+1);
+      return true;
+    case KEY_SIDE2: /* предыдущий диапазон */
+      Radio_NextBand(-1);
       return true;
     case KEY_STAR: /* шаг перестройки */
       Radio_NextStep();
