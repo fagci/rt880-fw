@@ -362,15 +362,16 @@ public:
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
        радио-применение (патч SSB): переключение VFO отзывается
        мгновенно, загрузка патча идёт уже после кадра. */
-    uint32_t sc, spx, sms;
-    lv_port_stats(&sc, &spx, &sms); /* сброс */
+    uint32_t sc, spx, sms, spre;
+    lv_port_stats_begin();
     uint32_t t0 = millis();
     lv_timer_handler();
     uint32_t dt = millis() - t0;
     if (dt > 15) {
-      lv_port_stats(&sc, &spx, &sms);
-      Log("lvgl %lu ms fl=%lu px=%lu spi=%lu ms", (unsigned long)dt,
-          (unsigned long)sc, (unsigned long)spx, (unsigned long)sms);
+      lv_port_stats(&sc, &spx, &sms, &spre);
+      Log("lvgl %lu fl=%lu px=%lu spi=%lu pre=%lu", (unsigned long)dt,
+          (unsigned long)sc, (unsigned long)spx, (unsigned long)sms,
+          (unsigned long)spre);
     }
     Radio_ApplyPending();
   }

@@ -24,13 +24,22 @@ static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 
 /* Статистика flush: для профилирования (кадр >600 мс — это рендер или SPI?) */
-static uint32_t s_stCalls, s_stPx, s_stMs;
+static uint32_t s_stCalls, s_stPx, s_stMs, s_markT, s_pre = 0xFFFFFFFF;
 
-void lv_port_stats(uint32_t *calls, uint32_t *px, uint32_t *flushMs) {
+/* Начало замера: сброс счётчиков, метка времени */
+void lv_port_stats_begin(void) {
+  s_stCalls = s_stPx = s_stMs = 0;
+  s_markT = millis();
+  s_pre = 0xFFFFFFFF;
+}
+
+/* pre — мс от begin до начала первого flush (раскладка/стили/первая полоса) */
+void lv_port_stats(uint32_t *calls, uint32_t *px, uint32_t *flushMs,
+                   uint32_t *pre) {
   *calls = s_stCalls;
   *px = s_stPx;
   *flushMs = s_stMs;
-  s_stCalls = s_stPx = s_stMs = 0;
+  *pre = (s_pre == 0xFFFFFFFF) ? 0 : s_pre;
 }
 
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
@@ -38,6 +47,8 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
   int32_t w = area->x2 - area->x1 + 1;
   int32_t h = area->y2 - area->y1 + 1;
   uint32_t t0 = millis();
+  if (s_pre == 0xFFFFFFFF)
+    s_pre = t0 - s_markT;
 
   st7789_cs_low();
   st7789_set_addr_window_raw((uint16_t)area->x1, (uint16_t)area->y1,
