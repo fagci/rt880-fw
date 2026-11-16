@@ -144,18 +144,22 @@ void NumVal_Render(NumVal_t *nv) {
 
   uint8_t len = strlen(str);
 
-  /* Печатаем от фиксированного правого края (nv->x, POS_R): при вводе
-     лейбл двигается, а LVGL сам затирает освободившееся место.
-     Пустой буфер — пробелом: ужимание лейбла инвалидирует старый bbox. */
-  PrintfEx(nv->x, nv->y, POS_R, C_WHITE, C_BLACK, nv->font, "%s",
+  /* Печатаем с выравниванием nv->pos от якоря nv->x (и в обычном виде, и
+     при вводе — значение не «уезжает» при редактировании):
+       POS_L — левый край в x, цифры растут вправо;
+       POS_R — правый край в x, цифры растут влево;
+       POS_C — центр в x.
+     Лейбл двигается, а LVGL затирает освободившееся место. Пустой буфер —
+     пробелом: ужимание лейбла инвалидирует старый bbox. */
+  PrintfEx(nv->x, nv->y, nv->pos, C_WHITE, C_BLACK, nv->font, "%s",
            len ? str : " ");
 
-  /* Курсор — вертикальная черта после последнего введённого символа.
-     Позиция считается от того же правого края (исходный код рисовал
-     его всегда у края — baseX + cursor*charW сокращалось до nv->x). */
+  /* Курсор — вертикальная черта сразу после последнего введённого знака. */
   if (nv->editing) {
-    uint16_t cx = (nv->pos == POS_R) ? nv->x - nv->cursor * nv->charW
-                                     : nv->x + nv->cursor * nv->charW;
+    int16_t tw = (int16_t)nv->cursor * nv->charW;
+    int16_t cx = nv->pos == POS_R   ? (int16_t)nv->x
+                 : nv->pos == POS_C ? (int16_t)nv->x + tw / 2
+                                    : (int16_t)nv->x + tw;
     FillRect(cx, nv->y - nv->charH + 1, 1, nv->charH,
              nv->blinkState ? C_YELLOW : BG());
   }

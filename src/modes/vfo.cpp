@@ -36,6 +36,9 @@
 #define STATUS_H 24
 
 #define FREQ_RIGHT 192 /* правый край частоты (лейбл 2..192) */
+/* Выравнивание частоты в VFO (и при вводе): POS_R — по правому краю,
+ * POS_L — по левому. Одна настройка на NumVal, лейбл и курсор. */
+#define VFO_FREQ_POS POS_R
 #define COL_RIGHT 236  /* правый край колонки моды/бейджа/шага */
 
 #define VFO_FREQ_Y 30
@@ -141,7 +144,7 @@ static void initNumVals() {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     uint16_t sy = STATUS_H + i * VFO_H;
     NumVal_Init(&vfoCtx.numVal[i], FREQ_RIGHT, sy + VFO_FREQ_Y, F_MONO_LG, 21,
-                23, UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, POS_R,
+                23, UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, VFO_FREQ_POS,
                 F_SM, 11, 12);
   }
 }
@@ -160,7 +163,9 @@ static void buildScreen(void) {
                          LV_OPA_COVER);
 
     s_freqLbl[i] = mkLabel(s_scr, &lv_font_mono18, fgAd(C_WHITE), 6, sy + 6,
-                           FREQ_RIGHT - 6, LV_TEXT_ALIGN_RIGHT);
+                           FREQ_RIGHT - 6,
+                           VFO_FREQ_POS == POS_L ? LV_TEXT_ALIGN_LEFT
+                                                 : LV_TEXT_ALIGN_RIGHT);
     s_extraLbl[i] =
         mkLabel(s_scr, &lv_font_tomthumb, fgAd(C_GRAY), FREQ_RIGHT + 4, sy + 22, 24,
                 LV_TEXT_ALIGN_LEFT);
@@ -267,29 +272,20 @@ public:
       bool editing = NumVal_IsEditing(nv);
       NumVal_Render(nv);
 
-      /* Редактор: левое выравнивание, цифры растут вправо, курсор —
-         сразу после последней введённой цифры. На выходе — правое
-         выравнивание и курсор спрятан. */
-      static int8_t s_editRow = -1;
+      /* Редактор: выравнивание то же, что и в обычном виде (VFO_FREQ_POS) —
+         значение не «уезжает» при вводе. Курсор — сразу после последней
+         введённой цифры: у правого края (POS_R) или правее набранного
+         (POS_L). На выходе курсор спрятан. */
       if (editing) {
-        if (s_editRow != (int8_t)i) {
-          s_editRow = i;
-          lv_obj_set_style_text_align(s_freqLbl[i], LV_TEXT_ALIGN_LEFT,
-                                      LV_PART_MAIN);
-        }
         if (s_cursor) {
-          lv_coord_t cx = 4 + nv->cursor * nv->charW;
+          lv_coord_t cx = (VFO_FREQ_POS == POS_L)
+                              ? 6 + nv->cursor * nv->charW
+                              : FREQ_RIGHT + 1;
           lv_obj_set_pos(s_cursor, cx, sy + 9);
           setHidden(s_cursor, !nv->blinkState);
         }
-      } else {
-        if (s_editRow == (int8_t)i) {
-          s_editRow = -1;
-          lv_obj_set_style_text_align(s_freqLbl[i], LV_TEXT_ALIGN_RIGHT,
-                                      LV_PART_MAIN);
-        }
-        if (s_cursor && i == currentVfo)
-          setHidden(s_cursor, true);
+      } else if (s_cursor && i == currentVfo) {
+        setHidden(s_cursor, true);
       }
 
       if (s_badgeLbl[i] &&

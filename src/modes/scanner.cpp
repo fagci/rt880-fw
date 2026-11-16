@@ -23,7 +23,9 @@
  * '#' длинный — пауза/продолжить (в паузе UP/DOWN — ручная перестройка),
  * SIDE1 — в чёрный список последнюю находку (и дальше), SIDE1 длинный —
  * водопад вкл/выкл, SIDE2 — в белый список, SIDE2 длинный — мониторинг
- * (слушать и белые), UP/DOWN — выдержка на частоте (скорость сканирования).
+ * (слушать и белые), UP/DOWN — шаг сканирования, '*' длинный — выдержка на
+ * частоте (скорость сканирования). Подчёркнута та граница диапазона,
+ * которую правим ('#' переключает).
  */
 #include "scanner.h"
 #include "../driver/board.h"
@@ -49,9 +51,9 @@
  * [WF_Y, HEIGHT) — ниже этой линии нельзя размещать никакой текст/виджеты,
  * они будут «плыть» вместе с водопадом. */
 #define STATUS_H 24
-/* поля частот — лейблы F_SM [y-11, y+4] с y = SPECTRUM_Y-6: не перекрывают
- * спектр и статус-строку */
-#define SPECTRUM_Y (STATUS_H + 20)
+/* поля частот — лейблы F_SM [y-11, y+4] с y = SPECTRUM_Y-10; под ними
+ * (SPECTRUM_Y-4..-3) полоса-подчёркивание выбранной границы; ниже — спектр */
+#define SPECTRUM_Y (STATUS_H + 24)
 #define SP_H 52
 #define STATE_Y (SPECTRUM_Y + SP_H + 10) /* строка состояния (с запасом от спектра) */
 /* LVGL-лейбл F_SM занимает [y-11, y+4]: строка состояния (baseline
@@ -64,6 +66,7 @@
 #define SQL_DELAY_MS 30
 #define SQL_MARGIN 10 /* ~5 дБ над шумом (RSSI: 2 ед. = 1 дБ) */
 #define SQL_HYST 4
+#define WARM_STEPS 16 /* калибровка шума: первые шаги скана без поиска сигнала */
 #define BATCH_STEPS 32 /* шагов за один проход главного цикла */
 
 static FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
@@ -94,6 +97,10 @@ static bool isListening;     /* HOLD: стоим и слушаем */
 static bool scanning = true; /* false = пауза (ручная перестройка) */
 static bool waterfall = true;
 static bool dacOn;
+static uint8_t warm;        /* шагов калибровки шума после смены диапазона */
+static uint8_t creepCnt;    /* медленный подъём порога в HOLD на «шуме» */
+static int8_t underShown = -1; /* какая граница подчёркнута (-1 = перерисовать) */
+static uint8_t savedStep;   /* шаг VFO сканера на входе */
 static bool monitorMode;  /* слушать и белый список */
 static bool captureOnExit; /* MENU: оставить частоту в VFO */
 static uint32_t listenUntil;
@@ -109,6 +116,9 @@ static void onRangeChanged() {
           range.end - range.start);
   curF = range.start;
   floorRssi = 0;
+  warm = WARM_STEPS;
+  creepCnt = 0;
+  underShown = -1;
   sweepDone = false;
   isListening = false;
   closedSteps = 0;
@@ -117,6 +127,14 @@ static void onRangeChanged() {
   stepCount = 0;
   lastCpsTime = millis();
   stepsPerSec = 0;
+}
+
+/* Шаг сканирования: меняем шаг VFO сканера (на выходе вернём) и
+ * перезапускаем скан — спектр строится по новой сетке. */
+static void changeStep(int8_t d) {
+  VFO *v = &vfos[currentVfo];
+  v->step = static_cast<Step>((v->step + STEP_COUNT + d) % STEP_COUNT);
+  onRangeChanged();
 }
 
 static void onStartEntered(uint32_t f) {
@@ -129,11 +147,12 @@ static void onEndEntered(uint32_t f) {
 }
 
 static void initNumVals() {
-  /* NumVal печатает от ПРАВОГО края x: левому полю задаём правый край */
-  NumVal_Init(&numVal[0], 8 + 9 * 11, SPECTRUM_Y - 6, F_SM, 11, 12, UNIT_MHZ,
-              range.start, 0, 1340 * MHZ, onStartEntered, POS_R, nullptr, 0,
+  /* выравнивание значения (и при вводе) задаёт pos: левое поле — от левого
+   * края, правое — от правого */
+  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 10, F_SM, 11, 12, UNIT_MHZ,
+              range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0,
               0);
-  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 6, F_SM, 11, 12,
+  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 10, F_SM, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
               0, 0);
 }
@@ -172,6 +191,19 @@ static void scanStep() {
   delay_us(DWELL_US[dwellIdx]);
   uint16_t rssi = BK4819_GetRSSI();
 
+  /* калибровка шума после смены диапазона: быстрое усреднение, без поиска.
+   * Иначе заниженная первая выборка давала порог ниже шума — «всё открыто»,
+   * сканер вставал в HOLD и шипел, пока не поймает настоящий сигнал. */
+  if (warm) {
+    warm--;
+    floorRssi = floorRssi ? (uint16_t)(((uint32_t)floorRssi * 3 + rssi + 2) / 4)
+                          : rssi;
+    Measurement w = {.f = curF, .rssi = rssi, .noise = 0, .open = false};
+    SP_AddPoint(&w);
+    stepCount++;
+    advance();
+    return;
+  }
   if (!floorRssi)
     floorRssi = rssi;
   uint16_t thr = floorRssi + SQL_MARGIN;
@@ -199,8 +231,18 @@ static void scanStep() {
       floorRssi++; /* ложное срабатывание — порог выше */
   }
 
-  if (!open && !skipped)
+  if (!open && !skipped) {
     floorRssi = (uint16_t)(((uint32_t)floorRssi * 15 + rssi + 8) / 16);
+  } else if (open && isListening && rssi < (uint16_t)(thr + SQL_MARGIN)) {
+    /* «слабое» открытие в HOLD: порог по шуму не должен залипать. Медленно
+     * подтягиваем его (не быстрее ~1 ед. на 16 замеров), чтобы шум перестал
+     * удерживать HOLD; сильный сигнал (≥ +MARGIN над порогом) не трогает. */
+    if (++creepCnt >= 16) {
+      creepCnt = 0;
+      if (floorRssi < 0xFFFF - SQL_MARGIN)
+        floorRssi++;
+    }
+  }
 
   Measurement m = {.f = curF, .rssi = rssi, .noise = 0, .open = open};
   SP_AddPoint(&m);
@@ -216,6 +258,9 @@ static void scanStep() {
              vfos[currentVfo].radio);
     setAudio(true);
     if (millis() > listenUntil) {
+      /* не закрылось за LISTEN_TIMEOUT_MS: либо несущая, либо порог ниже
+       * шума — поднимаем порог выше текущего уровня, чтобы не залипнуть */
+      floorRssi = rssi;
       isListening = false;
       setAudio(false);
       LOOT_Standby();
@@ -251,6 +296,7 @@ public:
         vfos[currentVfo].radio != RADIO_BK4819B)
       currentVfo = 0;
     scanVfo = currentVfo;
+    savedStep = vfos[scanVfo].step;
     savedFreq = vfos[scanVfo].rxF; /* после Radio_Init */
 
     initNumVals();
@@ -299,8 +345,20 @@ public:
         WF_Render(WF_Y, true);
     }
 
-    /* выдержка на частоте — между полями границ (мелким шрифтом) */
-    PrintfT(LCD_XCENTER, SPECTRUM_Y - 6,
+    /* подчёркивание редактируемой границы (желтое), у другой — стёрто */
+    if (underShown != (int8_t)endFSel) {
+      const int16_t uy = SPECTRUM_Y - 4, uw = 9 * 11;
+      FillRect(8, uy, uw, 2, endFSel ? C_BLACK : C_YELLOW);
+      FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2, endFSel ? C_YELLOW : C_BLACK);
+      underShown = endFSel;
+    }
+
+    /* шаг и выдержка на частоте — между полями границ (мелким шрифтом) */
+    uint32_t stp = StepFrequencyTable[vfos[currentVfo].step];
+    PrintfT(LCD_XCENTER, SPECTRUM_Y - 14,
+            text_style(C_YELLOW, C_BLACK, POS_C, F_SS), "%u.%02uk",
+            (unsigned)(stp / 100), (unsigned)(stp % 100));
+    PrintfT(LCD_XCENTER, SPECTRUM_Y - 8,
             text_style(C_GRAY, C_BLACK, POS_C, F_SS), "%uus",
             (unsigned)DWELL_US[dwellIdx]);
 
@@ -340,6 +398,7 @@ public:
     if (!(captureOnExit && scanVfo == savedVfo)) {
       currentVfo = scanVfo;
       vfos[scanVfo].rxF = savedFreq;
+      vfos[scanVfo].step = static_cast<Step>(savedStep); /* шаг скана — не в VFO */
       Radio_TuneTo(savedFreq, true); /* заодно приёмник, модуляция, шумодав */
     }
     currentVfo = savedVfo;
@@ -370,6 +429,9 @@ public:
         return true;
       case KEY_SIDE2: /* мониторинг: слушать и белый список */
         monitorMode = !monitorMode;
+        return true;
+      case KEY_STAR: /* выдержка на частоте (скорость скана) */
+        dwellIdx = (dwellIdx + 1) % DWELL_N;
         return true;
       default:
         return false;
@@ -413,7 +475,7 @@ public:
         advance();
         tuneHere();
       } else {
-        dwellIdx = (dwellIdx + 1) % DWELL_N;
+        changeStep(+1);
       }
       return true;
     case KEY_DOWN:
@@ -423,7 +485,7 @@ public:
                                             : curF - step;
         tuneHere();
       } else {
-        dwellIdx = (dwellIdx + DWELL_N - 1) % DWELL_N;
+        changeStep(-1);
       }
       return true;
     default:
