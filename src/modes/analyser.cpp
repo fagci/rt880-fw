@@ -11,6 +11,9 @@
 #include "../ui/numval.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
+#include "../ui/lvgl_fonts/lv_font_mono9.h"
+#include "../ui/lvgl_fonts/lv_font_tomthumb.h"
+#include "lvgl.h"
 #include "mode.h"
 #include "vfo.h"
 #include "printf.h"
@@ -69,6 +72,39 @@ struct {
 static bool s_infoValid;
 static uint8_t s_infoMode;
 static char s_info[3][24];
+
+/* Строка информации — три нативных LVGL-лейбла (создаются в enter, удаляются
+ * в exit): слева — шаг/левая граница рамки/LISTEN, центр — диапазон/частота
+ * курсора, справа — скорость/правая граница. Узкие непересекающиеся зоны. */
+static lv_obj_t *s_infoLbl[3];
+
+static inline lv_color_t lvc565(uint16_t c) {
+  return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
+                       (uint8_t)(c << 3));
+}
+
+static lv_obj_t *mkInfoLabel(const lv_font_t *font, lv_coord_t x, lv_coord_t y,
+                             lv_coord_t w, lv_text_align_t al) {
+  lv_obj_t *l = lv_label_create(lv_scr_act());
+  if (!l)
+    return nullptr;
+  lv_obj_set_pos(l, x, y);
+  lv_obj_set_width(l, w);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
+  lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(l, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(l, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
+  return l;
+}
+
+static void setInfo(uint8_t i, const char *text, uint16_t color) {
+  if (!s_infoLbl[i])
+    return;
+  lv_obj_set_style_text_color(s_infoLbl[i], lvc565(color), LV_PART_MAIN);
+  lv_label_set_text(s_infoLbl[i], text);
+}
 
 static uint8_t getCursorStart() {
   if (anaCtx.cursorCenter >= anaCtx.cursorHalfW)
@@ -362,6 +398,13 @@ public:
     NumVal_Init(&anaCtx.endVal, LCD_WIDTH - 8, BORDER_Y, F_SM, 11, 12,
                 UNIT_MHZ, 0, BK4819_F_MIN, BK4819_F_MAX, onEndEntered, POS_R,
                 nullptr, 0, 0);
+    /* строка информации: узкие непересекающиеся зоны, центр создаём первым */
+    s_infoLbl[1] = mkInfoLabel(&lv_font_mono9, 60, INFO_BASE - 11, 120,
+                               LV_TEXT_ALIGN_CENTER);
+    s_infoLbl[0] = mkInfoLabel(&lv_font_tomthumb, 4, INFO_BASE - 4, 56,
+                               LV_TEXT_ALIGN_LEFT);
+    s_infoLbl[2] = mkInfoLabel(&lv_font_tomthumb, LCD_WIDTH - 4 - 56,
+                               INFO_BASE - 4, 56, LV_TEXT_ALIGN_RIGHT);
     initRange();
     onRangeChanged();
 
@@ -470,6 +513,12 @@ public:
   }
 
   void exit() override {
+    for (uint8_t i = 0; i < 3; i++) {
+      if (s_infoLbl[i]) {
+        lv_obj_del(s_infoLbl[i]);
+        s_infoLbl[i] = nullptr;
+      }
+    }
     /* BK и rxF остались на последней точке скана — возвращаем VFO сканера
      * его частоту и настраиваем чип (иначе шумодав читается по чужой
      * частоте, а VFO уезжает). MENU на курсоре — забрать его частоту. */
@@ -581,7 +630,6 @@ public:
 
 private:
   void renderCursorInfo() {
-    const uint16_t textY = INFO_BASE;
     char b0[24], b1[24], b2[24];
     uint8_t mode;
 
@@ -614,16 +662,18 @@ private:
         !strcmp(b1, s_info[1]) && !strcmp(b2, s_info[2]))
       return;
 
-    FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
+    /* Три нативных LVGL-лейбла с непрозрачным фоном и фиксированной шириной:
+     * текст/цвет меняются на месте, старый текст стирается самим лейблом.
+     * Раньше это был пул Printf* с разными шрифтами в разных режимах — старый
+     * лейбл другого режима оставался и просвечивал поверх нового. */
     if (mode == 0) {
-      PrintfEx(4, textY, POS_L, C_GRAY, C_BLACK, F_SS, "%s", b0);
-      PrintfEx(LCD_XCENTER, textY, POS_C, C_GRAY, C_BLACK, F_SS, "%s", b1);
-      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_GRAY, C_BLACK, F_SS, "%s", b2);
+      setInfo(0, b0, C_GRAY);
+      setInfo(1, b1, C_GRAY);
+      setInfo(2, b2, C_GRAY);
     } else {
-      PrintfEx(4, textY, POS_L, mode == 2 ? C_GREEN : C_CYAN, C_BLACK, F_SS,
-               "%s", b0);
-      PrintfEx(LCD_XCENTER, textY, POS_C, C_WHITE, C_BLACK, F_SM, "%s", b1);
-      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_CYAN, C_BLACK, F_SS, "%s", b2);
+      setInfo(0, b0, mode == 2 ? C_GREEN : C_CYAN);
+      setInfo(1, b1, C_WHITE);
+      setInfo(2, b2, C_CYAN);
     }
     s_infoMode = mode;
     strcpy(s_info[0], b0);

@@ -571,7 +571,6 @@ void SI47XX_PatchPowerUp(bool ssb) {
  * FM-вещание (WFM) на SI4732 — стерео/RDS-приёмник чипа; цена — смена
  * семейства: AM/SSB ↔ FM = re-power (+ заливка патча при возврате). */
 static void siPowerUpFor(uint8_t want) {
-  uint32_t t0 = millis();
   const char *nm = want == 3 ? "FM" : want == 2 ? "SSB" : "AM";
   if (want == 3) {
     SI47XX_PowerUp(); /* FUNC_FM — по si4732mode */
@@ -587,9 +586,6 @@ static void siPowerUpFor(uint8_t want) {
       SI47XX_PatchPowerUp(want == 2);
     }
   }
-  Log("SI up %s: %lu ms, I2C %s %luk%s", nm, (unsigned long)(millis() - t0),
-      s_hw ? "HW" : "bit-bang", (unsigned long)(s_hw ? s_hwSpeed / 1000 : 100),
-      (want != 3 && !s_patchOk) ? " PATCH?" : "");
 }
 
 bool SI47XX_Acquire(SI47XX_MODE mode) {

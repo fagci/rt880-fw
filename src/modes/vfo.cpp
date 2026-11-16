@@ -70,7 +70,6 @@ static lv_obj_t *s_bandLbl[DEVICE_VFO_COUNT];
 static const char *s_prevBand[DEVICE_VFO_COUNT];
 static lv_obj_t *s_rssiBar[DEVICE_VFO_COUNT];
 static lv_obj_t *s_cursor;
-static lv_obj_t *s_filtLbl; /* один многострочный лейбл */
 
 /* кэши предыдущего состояния */
 static bool s_prevActive[DEVICE_VFO_COUNT];
@@ -137,7 +136,6 @@ static lv_obj_t *mkLabel(lv_obj_t *parent, const lv_font_t *font, Color fg,
 
 static void onFreqEntered(uint32_t f) {
   Radio_TuneToAuto(f);
-  Log("tune vfo=%u f=%lu mod=%u", currentVfo, f, vfos[currentVfo].modulation);
 }
 
 static void initNumVals() {
@@ -185,10 +183,6 @@ static void buildScreen(void) {
   if (s_cursor)
     lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
 
-  /* Список фильтров — один многострочный лейбл */
-  uint16_t baseY = VFO_H * DEVICE_VFO_COUNT + STATUS_H;
-  s_filtLbl = mkLabel(s_scr, &lv_font_mono9, fgAd(C_GREEN), 8, baseY, 100,
-                      LV_TEXT_ALIGN_LEFT);
 }
 
 static void setRowActive(uint8_t i, bool active) {
@@ -215,8 +209,6 @@ static void setRowActive(uint8_t i, bool active) {
 class VfoMode : public Mode {
 public:
   void enter() override {
-    Log("vfo enter inv=%u", gInverted);
-    Log("build %s %s", __DATE__, __TIME__);
     UI_ReleaseLabels();
     UI_ClearScreen(C_BLACK);
     Radio_Init();
@@ -236,7 +228,6 @@ public:
   }
 
   void exit() override {
-    Log("vfo exit");
     if (s_scr) {
       lv_obj_del(s_scr);
       s_scr = NULL;
@@ -359,20 +350,6 @@ public:
       }
     }
 
-    /* Список фильтров: перерисовка только при смене выбора */
-    static uint8_t prevFilter = 0xFF;
-    if ((first || filterIndex != prevFilter) && s_filtLbl) {
-      prevFilter = filterIndex;
-      static char filtBuf[40];
-      snprintf(filtBuf, sizeof(filtBuf), "%c %s\n%c %s\n%c %s\n%c %s",
-               filterIndex == 0 ? '>' : ' ', FILTER_NAMES[0],
-               filterIndex == 1 ? '>' : ' ', FILTER_NAMES[1],
-               filterIndex == 2 ? '>' : ' ', FILTER_NAMES[2],
-               filterIndex == 3 ? '>' : ' ', FILTER_NAMES[3]);
-      lv_label_set_text_static(s_filtLbl, filtBuf);
-    }
-
-    Log_Render(0, LCD_HEIGHT - 8 * 6, 6);
     s_inited = true;
 
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
@@ -424,9 +401,6 @@ public:
           it->radio = v->radio;
           it->blacklist = false;
           it->whitelist = true;
-          Log("loot + %lu", (unsigned long)v->rxF);
-        } else {
-          Log("loot full");
         }
         return true;
       }
@@ -438,11 +412,6 @@ public:
         return true;
       case KEY_7:
         Radio_ToggleMonitor(2);
-        return true;
-      case KEY_SIDE2:
-        gInverted = !gInverted;
-        Log("invert -> %u", gInverted);
-        Mode_Switch(*Mode_Current()); /* полный пересбор экрана */
         return true;
       default:
         break;

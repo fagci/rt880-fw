@@ -335,7 +335,6 @@ static void monitorTick(void) {
   }
 
   if (open) {
-    Log("mon: vfo %u sq open", i);
     currentVfo = i;
     applyVfo(true);
   }
@@ -584,7 +583,6 @@ void Radio_ToggleMonitor(uint8_t idx) {
   if (idx == currentVfo)
     return; /* активный не мониторится — он и так на своём приёмнике */
   vfos[idx].monitor = !vfos[idx].monitor;
-  Log("mon: vfo %u %s", idx, vfos[idx].monitor ? "on" : "off");
 }
 
 void Radio_NextStep(void) {

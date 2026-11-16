@@ -146,7 +146,6 @@ static void stopOnHit(uint32_t freq) {
   fcCtx.stoppedAt = millis();
   fcCtx.resumeAt = 0;
   fcCtx.frequencyHits = 0;
-  Log("FC hit %lu", (unsigned long)freq);
   LOOT_Hit(freq, BK4819_GetRSSI(), vfos[currentVfo].modulation,
            vfos[currentVfo].bw, vfos[currentVfo].radio);
 }
@@ -167,7 +166,6 @@ static void resumeScan() {
 class FcMode : public Mode {
 public:
   void enter() override {
-    Log("FC enter");
     fcCtx.savedVfo = currentVfo;
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
