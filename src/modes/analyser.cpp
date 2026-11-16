@@ -119,14 +119,21 @@ static uint8_t getCursorEnd() {
   return e;
 }
 
-/* Шаг скана: шаг VFO, но не мельче span/240 — на широком диапазоне
- * (100…470 МГц при 25 кГц это 14000 точек) проход иначе длится минуты,
- * а точек всё равно больше, чем пикселей. */
+/* Шаг скана: шаг VFO, но не больше SCAN_MAX_POINTS точек на проход
+ * (16…1100 МГц при 25 кГц — 43 тыс. точек, это минуты). Столбец экрана
+ * копит максимум по всем точкам, попавшим в него, поэтому узкие сигналы
+ * при мелком шаге не теряются; хочется быстрее — шаг на 3/9 крупнее. */
+#define SCAN_MAX_POINTS 16384U
 static uint32_t scanStep() {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
   uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  uint32_t min = (span + SP_MAX_POINTS - 1) / SP_MAX_POINTS;
+  uint32_t min = (span + SCAN_MAX_POINTS - 1) / SCAN_MAX_POINTS;
   return step > min ? step : min;
+}
+
+/* BK4819 принимает 18–660 и 840–1300 МГц; остальное пропускаем */
+static bool bkCovers(uint32_t f) {
+  return f >= 1800000 && f <= 130000000 && !(f > 66000000 && f < 84000000);
 }
 
 static void initRange() {
@@ -441,11 +448,14 @@ public:
       return;
 
     for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
-      Radio_TuneTo(anaCtx.scanF, false);
-      BK4819_SelectChip(0);
+      const bool covered = bkCovers(anaCtx.scanF);
+      if (covered) {
+        Radio_TuneTo(anaCtx.scanF, false);
+        BK4819_SelectChip(0);
+      }
       Measurement m = {
           .f = anaCtx.scanF,
-          .rssi = BK4819_GetRSSI(),
+          .rssi = covered ? BK4819_GetRSSI() : (uint16_t)0, /* 0 = нет данных */
           .noise = 0,
           .open = false,
       };
