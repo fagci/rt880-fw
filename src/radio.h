@@ -98,6 +98,7 @@ void Radio_ToggleMonitor(uint8_t idx);
 void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
 void Radio_Update(void);
+void Radio_DiagBk(void);
 void Radio_ScanAudio(bool on); /* открыть/закрыть звук активного BK */
 void Radio_SetSquelch(uint8_t level);
 void Radio_NextStep(void);

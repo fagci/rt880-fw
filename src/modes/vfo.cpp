@@ -212,6 +212,7 @@ public:
       Log("clk %lu MHz sel=%u stage=%02X", (unsigned long)(SystemCoreClock / 1000000UL),
           (unsigned)CRM->cfg_bit.sclksts, (unsigned)g_clockStage);
       Log("loop200k=%lu ms", (unsigned long)(millis() - t0));
+      Radio_DiagBk();
     }
     UI_ClearScreen(C_BLACK);
     Radio_Init();

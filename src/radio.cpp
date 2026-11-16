@@ -278,6 +278,21 @@ void Radio_Update(void) {
     BK4819_SelectChip(vfoChip(currentVfo));
 }
 
+/* Диагностика шины BK: реальное чтение REG_30 и RSSI каждого чипа.
+   0xFFFF/0x0000 в r30 — чтение по SPI не работает (RMW REG_30 в TuneTo
+   тогда портит конфигурацию приёмника). */
+void Radio_DiagBk(void) {
+  for (uint8_t c = 0; c < 2; c++) {
+    BK4819_SelectChip(c); /* сбрасывает кэш REG_30 → читаем по шине */
+    uint16_t r30 = BK4819_ReadRegister(BK4819_REG_30);
+    uint16_t r1 = BK4819_GetRSSI();
+    uint16_t r2 = BK4819_GetRSSI();
+    Log("BK%u r30=%04X rssi=%u/%u", c, r30, r1, r2);
+  }
+  if (vfos[currentVfo].radio != RADIO_SI4732)
+    BK4819_SelectChip(vfoChip(currentVfo));
+}
+
 /* Звук сканера: тот же путь, что и у VFO — учёт DAC/AF_MUTE общий,
    иначе после выхода из сканера VFO думает, что DAC включён, и молчит. */
 void Radio_ScanAudio(bool on) { applyMute(on); }
