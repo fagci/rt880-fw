@@ -17,6 +17,7 @@ typedef struct {
 void SP_AddPoint(Measurement *msm);
 void SP_ResetHistory(void);
 void SP_ResetRender(void);
+void SP_Invalidate(uint8_t sh); /* следующий SP_Render перерисует всю область */
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t bw);
 void SP_Begin(void);
 void SP_Next(void);

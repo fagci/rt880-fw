@@ -64,6 +64,13 @@ void SP_ResetHistory(void) {
   currentStep = 0;
 }
 
+/* Пометить спектр «неактуальным»: следующий SP_Render перерисует всю
+ * область (высоты до sh) — стирает всё, что рисовали поверх (курсор). */
+void SP_Invalidate(uint8_t sh) {
+  for (uint16_t i = 0; i < SP_MAX_POINTS; ++i)
+    osy[i] = sh;
+}
+
 void SP_ResetRender(void) {
   ticksRendered = false;
   for (uint8_t i = 0; i < SP_MAX_POINTS; ++i)
@@ -102,7 +109,10 @@ void SP_AddPoint(Measurement *msm) {
     noiseHistory[x] = msm->noise;
   if (markers[x] == false && msm->open)
     markers[x] = msm->open;
-  uint8_t XL = f2x(msm->f + step);
+  /* последняя точка диапазона закрашивает хвост до края (иначе правый
+   * столбец никогда не заполнялся — чёрная полоска в водопаде) */
+  uint8_t XL = (msm->f + step >= range.end) ? SP_MAX_POINTS
+                                            : f2x(msm->f + step);
   for (uint8_t nx = x + 1; nx < XL; ++nx) {
     rssiHistory[nx] = rssiHistory[x];
     noiseHistory[nx] = noiseHistory[x];
@@ -122,7 +132,7 @@ static Seg seg_from_f(uint32_t f, uint16_t v) {
   uint8_t x0 = f2x(f);
   uint8_t x1;
 
-  if (f + step <= range.end) {
+  if (f + step < range.end) {
     x1 = f2x(f + step);
     if (x1 <= x0)
       x1 = x0 + 1;

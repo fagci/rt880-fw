@@ -295,13 +295,25 @@ public:
       anaCtx.scanF = anaCtx.range.start;
     }
 
-    if (spectrumRedrawn) {
-      anaCtx.prevCursorActive = false;
+    /* Рамка курсора рисуется ПОВЕРХ спектра, а SP_Render теперь перерисовывает
+     * только изменившиеся строки. Поэтому:
+     *  - сдвинули/изменили/спрятали рамку → стираем старую и просим
+     *    перерисовать весь спектр (иначе остаются «призраки» линий);
+     *  - после любой перерисовки спектра рамку рисуем заново (SP_Render
+     *    мог закрасить её линии). */
+    bool want = anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout;
+    bool moved = anaCtx.prevCursorActive &&
+                 (!want || getCursorStart() != anaCtx.prevCursorStart ||
+                  getCursorEnd() != anaCtx.prevCursorEnd);
+    if (moved) {
+      eraseCursorZone();
+      SP_Invalidate(SP_H);
+      SP_Render(&anaCtx.range, STATUS_H + 14, SP_H);
+      lastSpectrumRender = millis();
+      spectrumRedrawn = true;
     }
-    eraseCursorZone();
-    if (anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout) {
+    if (want && (spectrumRedrawn || !anaCtx.prevCursorActive))
       drawCursorZone();
-    }
     renderCursorInfo();
   }
 
