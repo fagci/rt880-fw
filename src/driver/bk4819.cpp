@@ -1,4 +1,5 @@
 #include "bk4819.h"
+#include "../helper/log.h"
 #include "../misc.h"
 #include "at32f423.h"
 #include "bk4819-regs.h"
@@ -78,11 +79,12 @@ static BK4819_Chip *g_bk = &g_chips[0];
 // На 150 МГц 125 нс давало мусор в чтении (спектр не рисуется) — берём 1 мкс.
 #define BK_SPI_HALF_PERIOD_NS 1000u
 
+static uint32_t s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
+
 static inline void bk_delay(void) {
   // cycles = (CoreClock_MHz * ns) / 1000
   // умножаем сначала, чтобы не терять точность при целочисленном делении
-  uint32_t cycles =
-      (SystemCoreClock / 1000000UL * BK_SPI_HALF_PERIOD_NS) / 1000u;
+  uint32_t cycles = (SystemCoreClock / 1000000UL * s_bkHalfNs) / 1000u;
   if (cycles == 0)
     cycles = 1; // минимум 1 цикл
   uint32_t start = DWT->CYCCNT;
@@ -247,11 +249,16 @@ void BK4819_WriteRegister(uint8_t reg, uint16_t data) {
   __set_PRIMASK(primask);
 }
 
+static uint16_t read_raw(uint8_t reg);
+
 uint16_t BK4819_ReadRegister(uint8_t reg) {
   uint16_t cached = regcache_read(reg);
   if (cached != 0xFFFF)
     return cached;
+  return read_raw(reg);
+}
 
+static uint16_t read_raw(uint8_t reg) {
   uint32_t primask = __get_PRIMASK();
   __disable_irq();
 
@@ -268,6 +275,21 @@ uint16_t BK4819_ReadRegister(uint8_t reg) {
 
   __set_PRIMASK(primask);
   return v;
+}
+
+/* Диагностика шины: пишем REG_30 = RX вкл (DAC выкл) и читаем обратно
+ * напрямую (мимо кэша) на разных скоростях. Лог: r30 при 1/3/10 мкс. */
+void BK4819_DiagSpeed(uint8_t chip) {
+  static const uint32_t NS[3] = {1000, 3000, 10000};
+  uint16_t r[3];
+  BK4819_SelectChip(chip);
+  BK4819_WriteRegister(BK4819_REG_30, 0xBDF1);
+  for (int i = 0; i < 3; i++) {
+    s_bkHalfNs = NS[i];
+    r[i] = read_raw(BK4819_REG_30);
+  }
+  s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
+  Log("BK%u w=BDF1 r@1/3/10us=%04X/%04X/%04X", chip, r[0], r[1], r[2]);
 }
 
 static const uint8_t sqTypeValues[4] = {0x88, 0xAA, 0xCC, 0xFF};

@@ -289,6 +289,8 @@ void Radio_DiagBk(void) {
     uint16_t r2 = BK4819_GetRSSI();
     Log("BK%u r30=%04X rssi=%u/%u", c, r30, r1, r2);
   }
+  BK4819_DiagSpeed(0);
+  BK4819_DiagSpeed(1);
   if (vfos[currentVfo].radio != RADIO_SI4732)
     BK4819_SelectChip(vfoChip(currentVfo));
 }

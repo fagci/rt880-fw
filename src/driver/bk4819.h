@@ -118,6 +118,7 @@ void BK4819_DisableFrequencyScan(void);
 void BK4819_SelectChip(uint8_t chip);
 void BK4819_SelectB(bool on);
 void BK4819_SelectFilterByFrequency(uint32_t f);
+void BK4819_DiagSpeed(uint8_t chip);
 void BK4819_ToggleFilter(Filter flt, bool on);
 void BK4819_SelectFilterEx(Filter filter);
 uint16_t BK4819_GetFilter(void);
