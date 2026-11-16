@@ -195,8 +195,8 @@ static void zoomIn() {
   if (x1 - x0 < 10)
     return;
   uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  uint32_t newStart = anaCtx.range.start + (uint32_t)x0 * span / SP_MAX_POINTS;
-  uint32_t newEnd = anaCtx.range.start + (uint32_t)x1 * span / SP_MAX_POINTS;
+  uint32_t newStart = anaCtx.range.start + (uint64_t)x0 * span / SP_MAX_POINTS;
+  uint32_t newEnd = anaCtx.range.start + (uint64_t)x1 * span / SP_MAX_POINTS;
   if (newEnd - newStart >= step * 10) {
     anaCtx.range.start = newStart;
     anaCtx.range.end = newEnd;
@@ -310,7 +310,7 @@ static void resizeCursor(int8_t dir) {
 
 static uint32_t xToFreq(uint8_t x) {
   uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  return anaCtx.range.start + (uint32_t)x * span / SP_MAX_POINTS;
+  return anaCtx.range.start + (uint64_t)x * span / SP_MAX_POINTS;
 }
 
 static void eraseCursorZone() {
