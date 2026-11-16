@@ -397,18 +397,30 @@ void SI47XX_PatchPowerUp(bool ssb) {
  * Переходы AM↔SSB внутри одного патч-режима — без обращений к чипу;
  * смена семейства патча — re-power (~1-2 с с быстрой заливкой).
  * false — чип мёртв (нет ACK на I2C). */
+/* want: 1 = AM-патч, 2 = SSB-патч, 3 = FM (штатная прошивка, без патча).
+ * FM-вещание (WFM) на SI4732 — стерео/RDS-приёмник чипа; цена — смена
+ * семейства: AM/SSB ↔ FM = re-power (+ заливка патча при возврате). */
+static void siPowerUpFor(uint8_t want) {
+  if (want == 3)
+    SI47XX_PowerUp(); /* FUNC_FM — по si4732mode */
+  else
+    SI47XX_PatchPowerUp(want == 2);
+}
+
 bool SI47XX_Acquire(SI47XX_MODE mode) {
-  uint8_t want = (mode == SI47XX_LSB || mode == SI47XX_USB) ? 2 : 1;
+  uint8_t want = (mode == SI47XX_LSB || mode == SI47XX_USB) ? 2
+                 : (mode == SI47XX_FM)                     ? 3
+                                                           : 1;
   if (!isSi4732On) {
     if (!SI47XX_IsAlive())
       return false;
     si4732mode = mode;
-    SI47XX_PatchPowerUp(want == 2);
+    siPowerUpFor(want);
     siResidentPatch = want;
   } else if (siResidentPatch != want) {
     SI47XX_PowerDown();
     si4732mode = mode;
-    SI47XX_PatchPowerUp(want == 2);
+    siPowerUpFor(want);
     siResidentPatch = want;
   } else if (si4732mode != mode) {
     /* LSB↔USB↔AM внутри патча: только переменная драйвера */

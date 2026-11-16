@@ -123,13 +123,20 @@ void LOOT_Standby(void) {
   durOwner = nullptr;
 }
 
-bool LOOT_IsSkipped(uint32_t f, bool monitor) {
-  const Loot *l = LOOT_Get(f);
-  if (!l)
-    return false;
-  if (l->blacklist)
-    return true;
-  return l->whitelist && !monitor;
+bool LOOT_IsSkipped(uint32_t f, uint32_t tol, bool monitor) {
+  for (uint16_t i = 0; i < lootCount; ++i) {
+    const Loot *l = &loot[i];
+    if (!l->blacklist && !l->whitelist)
+      continue;
+    uint32_t d = l->f > f ? l->f - f : f - l->f;
+    if (d > tol)
+      continue;
+    if (l->blacklist)
+      return true; /* чёрный — всегда */
+    if (!monitor)
+      return true; /* белый — вне мониторинга */
+  }
+  return false;
 }
 
 void LOOT_BlacklistLast(void) {

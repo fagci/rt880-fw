@@ -41,12 +41,58 @@ static bool s_bootMute;     /* старт: не открывать звук до
 #define MON_SETTLE_MS 8
 static uint32_t s_lastMon;
 
-static ModulationType Radio_AutoModulation(uint32_t f) {
-  if (f >= 150000 && f < 2000000) return MOD_AM;
-  if (f >= 2000000 && f <= 30000000) return MOD_AM;
-  if (f > 30000000 && f < 80000000)  return MOD_FM;
-  if (f >= 88000000 && f <= 108000000) return MOD_WFM;
-  return MOD_FM;
+/* ── План диапазонов: автонастройка модуляции и шага ───────────
+ * При вводе частоты и при переходе через границу диапазона шагами
+ * VFO получает модуляцию и шаг по умолчанию для диапазона. Первое
+ * совпадение выигрывает — узкие диапазоны стоят раньше общих.
+ * Границы в кГц: начало включительно, конец исключительно. */
+typedef struct {
+  uint32_t startKhz;
+  uint32_t endKhz;
+  uint8_t mod;
+  uint8_t step;
+} BandPlan;
+
+static const BandPlan PLAN[] = {
+    /* КВ-любительские: ниже 10 МГц LSB, выше USB */
+    {1800, 2000, MOD_LSB, STEP_1_0kHz},    /* 160 м */
+    {3500, 4000, MOD_LSB, STEP_1_0kHz},    /* 80 м */
+    {5300, 5410, MOD_USB, STEP_1_0kHz},    /* 60 м */
+    {7000, 7200, MOD_LSB, STEP_1_0kHz},    /* 40 м */
+    {7200, 7450, MOD_AM, STEP_5_0kHz},     /* 41 м вещание */
+    {10100, 10150, MOD_USB, STEP_1_0kHz},  /* 30 м */
+    {14000, 14350, MOD_USB, STEP_1_0kHz},  /* 20 м */
+    {18068, 18168, MOD_USB, STEP_1_0kHz},  /* 17 м */
+    {21000, 21450, MOD_USB, STEP_1_0kHz},  /* 15 м */
+    {24890, 24990, MOD_USB, STEP_1_0kHz},  /* 12 м */
+    {26965, 27405, MOD_AM, STEP_10_0kHz},  /* CB */
+    {28000, 29700, MOD_USB, STEP_1_0kHz},  /* 10 м */
+    {150, 1800, MOD_AM, STEP_9_0kHz},      /* ДВ/СВ */
+    {1800, 30000, MOD_AM, STEP_5_0kHz},    /* прочий КВ: вещание */
+    /* УКВ */
+    {64000, 108000, MOD_WFM, STEP_100_0kHz}, /* FM-вещание — на SI4732 */
+    {118000, 136000, MOD_AM, STEP_25_0kHz},  /* авиа */
+    {144000, 146000, MOD_FM, STEP_12_5kHz},  /* 2 м */
+    {156000, 163000, MOD_FM, STEP_25_0kHz},  /* морской */
+    {30000, 1340000, MOD_FM, STEP_12_5kHz},  /* прочее V/UHF */
+};
+
+static const BandPlan *findPlan(uint32_t f) {
+  uint32_t khz = f / 100; /* 10 Гц → кГц */
+  for (uint8_t i = 0; i < sizeof(PLAN) / sizeof(PLAN[0]); i++)
+    if (khz >= PLAN[i].startKhz && khz < PLAN[i].endKhz)
+      return &PLAN[i];
+  return nullptr;
+}
+
+/* Выставить модуляцию и шаг активного VFO по плану. false — вне плана. */
+bool Radio_ApplyBandPlan(uint32_t f) {
+  const BandPlan *b = findPlan(f);
+  if (!b)
+    return false;
+  vfos[currentVfo].modulation = b->mod;
+  vfos[currentVfo].step = static_cast<Step>(b->step);
+  return true;
 }
 
 /* ── Выбор приёмника ───────────────────────────────────────────
@@ -54,11 +100,14 @@ static ModulationType Radio_AutoModulation(uint32_t f) {
  * SI4732: AM/SSB ниже 30 МГц. После первой загрузки SSB-патча чип
  * живёт в патч-режиме постоянно (патч покрывает AM+SSB) — переходы
  * между ними без re-power и без повторной 10-секундной заливки.
- * WFM 74–108 — на BK4819: мгновенное переключение, а SI для WFM
- * требовал бы выхода из патч-режима (= перезаливка патча каждый раз).
+ * WFM 64–108 — тоже на SI4732 (FM-приёмник чипа: качество, стерео/RDS).
+ * Цена: AM/SSB ↔ FM = re-power и перезаливка патча при возврате (1–2 с).
+ * Нет SI — откат на BK4819A (siEnsure).
  * BK4819B: HF-тракт ниже 30 МГц (всё, что не взял SI).
  * BK4819A: всё остальное (V/UHF + FM-вещание). */
 Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
+  if (mod == MOD_WFM && f >= 6400000 && f <= 10800000)
+    return RADIO_SI4732;
   if (f < 3000000 && (mod == MOD_AM || mod == MOD_LSB || mod == MOD_USB))
     return RADIO_SI4732;
   if (f < 3000000)
@@ -138,7 +187,7 @@ static void applyVfo(bool precise) {
     siEnsure(v); /* может откатить v->radio на BK */
     if (v->radio == RADIO_SI4732) {
       SI47XX_TuneTo(v->rxF); /* единицы 10 Гц — как и раньше */
-      SI47XX_SetAutomaticGainControl(1, 0);
+      SI47XX_SetAutomaticGainControl(modToSi(v->modulation) == SI47XX_FM ? 0 : 1, 0);
     }
   }
 
@@ -296,14 +345,24 @@ void Radio_TuneTo(uint32_t f, bool precise) {
 }
 
 void Radio_TuneToAuto(uint32_t f) {
-  vfos[currentVfo].modulation = Radio_AutoModulation(f);
+  if (!Radio_ApplyBandPlan(f))
+    vfos[currentVfo].modulation = MOD_FM;
   vfos[currentVfo].rxF = f;
   applyVfo(true);
 }
 
 void Radio_TuneStep(int8_t dir) {
-  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
-  Radio_TuneTo(vfos[currentVfo].rxF + step * dir, false);
+  VFO *v = &vfos[currentVfo];
+  uint32_t step = StepFrequencyTable[v->step];
+  uint32_t nf = v->rxF + step * dir;
+  /* перешли в другой диапазон плана — берём его модуляцию и шаг */
+  const BandPlan *a = findPlan(v->rxF), *b = findPlan(nf);
+  bool changed = b && a != b;
+  if (changed) {
+    v->modulation = b->mod;
+    v->step = static_cast<Step>(b->step);
+  }
+  Radio_TuneTo(nf, changed); /* смена модуляции — только precise */
 }
 
 void Radio_NextVfo(void) { Radio_SwitchToVfo(currentVfo + 1); }

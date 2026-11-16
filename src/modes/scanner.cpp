@@ -183,7 +183,9 @@ static void scanStep() {
   /* чёрный (и белый вне мониторинга) список: не открываемся и не учим
    * порог по сильному сигналу */
   bool skipped = false;
-  if (open && !isListening && LOOT_IsSkipped(curF, monitorMode)) {
+  if (open && !isListening &&
+      LOOT_IsSkipped(curF, StepFrequencyTable[vfos[currentVfo].step] / 2,
+                     monitorMode)) {
     open = false;
     skipped = true;
   }

@@ -64,8 +64,10 @@ Loot *LOOT_Hit(uint32_t f, uint16_t rssi, uint8_t modulation, uint8_t bw,
 /* Сигнал пропал: сбросить флаги open и остановить накопление длительности */
 void LOOT_Standby(void);
 
-/* Должен ли сканер игнорировать f (чёрный список; белый — вне мониторинга) */
-bool LOOT_IsSkipped(uint32_t f, bool monitor);
+/* Должен ли сканер игнорировать f (чёрный список; белый — вне мониторинга).
+ * tol — допуск по частоте (ед. 10 Гц), обычно полшага сетки: при смене
+ * диапазона сканирования сетка сдвигается, и точное совпадение теряется. */
+bool LOOT_IsSkipped(uint32_t f, uint32_t tol, bool monitor);
 
 void LOOT_BlacklistLast(void);
 void LOOT_WhitelistLast(void);

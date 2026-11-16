@@ -89,6 +89,8 @@ void Radio_Init(void);
 Radio Radio_PickDevice(uint32_t f, uint8_t mod);
 void Radio_TuneTo(uint32_t f, bool precise);
 void Radio_TuneToAuto(uint32_t f);
+/* модуляция и шаг активного VFO по плану диапазонов; false — вне плана */
+bool Radio_ApplyBandPlan(uint32_t f);
 void Radio_TuneStep(int8_t dir);
 void Radio_NextVfo(void);
 void Radio_SwitchToVfo(uint8_t idx);
