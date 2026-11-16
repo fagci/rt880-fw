@@ -175,30 +175,6 @@ void SP_AddPoint(Measurement *msm) {
     filledPoints = x + 1;
 }
 
-typedef struct {
-  uint8_t x0;
-  uint8_t x1; // not inclusive
-  uint16_t v;
-} Seg;
-
-static Seg seg_from_f(uint32_t f, uint16_t v) {
-  uint8_t x0 = f2x(f);
-  uint8_t x1;
-
-  if (f + step < range.end) {
-    x1 = f2x(f + step);
-    if (x1 <= x0)
-      x1 = x0 + 1;
-  } else {
-    x1 = SP_MAX_POINTS;
-  }
-
-  if (x1 > SP_MAX_POINTS)
-    x1 = SP_MAX_POINTS;
-
-  return (Seg){x0, x1, v};
-}
-
 static void drawTicks(uint8_t y, uint32_t fs, uint32_t fe, uint32_t div,
                       uint8_t h, uint16_t c) {
   const uint8_t th = 4;
@@ -222,22 +198,19 @@ static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
   }
 }
 
-static void renderWf(uint32_t f, uint16_t val) {
-  Seg s = seg_from_f(f, val);
-  uint8_t pal = getPalIndex(s.v);
-
-  for (uint8_t x = s.x0; x < s.x1; ++x) {
-    uint8_t bx = x >> 1;
-    if (bx >= WF_XN)
-      break;
-
-    if ((x & 1) == 0) {
-      wf[0][bx] &= 0xF0;
-      wf[0][bx] |= pal;
-    } else {
-      wf[0][bx] &= 0x0F;
-      wf[0][bx] |= pal << 4;
-    }
+/* Столбцы уже содержат максимум по всем точкам скана (SP_AddPoint), так что
+ * кадр строится за 240 шагов независимо от числа точек в диапазоне. */
+static void renderWfColumn(uint8_t x, uint16_t val) {
+  uint8_t pal = getPalIndex(val);
+  uint8_t bx = x >> 1;
+  if (bx >= WF_XN)
+    return;
+  if ((x & 1) == 0) {
+    wf[0][bx] &= 0xF0;
+    wf[0][bx] |= pal;
+  } else {
+    wf[0][bx] &= 0x0F;
+    wf[0][bx] |= pal << 4;
   }
 }
 
@@ -272,13 +245,9 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   dBmRange.max = Rssi2DBm(vMax);
 
   memset(nsy, 0, sizeof(nsy));
-  for (uint32_t f = range.start; f <= range.end; f += step) {
-    uint16_t hv = ConvertDomain(v(f2x(f)) * 2, vMin * 2, vMax * 2, 0, sh);
-    Seg s = seg_from_f(f, hv);
-    if (s.v > sh)
-      s.v = sh;
-    for (uint8_t x = s.x0; x < s.x1; x++)
-      nsy[x] = s.v;
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+    uint16_t hv = ConvertDomain(v(x) * 2, vMin * 2, vMax * 2, 0, sh);
+    nsy[x] = hv > sh ? sh : hv;
   }
 
   uint8_t min_y = sh, max_y = 0;
@@ -346,10 +315,8 @@ void WF_Render(uint8_t wy, bool wfDown) {
   init_palette();
   update_levels();
   memset(wf[0], 0, WF_XN);
-  for (uint32_t f = range.start; f <= range.end; f += step) {
-    uint8_t x = f2x(f);
-    renderWf(f, rssiHistory[x]);
-  }
+  for (uint8_t x = 0; x < SP_MAX_POINTS; ++x)
+    renderWfColumn(x, rssiHistory[x]);
 
   for (uint8_t bx = 0; bx < WF_XN; ++bx) {
     uint8_t v = wf[0][bx];

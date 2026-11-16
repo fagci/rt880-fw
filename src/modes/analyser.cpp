@@ -119,17 +119,10 @@ static uint8_t getCursorEnd() {
   return e;
 }
 
-/* Шаг скана: шаг VFO, но не больше SCAN_MAX_POINTS точек на проход
- * (16…1100 МГц при 25 кГц — 43 тыс. точек, это минуты). Столбец экрана
- * копит максимум по всем точкам, попавшим в него, поэтому узкие сигналы
- * при мелком шаге не теряются; хочется быстрее — шаг на 3/9 крупнее. */
-#define SCAN_MAX_POINTS 16384U
-static uint32_t scanStep() {
-  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
-  uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  uint32_t min = (span + SCAN_MAX_POINTS - 1) / SCAN_MAX_POINTS;
-  return step > min ? step : min;
-}
+/* Шаг скана — шаг VFO. Экран хранит 240 столбцов с максимумом по всем
+ * точкам, попавшим в столбец, так что число точек влияет только на время
+ * прохода (диапазон / шаг / ~160 точек в секунду). */
+static uint32_t scanStep() { return StepFrequencyTable[vfos[currentVfo].step]; }
 
 /* BK4819 принимает 18–660 и 840–1300 МГц; остальное пропускаем */
 static bool bkCovers(uint32_t f) {
