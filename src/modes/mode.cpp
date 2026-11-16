@@ -1,5 +1,6 @@
 #include "mode.h"
 #include "../driver/st7789.h"
+#include "../ui/graphics.h"
 #include "../ui/spectrum.h"
 
 static Mode *current = nullptr;
@@ -13,6 +14,10 @@ void Mode_Update() {
   if (next) {
     if (current)
       current->exit();
+    /* Лейблы пула (Printf*) живут между режимами: их LVGL перерисует поверх
+     * чужого экрана и даже в память зоны аппаратного скролла (чёрные полосы
+     * в водопаде по x-диапазонам надписей). Освобождаем при каждой смене. */
+    UI_ReleaseLabels();
     current = next;
     next = nullptr;
     if (current)
