@@ -206,17 +206,20 @@ static void zoomIn() {
 
 static void zoomOut() {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
-  uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  uint32_t newSpan = span * 2;
-  uint32_t newStart = anaCtx.range.start - span / 2;
-  if (newStart > BK4819_F_MAX - newSpan)
-    newStart = BK4819_F_MAX - newSpan;
-  anaCtx.range.start = newStart;
-  anaCtx.range.end = newStart + newSpan;
-  if (anaCtx.range.end > BK4819_F_MAX) {
-    anaCtx.range.end = BK4819_F_MAX;
-    anaCtx.range.start = anaCtx.range.end - newSpan;
+  int64_t span = anaCtx.range.end - anaCtx.range.start;
+  int64_t newSpan = span * 2;
+  int64_t newStart = (int64_t)anaCtx.range.start - span / 2;
+  /* в границах приёмника; без знаковых переходов (uint32 уходил в мусор) */
+  if (newSpan > (int64_t)(BK4819_F_MAX - BK4819_F_MIN)) {
+    newSpan = BK4819_F_MAX - BK4819_F_MIN;
+    newStart = BK4819_F_MIN;
   }
+  if (newStart < (int64_t)BK4819_F_MIN)
+    newStart = BK4819_F_MIN;
+  if (newStart + newSpan > (int64_t)BK4819_F_MAX)
+    newStart = (int64_t)BK4819_F_MAX - newSpan;
+  anaCtx.range.start = (uint32_t)newStart;
+  anaCtx.range.end = (uint32_t)(newStart + newSpan);
   if ((uint32_t)(anaCtx.range.end - anaCtx.range.start) >= step * 10)
     onRangeChanged();
 }
@@ -415,12 +418,12 @@ public:
                 UNIT_MHZ, 0, BK4819_F_MIN, BK4819_F_MAX, onEndEntered, POS_R,
                 nullptr, 0, 0);
     /* строка информации: узкие непересекающиеся зоны, центр создаём первым */
-    s_infoLbl[1] = mkInfoLabel(F_M, 60, INFO_BASE - 11, 120,
+    s_infoLbl[1] = mkInfoLabel(F_M, 80, INFO_BASE - 11, 80,
                                LV_TEXT_ALIGN_CENTER);
-    s_infoLbl[0] = mkInfoLabel(F_S, 4, INFO_BASE - 4, 56,
+    s_infoLbl[0] = mkInfoLabel(F_S, 4, INFO_BASE - 4, 76,
                                LV_TEXT_ALIGN_LEFT);
-    s_infoLbl[2] = mkInfoLabel(F_S, LCD_WIDTH - 4 - 56,
-                               INFO_BASE - 4, 56, LV_TEXT_ALIGN_RIGHT);
+    s_infoLbl[2] = mkInfoLabel(F_S, LCD_WIDTH - 4 - 76,
+                               INFO_BASE - 4, 76, LV_TEXT_ALIGN_RIGHT);
     initRange();
     onRangeChanged();
 

@@ -1,3 +1,4 @@
+#include <stdlib.h>
 /* Хост-превью экранов: гоняет настоящие режимы и сохраняет кадры в PPM. */
 #include "helper/lootlist.h"
 #include "lvgl.h"
@@ -75,6 +76,18 @@ int main(int argc, char **argv) {
   }
   LOOT_ToggleBlacklist(LOOT_Item(2));
   LOOT_ToggleWhitelist(LOOT_Item(4));
+  if (getenv("EDIT_TEST")) {
+    Mode_Switch(MODE_ANALYSER); step(100);
+    /* начало = 16 */
+    key(KEY_STAR); key(KEY_1); key(KEY_6); key(KEY_MENU); step(50);
+    dump("t_start");
+    /* конец = 1100 */
+    key(KEY_HASH); key(KEY_STAR); key(KEY_1); key(KEY_1); key(KEY_0); key(KEY_0); step(10);
+    dump("t_typed");
+    key(KEY_MENU); step(100);
+    dump("t_end");
+    return 0;
+  }
   gThemeLight = false;
   screens("dark");
   gThemeLight = true;
