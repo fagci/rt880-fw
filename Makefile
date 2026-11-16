@@ -76,11 +76,11 @@ $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -c $(CXXFLAGS) $< -o $@
+	$(CXX) -c -MMD -MP $(CXXFLAGS) $< -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) -c $(CXXFLAGS) $< -o $@
+	$(CC) -c -MMD -MP $(CXXFLAGS) $< -o $@
 
 # Оба правила нужны: GNU make не делает case-insensitive match
 $(BUILD)/%.o: %.S
@@ -90,6 +90,9 @@ $(BUILD)/%.o: %.S
 $(BUILD)/%.o: %.s
 	@mkdir -p $(dir $@)
 	$(CC) -c $(ASFLAGS) $< -o $@
+
+# зависимости от заголовков (lv_conf.h и др.): правка заголовка пересобирает зависимые
+-include $(OBJS:.o=.d)
 
 clean:
 	rm -rf $(BUILD)
