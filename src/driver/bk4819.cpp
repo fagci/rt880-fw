@@ -79,18 +79,27 @@ static BK4819_Chip *g_bk = &g_chips[0];
 // На 150 МГц 125 нс давало мусор в чтении (спектр не рисуется) — берём 1 мкс.
 #define BK_SPI_HALF_PERIOD_NS 1000u
 
-static uint32_t s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
+// Пауза между спадом SCK и выборкой SDA при ЧТЕНИИ. BK4819 выдаёт бит с
+// задержкой после спада SCK: на 150 МГц при 1 мкс единицы терялись (замер:
+// запись 0xBDF1, чтение 0x9CF0), при 3 и 10 мкс читается верно. На 8 МГц
+// накладные расходы кода давали недостающую паузу. Запись остаётся на 1 мкс.
+#define BK_SPI_READ_SAMPLE_NS 3000u
 
-static inline void bk_delay(void) {
+static uint32_t s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
+static uint32_t s_bkReadNs = BK_SPI_READ_SAMPLE_NS;
+
+static inline void bk_delay_ns(uint32_t ns) {
   // cycles = (CoreClock_MHz * ns) / 1000
   // умножаем сначала, чтобы не терять точность при целочисленном делении
-  uint32_t cycles = (SystemCoreClock / 1000000UL * s_bkHalfNs) / 1000u;
+  uint32_t cycles = (SystemCoreClock / 1000000UL * ns) / 1000u;
   if (cycles == 0)
     cycles = 1; // минимум 1 цикл
   uint32_t start = DWT->CYCCNT;
   while ((DWT->CYCCNT - start) < cycles)
     ;
 }
+
+static inline void bk_delay(void) { bk_delay_ns(s_bkHalfNs); }
 
 static void gpio_set_output(gpio_type *port, uint16_t pin) {
   gpio_init_type g;
@@ -137,7 +146,9 @@ void BK4819_SelectChip(uint8_t chip) {
     g_bk->sck_pin = BK2_SCK_PIN;
   }
 
-  g_bk->reg30_cached = false;
+  /* reg30_cached НЕ сбрасываем: кэш — на чип, все записи идут через
+   * WriteRegister; иначе каждый TuneTo делал чтение по шине (медленно и
+   * при сбое чтения портил REG_30). Сброс — только в BK4819_Init. */
 
   gpio_set_output(g_bk->scn_port, g_bk->scn_pin);
   gpio_set_output(g_bk->sda_port, g_bk->sda_pin);
@@ -200,7 +211,7 @@ static uint16_t read_u16(void) {
     PIN_SET(sck_port, sck_pin);
     bk_delay();
     PIN_CLR(sck_port, sck_pin);
-    bk_delay();
+    bk_delay_ns(s_bkReadNs); /* данные BK появляются с задержкой после спада */
     v <<= 1;
     if (PIN_GET(sda_port, sda_pin))
       v |= 1;
@@ -280,16 +291,16 @@ static uint16_t read_raw(uint8_t reg) {
 /* Диагностика шины: пишем REG_30 = RX вкл (DAC выкл) и читаем обратно
  * напрямую (мимо кэша) на разных скоростях. Лог: r30 при 1/3/10 мкс. */
 void BK4819_DiagSpeed(uint8_t chip) {
-  static const uint32_t NS[3] = {1000, 3000, 10000};
+  static const uint32_t NS[3] = {1500, 2000, 3000};
   uint16_t r[3];
   BK4819_SelectChip(chip);
   BK4819_WriteRegister(BK4819_REG_30, 0xBDF1);
   for (int i = 0; i < 3; i++) {
-    s_bkHalfNs = NS[i];
+    s_bkReadNs = NS[i];
     r[i] = read_raw(BK4819_REG_30);
   }
-  s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
-  Log("BK%u w=BDF1 r@1/3/10us=%04X/%04X/%04X", chip, r[0], r[1], r[2]);
+  s_bkReadNs = BK_SPI_READ_SAMPLE_NS;
+  Log("BK%u w=BDF1 rd@1.5/2/3us=%04X/%04X/%04X", chip, r[0], r[1], r[2]);
 }
 
 static const uint8_t sqTypeValues[4] = {0x88, 0xAA, 0xCC, 0xFF};
