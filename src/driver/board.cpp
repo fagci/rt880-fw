@@ -83,6 +83,11 @@ void SysTick_Handler(void) {
 
 // ── Задержки (DWT, не зависят от SysTick, работают из ISR) ──────────────────
 
+/* Зелёный LED показывает открытый шумодав (приём). Полярность (set = горит)
+ * — как в прежних тест-точках/«сердцебиении» в main; при инверсии поменять
+ * здесь. */
+void led_rx_set(bool on) { gpio_pin_write(&PIN_LED_GREEN, on); }
+
 void delay_us(uint32_t us) {
   uint32_t start = DWT->CYCCNT;
   uint32_t cycles = us * (SystemCoreClock / 1000000U);

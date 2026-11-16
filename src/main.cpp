@@ -24,11 +24,9 @@ int main(void) {
   Mode_Switch(MODE_VFO);
 
   gpio_pin_clr(&PIN_LED_RED);   // past Mode_Switch
-  gpio_pin_set(&PIN_LED_GREEN);
+  led_rx_set(false);            // зелёный — теперь индикатор открытого шумодава
 
   uint32_t lastRender = 0;
-  uint32_t lastBeat = 0;
-  bool beat = false;
 
   for (;;) {
     key_event_t evt;
@@ -41,17 +39,6 @@ int main(void) {
     if (now - lastRender >= RENDER_INTERVAL_MS) {
       Mode_Render();
       lastRender = now;
-    }
-
-    /* сердцебиение: зелёный мигает раз в секунду — главный цикл жив.
-       Если замер — зависание внутри цикла, если фолт — красный. */
-    if (now - lastBeat >= 500) {
-      lastBeat = now;
-      beat = !beat;
-      if (beat)
-        gpio_pin_set(&PIN_LED_GREEN);
-      else
-        gpio_pin_clr(&PIN_LED_GREEN);
     }
 
     /* Рендер LVGL: сам решает, есть ли что перерисовывать.

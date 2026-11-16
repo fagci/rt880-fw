@@ -8,6 +8,8 @@
 
 extern volatile uint32_t tick_ms;
 extern uint8_t g_clockStage; /* стадия clock_init (диагностика) */
+/* Зелёный светодиод = «шумодав открыт / слушаем». Одна точка управления. */
+void led_rx_set(bool on);
 
 static const gpio_pin_t PIN_LED_GREEN =
     GPIO_PIN(GPIOA, GPIO_PINS_13, CRM_GPIOA_PERIPH_CLOCK);

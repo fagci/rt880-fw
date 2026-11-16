@@ -362,7 +362,6 @@ void SI47XX_PowerUp(void) {
 
   SI47XX_SetFreq(siCurrentFreq);
 
-  gpio_pin_clr(&PIN_LED_GREEN); // Test: SI47XX_PowerUp done
 }
 
 void SI47XX_PatchPowerUp(bool ssb) {

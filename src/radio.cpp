@@ -214,6 +214,8 @@ static void applyMute(bool sqOpen) {
     }
   }
 
+  led_rx_set(!activeSi && sqOpen); /* LED: шумодав BK открыт */
+
   bool unmute = activeSi ? true : sqOpen;
   if (unmute != afMuteOn) {
     gpio_pin_write(&PIN_AF_MUTE, unmute);
@@ -395,6 +397,7 @@ void Radio_ScanAudio(bool on) {
   }
   gpio_pin_write(&PIN_AF_MUTE, on);
   afMuteOn = on;
+  led_rx_set(on);
 }
 
 void Radio_SetSquelch(uint8_t level) {

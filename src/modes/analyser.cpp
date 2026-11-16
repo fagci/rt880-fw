@@ -26,9 +26,11 @@
  * аппаратного скролла (с WF_Y). */
 #define SPECTRUM_Y (STATUS_H + 24)
 #define CURSOR_Y (SPECTRUM_Y + SP_H + 6)
-#define CURSOR_H 24
-#define WF_Y (CURSOR_Y + CURSOR_H)
-#define INFO_BASE (WF_Y - 8) /* baseline строки информации и ввода частоты */
+#define INFO_BASE (CURSOR_Y + 16) /* baseline строки информации и ввода частоты */
+/* Запас от низа подписей (INFO_BASE+4) до зоны скролла — 14 строк: надписи
+ * ни при каких обстоятельствах не должны попадать в память водопада */
+#define WF_Y (INFO_BASE + 18)
+#define CURSOR_H (WF_Y - CURSOR_Y)
 #define BORDER_Y (SPECTRUM_Y - 10)
 
 #define CURSOR_TIMEOUT_MS 5000
@@ -60,6 +62,13 @@ struct {
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
 } anaCtx;
+
+/* Кэш строки информации: перерисовываем только при смене текста. Раньше
+ * чёрная заливка и повторная отрисовка лейблов шли каждый кадр — лишние
+ * записи в зону экрана рядом с водопадом. */
+static bool s_infoValid;
+static uint8_t s_infoMode;
+static char s_info[3][24];
 
 static uint8_t getCursorStart() {
   if (anaCtx.cursorCenter >= anaCtx.cursorHalfW)
@@ -100,6 +109,7 @@ static void onRangeChanged() {
   anaCtx.lastStepTime = millis();
   anaCtx.stepsPerSec = 0;
   anaCtx.prevCursorActive = false;
+  s_infoValid = false;
 
   FillRect(0, STATUS_H, LCD_WIDTH, WF_Y - STATUS_H, C_BLACK);
 }
@@ -417,6 +427,7 @@ public:
 
     if (NumVal_IsEditing(&anaCtx.freqVal)) {
       NumVal_Render(&anaCtx.freqVal);
+      s_infoValid = false; /* зону информации перерисуем после ввода */
       return;
     }
 
@@ -551,6 +562,7 @@ public:
       NumVal_StartEdit(anaCtx.borderSel ? &anaCtx.endVal : &anaCtx.startVal);
       return true;
     case KEY_0: /* ввод центральной частоты */
+      s_infoValid = false;
       FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
       anaCtx.cursorActive = false;
       NumVal_StartEdit(&anaCtx.freqVal);
@@ -569,9 +581,9 @@ public:
 
 private:
   void renderCursorInfo() {
-    FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
-
-    uint16_t textY = INFO_BASE;
+    const uint16_t textY = INFO_BASE;
+    char b0[24], b1[24], b2[24];
+    uint8_t mode;
 
     if (anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout) {
       uint8_t x0 = getCursorStart();
@@ -579,37 +591,45 @@ private:
       uint32_t leftF = xToFreq(x0);
       uint32_t rightF = xToFreq(x1);
       uint32_t centerF = xToFreq(anaCtx.cursorCenter);
-      char buf[24];
+      mode = anaCtx.listen ? 2 : 1;
 
-      if (anaCtx.listen) {
-        PrintfEx(4, textY, POS_L, C_GREEN, C_BLACK, F_SS, "LISTEN");
-      } else {
-        snprintf(buf, sizeof(buf), "%lu.%03lu", leftF / MHZ,
-                 (leftF % MHZ) / 1000);
-        PrintfEx(4, textY, POS_L, C_CYAN, C_BLACK, F_SS, "%s", buf);
-      }
-
-      snprintf(buf, sizeof(buf), "%lu.%03lu", centerF / MHZ, (centerF % MHZ) / 1000);
-      PrintfEx(LCD_XCENTER, textY, POS_C, C_WHITE, C_BLACK, F_SM, "%s", buf);
-
-      snprintf(buf, sizeof(buf), "%lu.%03lu", rightF / MHZ, (rightF % MHZ) / 1000);
-      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_CYAN, C_BLACK, F_SS, "%s", buf);
+      if (anaCtx.listen)
+        snprintf(b0, sizeof(b0), "LISTEN");
+      else
+        snprintf(b0, sizeof(b0), "%lu.%03lu", leftF / MHZ, (leftF % MHZ) / 1000);
+      snprintf(b1, sizeof(b1), "%lu.%03lu", centerF / MHZ, (centerF % MHZ) / 1000);
+      snprintf(b2, sizeof(b2), "%lu.%03lu", rightF / MHZ, (rightF % MHZ) / 1000);
     } else {
       uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
       uint32_t span = anaCtx.range.end - anaCtx.range.start;
-      char buf[24];
-
-      snprintf(buf, sizeof(buf), "Step %lu.%02luk", step / 100, step % 100);
-      PrintfEx(4, textY, POS_L, C_GRAY, C_BLACK, F_SS, "%s", buf);
-
-      snprintf(buf, sizeof(buf), "%4lu/s", anaCtx.stepsPerSec);
-      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_GRAY, C_BLACK, F_SS, "%s", buf);
-
-      snprintf(buf, sizeof(buf), "%lu MHz", span / MHZ);
-      PrintfEx(LCD_XCENTER, textY, POS_C, C_GRAY, C_BLACK, F_SS, "%s", buf);
-
+      mode = 0;
+      snprintf(b0, sizeof(b0), "Step %lu.%02luk", step / 100, step % 100);
+      snprintf(b1, sizeof(b1), "%lu MHz", span / MHZ);
+      snprintf(b2, sizeof(b2), "%4lu/s", anaCtx.stepsPerSec);
       anaCtx.cursorActive = false;
     }
+
+    /* ничего не изменилось — не трогаем экран */
+    if (s_infoValid && mode == s_infoMode && !strcmp(b0, s_info[0]) &&
+        !strcmp(b1, s_info[1]) && !strcmp(b2, s_info[2]))
+      return;
+
+    FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
+    if (mode == 0) {
+      PrintfEx(4, textY, POS_L, C_GRAY, C_BLACK, F_SS, "%s", b0);
+      PrintfEx(LCD_XCENTER, textY, POS_C, C_GRAY, C_BLACK, F_SS, "%s", b1);
+      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_GRAY, C_BLACK, F_SS, "%s", b2);
+    } else {
+      PrintfEx(4, textY, POS_L, mode == 2 ? C_GREEN : C_CYAN, C_BLACK, F_SS,
+               "%s", b0);
+      PrintfEx(LCD_XCENTER, textY, POS_C, C_WHITE, C_BLACK, F_SM, "%s", b1);
+      PrintfEx(LCD_WIDTH - 4, textY, POS_R, C_CYAN, C_BLACK, F_SS, "%s", b2);
+    }
+    s_infoMode = mode;
+    strcpy(s_info[0], b0);
+    strcpy(s_info[1], b1);
+    strcpy(s_info[2], b2);
+    s_infoValid = true;
   }
 
   uint32_t lastSpectrumRender = 0;
