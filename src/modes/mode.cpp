@@ -1,5 +1,6 @@
 #include "mode.h"
 #include "../driver/st7789.h"
+#include "../ui/spectrum.h"
 
 static Mode *current = nullptr;
 static Mode *next = nullptr;
@@ -16,7 +17,12 @@ void Mode_Update() {
     next = nullptr;
     if (current)
       current->enter();
-    st7789_scroll_reset();
+    /* Аппаратный скролл сбрасывается при каждой смене режима — вместе с
+     * ним сбрасываем и программное состояние водопада (wfScrollInited).
+     * Иначе второй вход в режим с водопадом пропускает инициализацию
+     * области скролла, а WF_Render продолжает слать смещение — и едет
+     * весь экран. */
+    WF_Reset();
   }
   if (current)
     current->update();
