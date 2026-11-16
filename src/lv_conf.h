@@ -20,6 +20,9 @@
 
 /* ── Ядро ── */
 #define LV_DISP_DEF_REFR_PERIOD 33 /* ~30 fps */
+/* Буфер dirty-областей: при переполнении LVGL перерисовывает ВЕСЬ экран
+ * (~600 мс). 32 по умолчанию мало для смены активного VFO. */
+#define LV_INV_BUF_SIZE 64
 #define LV_INDEV_DEF_READ_PERIOD 30
 #define LV_DPI_DEF 130
 #define LV_USE_ANIM 0

@@ -80,6 +80,19 @@ static inline lv_color_t lvc(Color c) {
                        (uint8_t)(c << 3));
 }
 
+/* lv_obj_add_flag/clear_flag(HIDDEN) инвалидируют область даже если флаг
+ * не менялся; вызываемые каждый кадр они забивают буфер dirty-областей
+ * LVGL (32 шт.) — при переполнении перерисовывается весь экран (~600 мс).
+ * Поэтому трогаем флаг только при реальной смене. */
+static void setHidden(lv_obj_t *o, bool hidden) {
+  if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hidden)
+    return;
+  if (hidden)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
 /* Цвета, читаемые и на чёрном, и на белом фоне (инверсия) */
 static Color fgAd(Color c) { return gInverted ? C_BLACK : c; }
 
@@ -255,10 +268,7 @@ public:
         if (s_cursor) {
           lv_coord_t cx = 4 + nv->cursor * nv->charW;
           lv_obj_set_pos(s_cursor, cx, sy + 9);
-          if (nv->blinkState)
-            lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-          else
-            lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+          setHidden(s_cursor, !nv->blinkState);
         }
       } else {
         if (s_editRow == (int8_t)i) {
@@ -267,7 +277,7 @@ public:
                                       LV_PART_MAIN);
         }
         if (s_cursor && i == currentVfo)
-          lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+          setHidden(s_cursor, true);
       }
 
       if (s_badgeLbl[i] &&
@@ -288,7 +298,7 @@ public:
 
       if (s_stepLbl[i]) {
         if (active) {
-          lv_obj_clear_flag(s_stepLbl[i], LV_OBJ_FLAG_HIDDEN);
+          setHidden(s_stepLbl[i], false);
           if (first || vfos[i].step != s_prevStep) {
             static char stepBuf[10];
             uint32_t step = StepFrequencyTable[vfos[i].step];
@@ -298,7 +308,7 @@ public:
             s_prevStep = vfos[i].step;
           }
         } else {
-          lv_obj_add_flag(s_stepLbl[i], LV_OBJ_FLAG_HIDDEN);
+          setHidden(s_stepLbl[i], true);
         }
       }
 
