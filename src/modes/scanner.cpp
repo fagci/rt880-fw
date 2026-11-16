@@ -40,7 +40,9 @@
  * [WF_Y, HEIGHT) — ниже этой линии нельзя размещать никакой текст/виджеты,
  * они будут «плыть» вместе с водопадом. */
 #define STATUS_H 24
-#define SPECTRUM_Y (STATUS_H + 14)
+/* поля частот — лейблы F_SM [y-11, y+4] с y = SPECTRUM_Y-6: не перекрывают
+ * спектр и статус-строку */
+#define SPECTRUM_Y (STATUS_H + 20)
 #define SP_H 52
 #define STATE_Y (SPECTRUM_Y + SP_H + 2) /* строка состояния */
 /* LVGL-лейбл F_SM занимает [y-11, y+4]: строка состояния (baseline
@@ -111,10 +113,10 @@ static void onEndEntered(uint32_t f) {
 
 static void initNumVals() {
   /* NumVal печатает от ПРАВОГО края x: левому полю задаём правый край */
-  NumVal_Init(&numVal[0], 8 + 9 * 11, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
+  NumVal_Init(&numVal[0], 8 + 9 * 11, SPECTRUM_Y - 6, F_SM, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered, POS_R, nullptr, 0,
               0);
-  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
+  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 6, F_SM, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
               0, 0);
 }
@@ -138,6 +140,9 @@ static void advance() {
 
 static void tuneHere() {
   vfos[currentVfo].rxF = curF;
+  /* фильтр диапазона (VHF/UHF/...) — без этого остаётся от VFO и сигнал
+   * вне его диапазона ослаблен; внутри — кэш по band, почти бесплатно */
+  BK4819_SelectFilterByFrequency(curF);
   BK4819_TuneTo(curF, false);
 }
 
