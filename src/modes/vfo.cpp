@@ -7,7 +7,6 @@
  * курсор и позиционирование — здесь.
  */
 #include "vfo.h"
-#include "at32f423.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
@@ -20,7 +19,6 @@
 #include "../ui/lvgl_fonts/lv_font_mono18.h"
 #include "../ui/lvgl_fonts/lv_font_mono9.h"
 #include "../ui/lvgl_fonts/lv_font_tomthumb.h"
-#include "../ui/lv_port.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
 #include "mode.h"
@@ -204,16 +202,6 @@ public:
   void enter() override {
     Log("vfo enter inv=%u", gInverted);
     Log("build %s %s", __DATE__, __TIME__);
-    {
-      /* диагностика тактирования: SCLK/APB2 и реальная скорость цикла */
-      uint32_t t0 = millis();
-      for (volatile uint32_t i = 0; i < 200000; i++) {
-      }
-      Log("clk %lu MHz sel=%u stage=%02X", (unsigned long)(SystemCoreClock / 1000000UL),
-          (unsigned)CRM->cfg_bit.sclksts, (unsigned)g_clockStage);
-      Log("loop200k=%lu ms", (unsigned long)(millis() - t0));
-      Radio_DiagBk();
-    }
     UI_ClearScreen(C_BLACK);
     Radio_Init();
     buildScreen();
@@ -373,17 +361,7 @@ public:
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
        радио-применение (патч SSB): переключение VFO отзывается
        мгновенно, загрузка патча идёт уже после кадра. */
-    uint32_t sc, spx, sms, spre;
-    lv_port_stats_begin();
-    uint32_t t0 = millis();
     lv_timer_handler();
-    uint32_t dt = millis() - t0;
-    if (dt > 15) {
-      lv_port_stats(&sc, &spx, &sms, &spre);
-      Log("lvgl %lu fl=%lu px=%lu spi=%lu pre=%lu", (unsigned long)dt,
-          (unsigned long)sc, (unsigned long)spx, (unsigned long)sms,
-          (unsigned long)spre);
-    }
     Radio_ApplyPending();
   }
 

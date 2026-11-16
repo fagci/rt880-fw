@@ -7,7 +7,6 @@
  * минуя LVGL — они живут ниже зоны текстов и не пересекаются с его flush.
  */
 #include "lv_port.h"
-#include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "lvgl.h"
 #include <string.h>
@@ -23,32 +22,10 @@ static lv_color_t draw_buf1[LV_BUF_PX];
 static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 
-/* Статистика flush: для профилирования (кадр >600 мс — это рендер или SPI?) */
-static uint32_t s_stCalls, s_stPx, s_stMs, s_markT, s_pre = 0xFFFFFFFF;
-
-/* Начало замера: сброс счётчиков, метка времени */
-void lv_port_stats_begin(void) {
-  s_stCalls = s_stPx = s_stMs = 0;
-  s_markT = millis();
-  s_pre = 0xFFFFFFFF;
-}
-
-/* pre — мс от begin до начала первого flush (раскладка/стили/первая полоса) */
-void lv_port_stats(uint32_t *calls, uint32_t *px, uint32_t *flushMs,
-                   uint32_t *pre) {
-  *calls = s_stCalls;
-  *px = s_stPx;
-  *flushMs = s_stMs;
-  *pre = (s_pre == 0xFFFFFFFF) ? 0 : s_pre;
-}
-
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
                      lv_color_t *color_p) {
   int32_t w = area->x2 - area->x1 + 1;
   int32_t h = area->y2 - area->y1 + 1;
-  uint32_t t0 = millis();
-  if (s_pre == 0xFFFFFFFF)
-    s_pre = t0 - s_markT;
 
   st7789_cs_low();
   st7789_set_addr_window_raw((uint16_t)area->x1, (uint16_t)area->y1,
@@ -56,10 +33,6 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
   st7789_dma_start((const uint8_t *)color_p, (uint16_t)(w * h * 2));
   st7789_dma_wait();
   st7789_cs_high();
-
-  s_stCalls++;
-  s_stPx += (uint32_t)(w * h);
-  s_stMs += millis() - t0;
 
   lv_disp_flush_ready(drv);
 }

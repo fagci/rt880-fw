@@ -1,5 +1,4 @@
 #include "bk4819.h"
-#include "../helper/log.h"
 #include "../misc.h"
 #include "at32f423.h"
 #include "bk4819-regs.h"
@@ -286,21 +285,6 @@ static uint16_t read_raw(uint8_t reg) {
 
   __set_PRIMASK(primask);
   return v;
-}
-
-/* Диагностика шины: пишем REG_30 = RX вкл (DAC выкл) и читаем обратно
- * напрямую (мимо кэша) на разных скоростях. Лог: r30 при 1/3/10 мкс. */
-void BK4819_DiagSpeed(uint8_t chip) {
-  static const uint32_t NS[3] = {1500, 2000, 3000};
-  uint16_t r[3];
-  BK4819_SelectChip(chip);
-  BK4819_WriteRegister(BK4819_REG_30, 0xBDF1);
-  for (int i = 0; i < 3; i++) {
-    s_bkReadNs = NS[i];
-    r[i] = read_raw(BK4819_REG_30);
-  }
-  s_bkReadNs = BK_SPI_READ_SAMPLE_NS;
-  Log("BK%u w=BDF1 rd@1.5/2/3us=%04X/%04X/%04X", chip, r[0], r[1], r[2]);
 }
 
 static const uint8_t sqTypeValues[4] = {0x88, 0xAA, 0xCC, 0xFF};
