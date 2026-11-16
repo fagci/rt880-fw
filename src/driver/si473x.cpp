@@ -64,8 +64,9 @@ static void sda_output(void) {
 }
 
 static void i2c_delay(void) {
-  /* Было 8 NOP — рассчитано на ядро 8 МГц. Теперь 150 МГц: по времени. */
-  delay_us(2);
+  /* Было 8 NOP на ядре 8 МГц (с накладными расходами GPIO ≈ 100–125 кГц).
+   * Внутренняя подтяжка SDA/SCL медленная — держим ~100 кГц по времени. */
+  delay_us(5);
 }
 
 static void i2c_start(void) {
@@ -100,6 +101,7 @@ static bool i2c_write_byte(uint8_t data) {
     PIN_SET(PORT_SCL, PIN_SCL);
     i2c_delay();
     PIN_CLR(PORT_SCL, PIN_SCL);
+    i2c_delay(); /* hold: SDA не меняем сразу после спада SCL */
     data <<= 1;
     if (--timeout == 0) {
       i2c_stop(); // Emergency recovery
@@ -108,9 +110,10 @@ static bool i2c_write_byte(uint8_t data) {
   }
   sda_input();
   PIN_SET(PORT_SDA, PIN_SDA); // release SDA for ACK
+  i2c_delay(); /* дать ведомому выставить ACK до такта */
   PIN_SET(PORT_SCL, PIN_SCL);
   i2c_delay();
-  uint32_t ack_timeout = 1000;
+  uint32_t ack_timeout = 5000;
   while (PIN_GET(PORT_SDA, PIN_SDA) != 0 && --ack_timeout) // Wait for ACK (SDA pulled low by slave)
     ;
   PIN_CLR(PORT_SCL, PIN_SCL);
@@ -124,10 +127,12 @@ static uint8_t i2c_read_byte(bool send_ack) {
   uint32_t timeout = 1000;
   for (int i = 0; i < 8; i++) {
     data <<= 1;
+    i2c_delay(); /* setup: ведомый выставляет бит после спада SCL */
     PIN_SET(PORT_SCL, PIN_SCL);
-    uint32_t t = 100;
+    uint32_t t = 2000;
     while (!PIN_GET(PORT_SCL, PIN_SCL) && --t)
       ; // wait for SCL rise
+    i2c_delay();
     if (PIN_GET(PORT_SDA, PIN_SDA))
       data |= 1;
     PIN_CLR(PORT_SCL, PIN_SCL);
