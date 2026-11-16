@@ -3,7 +3,6 @@
 #include "../driver/st7789.h"
 #include "../ui/graphics.h"
 #include "../helper/unit_fmt.h"
-#include "gfxfont.h"
 #include "lvgl.h"
 #include <string.h>
 
@@ -75,15 +74,16 @@ static void stopEdit(NumVal_t *nv, bool confirm) {
 // ──────────────────────────────────────────────
 // Публичный API
 
-void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, const GFXfont *font,
+void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, Font font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
                  uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
-                 const GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH) {
+                 Font extraFont, uint8_t extraCharW, uint8_t extraCharH) {
   nv->x = x;
   nv->y = y;
   nv->font = font;
-  nv->charW = charW;
-  nv->charH = charH;
+  (void)charW; (void)charH; /* размеры берутся из шрифта */
+  nv->charW = FontW(font);
+  nv->charH = FontAscent(font);
   nv->pos = pos;
   nv->unit = unit;
   nv->multiplier = unit_multiplier(unit);
@@ -161,7 +161,7 @@ void NumVal_Render(NumVal_t *nv) {
                  : nv->pos == POS_C ? (int16_t)nv->x + tw / 2
                                     : (int16_t)nv->x + tw;
     FillRect(cx, nv->y - nv->charH + 1, 1, nv->charH,
-             nv->blinkState ? C_YELLOW : BG());
+             nv->blinkState ? C_YELLOW : C_BLACK);
   }
 
   nv->prevLen = len;
@@ -171,7 +171,7 @@ void NumVal_Render(NumVal_t *nv) {
     /* value в 10 Гц. fracPart = value % 100000 (в единицах 0.00001 МГц).
      * Первые 3 знака: fracPart / 100, доп. 2 знака: fracPart % 100 */
     uint8_t extra = (nv->value % 100000) % 100;
-    PrintfEx(nv->x + 2, nv->y, POS_L, C_GRAY, BG(), nv->extraFont, "%02d",
+    PrintfEx(nv->x + 2, nv->y, POS_L, C_GRAY, C_BLACK, nv->extraFont, "%02d",
              extra);
   }
 }

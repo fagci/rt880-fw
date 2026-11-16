@@ -51,12 +51,12 @@
  * [WF_Y, HEIGHT) — ниже этой линии нельзя размещать никакой текст/виджеты,
  * они будут «плыть» вместе с водопадом. */
 #define STATUS_H 24
-/* поля частот — лейблы F_SM [y-11, y+4] с y = SPECTRUM_Y-10; под ними
+/* поля частот — лейблы F_M [y-11, y+4] с y = SPECTRUM_Y-10; под ними
  * (SPECTRUM_Y-4..-3) полоса-подчёркивание выбранной границы; ниже — спектр */
 #define SPECTRUM_Y (STATUS_H + 24)
 #define SP_H 52
 #define STATE_Y (SPECTRUM_Y + SP_H + 10) /* строка состояния (с запасом от спектра) */
-/* LVGL-лейбл F_SM занимает [y-11, y+4]: строка состояния (baseline
+/* LVGL-лейбл F_M занимает [y-11, y+4]: строка состояния (baseline
  * STATE_Y+12) кончается на STATE_Y+16. Водопад начинаем ниже — иначе
  * перерисовка лейбла (чёрный фон) пишет в память зоны скролла. */
 #define INFO_Y (STATE_Y + 28)           /* строка находок (baseline) */
@@ -154,10 +154,10 @@ static void onEndEntered(uint32_t f) {
 static void initNumVals() {
   /* выравнивание значения (и при вводе) задаёт pos: левое поле — от левого
    * края, правое — от правого */
-  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 10, F_SM, 11, 12, UNIT_MHZ,
+  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 10, F_M, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0,
               0);
-  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 10, F_SM, 11, 12,
+  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 10, F_M, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
               0, 0);
 }
@@ -303,6 +303,7 @@ static void releaseHold() {
 class ScannerMode : public Mode {
 public:
   void enter() override {
+    STATUSLINE_SetTitle("SCAN");
     savedVfo = currentVfo;
     savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
@@ -367,49 +368,47 @@ public:
      * прошлого экрана) закрашивает её. Поэтому не «по смене», а каждый
      * кадр — две заливки 99×2 px. */
     {
-      const int16_t uy = SPECTRUM_Y - 4, uw = 9 * 11;
+      const int16_t uy = SPECTRUM_Y - 4, uw = 8 * FontW(F_M);
       FillRect(8, uy, uw, 2, endFSel ? C_BLACK : C_YELLOW);
       FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2, endFSel ? C_YELLOW : C_BLACK);
     }
 
     /* шаг и выдержка на частоте — между полями границ (мелким шрифтом) */
     uint32_t stp = StepFrequencyTable[vfos[currentVfo].step];
-    PrintfT(LCD_XCENTER, SPECTRUM_Y - 14,
-            text_style(C_YELLOW, C_BLACK, POS_C, F_SS), "%u.%02uk",
-            (unsigned)(stp / 100), (unsigned)(stp % 100));
-    PrintfT(LCD_XCENTER, SPECTRUM_Y - 8,
-            text_style(C_GRAY, C_BLACK, POS_C, F_SS), "%uus",
+    PrintfT(LCD_XCENTER, SPECTRUM_Y - 6,
+            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%u.%02uk %uus",
+            (unsigned)(stp / 100), (unsigned)(stp % 100),
             (unsigned)DWELL_US[dwellIdx]);
 
     /* строка состояния: SCAN/HOLD/PAUSE + частота + скорость */
     char state[6];
     strcpy(state, !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN"));
-    PrintfT(4, STATE_Y + 12, text_style(C_GREEN, C_BLACK, POS_L, F_SM),
+    PrintfT(4, STATE_Y + 12, text_style(C_GREEN, C_BLACK, POS_L, F_M),
             "%s %u.%05u", state, curF / 100000, curF % 100000);
     PrintfT(LCD_WIDTH - 4, STATE_Y + 12,
-            text_style(C_YELLOW, C_BLACK, POS_R, F_SM), "%4u/s", stepsPerSec);
+            text_style(C_YELLOW, C_BLACK, POS_R, F_M), "%4u/s", stepsPerSec);
 
     /* строка находок: последняя находка (+белый/-чёрный), сколько назад;
      * справа — размер списка и режим мониторинга */
     const Loot *ll = gLastActiveLoot;
     if (ll) {
       uint32_t ago = LOOT_SecondsAgo(ll);
-      PrintfT(4, INFO_Y, text_style(C_WHITE, C_BLACK, POS_L, F_SM),
+      PrintfT(4, INFO_Y, text_style(C_WHITE, C_BLACK, POS_L, F_M),
               "%c%u.%05u %2u:%02u", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ',
               (unsigned)(ll->f / MHZ), (unsigned)(ll->f % MHZ),
               (unsigned)(ago / 60 % 100), (unsigned)(ago % 60));
     } else {
-      PrintfT(4, INFO_Y, text_style(C_GRAY, C_BLACK, POS_L, F_SM),
+      PrintfT(4, INFO_Y, text_style(C_GRAY, C_BLACK, POS_L, F_M),
               "no loot yet     ");
     }
     if (probeB) {
       /* A и B: RSSI в дБм на текущей частоте (B ≈ A при подключённом входе) */
       PrintfT(LCD_WIDTH - 4, INFO_Y,
-              text_style(C_YELLOW, C_BLACK, POS_R, F_SS), "A%d B%d  ",
+              text_style(C_YELLOW, C_BLACK, POS_R, F_S), "A%d B%d  ",
               (int)(probeRssiA >> 1) - 160, (int)(probeRssiB >> 1) - 160);
     } else {
       PrintfT(LCD_WIDTH - 4, INFO_Y,
-              text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_SS),
+              text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
               "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "    ");
     }
   }

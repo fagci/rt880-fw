@@ -83,7 +83,7 @@ static char s_line[FC_LINES][34];
 static uint16_t s_lineColor[FC_LINES];
 
 static void drawLine(uint8_t idx, int16_t x, int16_t y, int16_t clearH,
-                     TextPos pos, uint16_t color, const GFXfont *font,
+                     TextPos pos, uint16_t color, Font font,
                      const char *text) {
   if (s_lineColor[idx] == color && !strcmp(s_line[idx], text))
     return;
@@ -166,6 +166,7 @@ static void resumeScan() {
 class FcMode : public Mode {
 public:
   void enter() override {
+    STATUSLINE_SetTitle("FC");
     fcCtx.savedVfo = currentVfo;
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
@@ -273,14 +274,14 @@ public:
     snprintf(buf, sizeof(buf), "%s %ums HZ %u SQ %u%s", BANDS[fcCtx.band].name,
              200u << fcCtx.scanSpeed, (unsigned)fcCtx.hz,
              (unsigned)squelchLevel, fcCtx.bandAutoSwitch ? " [A]" : "");
-    drawLine(0, 4, FC_STATUS_H + 16, 16, POS_L, C_WHITE, F_SM, buf);
+    drawLine(0, 4, FC_STATUS_H + 16, 16, POS_L, C_WHITE, F_M, buf);
 
     /* частота: последняя найденная счётчиком / на которой стоим */
     uint32_t f = fcCtx.stopped ? fcCtx.stopFreq : fcCtx.currentFrequency;
     snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(f / MHZ),
              (unsigned long)((f % MHZ) / 1000));
     drawLine(1, LCD_XCENTER, FC_STATUS_H + 52, 34, POS_C,
-             fcCtx.stopped ? C_GREEN : C_YELLOW, F_MONO_LG, buf);
+             fcCtx.stopped ? C_GREEN : C_YELLOW, F_XL, buf);
 
     /* шумодав на находке */
     if (fcCtx.stopped)
@@ -289,7 +290,7 @@ public:
     else
       snprintf(buf, sizeof(buf), "scanning...");
     drawLine(2, LCD_XCENTER, FC_STATUS_H + 76, 16, POS_C,
-             fcCtx.stopped ? C_GREEN : C_GRAY, F_SM, buf);
+             fcCtx.stopped ? C_GREEN : C_GRAY, F_M, buf);
 
     /* последние находки из списка (свежие — выше) */
     uint16_t n = LOOT_Size();
@@ -307,12 +308,12 @@ public:
       }
       drawLine(3 + r, 4, FC_STATUS_H + 110 + r * 17, 16, POS_L,
                (r < n && LOOT_Item(n - 1 - r)->open) ? C_YELLOW : C_WHITE,
-               F_SM, buf);
+               F_M, buf);
     }
 
-    drawLine(9, 4, LCD_HEIGHT - 12, 12, POS_L, C_GRAY, F_SS,
-             "1/7 SPD 3/9 SQ 5 HZ # BAND 0 AUTO");
-    drawLine(10, 4, LCD_HEIGHT - 5, 8, POS_L, C_GRAY, F_SS,
+    drawLine(9, 4, LCD_HEIGHT - 14, 12, POS_L, C_GRAY, F_S,
+             "1/7 SPD 3/9 SQ 5 THR #/0 BAND");
+    drawLine(10, 4, LCD_HEIGHT - 2, 12, POS_L, C_GRAY, F_S,
              "S1 -BL S2 +WL MENU>VFO EXIT");
   }
 

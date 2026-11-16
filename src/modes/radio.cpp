@@ -125,12 +125,12 @@ static void scanBands() { scan_all_kv_bands(); }
 static void onFreqEntered(uint32_t f) { Radio_TuneToAuto(f); }
 
 void RadioMode::enter() {
-  UI_ClearScreen(C_BLACK);
+  UI_ClearScreen(BG());
   currentVfo = 2;
   Radio_TuneTo(10480000, true);
   NumVal_Init(&radioCtx.numVal, LCD_WIDTH - 8 - EXTRA_W - 4, LCD_HEIGHT / 2,
-              F_MONO_LG, 21, 23, UNIT_MHZ, vfos[currentVfo].rxF, 0, 1340 * MHZ,
-              onFreqEntered, POS_R, F_SM, 11, 12);
+              F_XL, 21, 23, UNIT_MHZ, vfos[currentVfo].rxF, 0, 1340 * MHZ,
+              onFreqEntered, POS_R, F_M, 11, 12);
 }
 
 void RadioMode::update() {

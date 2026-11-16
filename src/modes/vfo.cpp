@@ -17,9 +17,6 @@
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
-#include "../ui/lvgl_fonts/lv_font_mono18.h"
-#include "../ui/lvgl_fonts/lv_font_mono9.h"
-#include "../ui/lvgl_fonts/lv_font_tomthumb.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
 #include "loot_screen.h"
@@ -32,22 +29,22 @@
 #include "printf.h"
 #include <string.h>
 
-#define VFO_H 64
+#define VFO_H 98
 #define STATUS_H 24
 
-#define FREQ_RIGHT 192 /* правый край частоты (лейбл 2..192) */
+#define FREQ_RIGHT 204 /* правый край частоты (цифры XL, 7 знаков) */
 /* Выравнивание частоты в VFO (и при вводе): POS_R — по правому краю,
  * POS_L — по левому. Одна настройка на NumVal, лейбл и курсор. */
 #define VFO_FREQ_POS POS_R
-#define COL_RIGHT 236  /* правый край колонки моды/бейджа/шага */
+#define COL_RIGHT 232 /* правый край колонок справа */
+#define MARGIN 8
 
-#define VFO_FREQ_Y 30
-#define VFO_STEP_Y 48
-#define VFO_RSSI_Y 52
-#define VFO_RSSI_W 160
-
-#define EXTRA_W (11 * 2 + 8)
-#define EXTRA_X (LCD_WIDTH - 8 - EXTRA_W)
+#define VFO_INFO_Y 6   /* строка диапазон / модуляция (M) */
+#define VFO_FREQ_Y 26  /* верх строки частоты (XL) */
+#define VFO_SUB_Y 68   /* строка чип / шаг (S) */
+#define VFO_RSSI_Y 88  /* тонкая полоса уровня */
+#define VFO_RSSI_W (LCD_WIDTH - 2 * MARGIN)
+#define VFO_RSSI_H 3
 
 static const char *MOD_NAMES[] = {
     [MOD_FM] = "FM",   [MOD_AM] = "AM",   [MOD_LSB] = "LSB", [MOD_USB] = "USB",
@@ -60,7 +57,7 @@ struct {
 
 /* ─── Виджеты ─── */
 static lv_obj_t *s_scr; /* корневой контейнер экрана */
-static lv_obj_t *s_bar; /* акцентная полоска активного ряда */
+static lv_obj_t *s_track[DEVICE_VFO_COUNT]; /* 1px подложка полосы */
 static lv_obj_t *s_freqLbl[DEVICE_VFO_COUNT];
 static lv_obj_t *s_extraLbl[DEVICE_VFO_COUNT];
 static lv_obj_t *s_badgeLbl[DEVICE_VFO_COUNT];
@@ -99,23 +96,8 @@ static void setHidden(lv_obj_t *o, bool hidden) {
     lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* Светлая тема: цвета, читаемые на белом фоне (на чёрном — как есть).
- * Раньше всё красилось в чёрный — а корневой фон оставался чёрным. */
-static Color fgAd(Color c) {
-  if (!gInverted)
-    return c;
-  if (c == C_WHITE)
-    return C_BLACK;
-  if (c == C_YELLOW)
-    return 0xC400; /* тёмно-оранжевый */
-  if (c == C_GREEN)
-    return 0x0400; /* тёмно-зелёный */
-  if (c == C_CYAN)
-    return 0x0410; /* тёмно-бирюзовый */
-  if (c == C_GRAY)
-    return 0x7BEF; /* серый */
-  return c;
-}
+/* Цвет с учётом глобальной темы */
+static Color fgAd(Color c) { return TC(c); }
 
 static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
                        lv_coord_t w, lv_coord_t h, Color bg, lv_opa_t opa) {
@@ -126,7 +108,7 @@ static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
   lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
   lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(o, 0, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(o, lvc(bg), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(o, lvc(TC(bg)), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(o, opa, LV_PART_MAIN);
   return o;
 }
@@ -143,7 +125,7 @@ static lv_obj_t *mkLabel(lv_obj_t *parent, const lv_font_t *font, Color fg,
     lv_obj_set_style_text_align(l, align, LV_PART_MAIN);
   }
   lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
-  lv_obj_set_style_text_color(l, lvc(fg), LV_PART_MAIN);
+  lv_obj_set_style_text_color(l, lvc(TC(fg)), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
   return l;
@@ -156,9 +138,9 @@ static void onFreqEntered(uint32_t f) {
 static void initNumVals() {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     uint16_t sy = STATUS_H + i * VFO_H;
-    NumVal_Init(&vfoCtx.numVal[i], FREQ_RIGHT, sy + VFO_FREQ_Y, F_MONO_LG, 21,
-                23, UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered, VFO_FREQ_POS,
-                F_SM, 11, 12);
+    NumVal_Init(&vfoCtx.numVal[i], FREQ_RIGHT, sy + VFO_FREQ_Y + FontAscent(F_XL), F_XL, 0,
+                0, UNIT_MHZ, vfos[i].rxF, 0, 1340 * MHZ, onFreqEntered,
+                VFO_FREQ_POS, F_S, 0, 0);
   }
 }
 
@@ -171,52 +153,52 @@ static void buildScreen(void) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     uint16_t sy = STATUS_H + i * VFO_H;
 
-    /* S-meter: одна полоса на чёрном фоне (трек не нужен) */
-    s_rssiBar[i] = mkBox(s_scr, 8, sy + VFO_RSSI_Y, 0, 6, C_GREEN,
-                         LV_OPA_COVER);
+    s_track[i] = mkBox(s_scr, MARGIN, sy + VFO_RSSI_Y + 1, VFO_RSSI_W, 1,
+                       C_GRAY, LV_OPA_COVER);
+    s_rssiBar[i] =
+        mkBox(s_scr, MARGIN, sy + VFO_RSSI_Y, 0, VFO_RSSI_H, C_GREEN,
+              LV_OPA_COVER);
 
-    s_freqLbl[i] = mkLabel(s_scr, &lv_font_mono18, fgAd(C_WHITE), 6, sy + 6,
-                           FREQ_RIGHT - 6,
+    s_bandLbl[i] = mkLabel(s_scr, F_M, C_CYAN, MARGIN, sy + VFO_INFO_Y, 120,
+                           LV_TEXT_ALIGN_LEFT);
+    s_modLbl[i] = mkLabel(s_scr, F_M, C_GREEN, COL_RIGHT - 60,
+                          sy + VFO_INFO_Y, 60, LV_TEXT_ALIGN_RIGHT);
+
+    s_freqLbl[i] = mkLabel(s_scr, F_XL, C_WHITE, 0, sy + VFO_FREQ_Y,
+                           FREQ_RIGHT,
                            VFO_FREQ_POS == POS_L ? LV_TEXT_ALIGN_LEFT
                                                  : LV_TEXT_ALIGN_RIGHT);
-    s_extraLbl[i] =
-        mkLabel(s_scr, &lv_font_tomthumb, fgAd(C_GRAY), FREQ_RIGHT + 4, sy + 22, 24,
-                LV_TEXT_ALIGN_LEFT);
+    s_extraLbl[i] = mkLabel(s_scr, F_S, C_GRAY, FREQ_RIGHT + 4,
+                            sy + VFO_FREQ_Y + FontAscent(F_XL) -
+                                FontAscent(F_S),
+                            COL_RIGHT - FREQ_RIGHT - 4, LV_TEXT_ALIGN_LEFT);
 
-    s_badgeLbl[i] = mkLabel(s_scr, &lv_font_tomthumb, fgAd(C_YELLOW), COL_RIGHT - 36,
-                            sy + 8, 36, LV_TEXT_ALIGN_RIGHT);
-    s_modLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_GREEN), COL_RIGHT - 40,
-                          sy + 18, 40, LV_TEXT_ALIGN_RIGHT);
-    s_bandLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_CYAN), 8, sy + 38, 100,
-                           LV_TEXT_ALIGN_LEFT);
-    s_stepLbl[i] = mkLabel(s_scr, &lv_font_mono9, fgAd(C_YELLOW), COL_RIGHT - 72,
-                           sy + 38, 72, LV_TEXT_ALIGN_RIGHT);
+    s_badgeLbl[i] = mkLabel(s_scr, F_S, C_GRAY, MARGIN, sy + VFO_SUB_Y, 60,
+                            LV_TEXT_ALIGN_LEFT);
+    s_stepLbl[i] = mkLabel(s_scr, F_S, C_YELLOW, COL_RIGHT - 80,
+                           sy + VFO_SUB_Y, 80, LV_TEXT_ALIGN_RIGHT);
   }
 
-  s_bar = mkBox(s_scr, 0, STATUS_H, 3, VFO_H, fgAd(C_YELLOW), LV_OPA_COVER);
-  s_cursor = mkBox(s_scr, 0, 0, 2, 23, fgAd(C_YELLOW), LV_OPA_COVER);
+  s_cursor = mkBox(s_scr, 0, 0, 2, 30, C_YELLOW, LV_OPA_COVER);
   if (s_cursor)
     lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
-
 }
 
+/* Активный ряд: яркая частота и акценты; неактивный — приглушён */
 static void setRowActive(uint8_t i, bool active) {
   if (s_freqLbl[i])
     lv_obj_set_style_text_color(s_freqLbl[i],
-                              lvc(fgAd(active ? C_WHITE : C_GRAY)),
-                                LV_PART_MAIN);
-  if (s_badgeLbl[i])
-    lv_obj_set_style_text_color(s_badgeLbl[i],
-                              lvc(fgAd(active ? C_YELLOW : C_DARK)),
+                                lvc(TC(active ? C_WHITE : C_GRAY)),
                                 LV_PART_MAIN);
   if (s_bandLbl[i])
     lv_obj_set_style_text_color(s_bandLbl[i],
-                                lvc(fgAd(active ? C_CYAN : C_GRAY)),
+                                lvc(TC(active ? C_CYAN : C_GRAY)),
                                 LV_PART_MAIN);
   if (s_modLbl[i])
     lv_obj_set_style_text_color(s_modLbl[i],
-                              lvc(fgAd(active ? C_GREEN : C_GRAY)),
+                                lvc(TC(active ? C_GREEN : C_GRAY)),
                                 LV_PART_MAIN);
+  setHidden(s_track[i], !active);
 }
 
 /* ─── Режим ─── */
@@ -224,6 +206,7 @@ static void setRowActive(uint8_t i, bool active) {
 class VfoMode : public Mode {
 public:
   void enter() override {
+    STATUSLINE_SetTitle("VFO");
     UI_ReleaseLabels();
     UI_ClearScreen(BG());
     Radio_Init();
@@ -270,8 +253,6 @@ public:
       if (first || active != s_prevActive[i]) {
         setRowActive(i, active);
         s_prevActive[i] = active;
-        if (active && s_bar)
-          lv_obj_set_pos(s_bar, 0, sy);
       }
 
       NumVal_t *nv = &vfoCtx.numVal[i];
@@ -285,9 +266,9 @@ public:
       if (editing) {
         if (s_cursor) {
           lv_coord_t cx = (VFO_FREQ_POS == POS_L)
-                              ? 6 + nv->cursor * nv->charW
-                              : FREQ_RIGHT + 1;
-          lv_obj_set_pos(s_cursor, cx, sy + 9);
+                              ? 4 + nv->cursor * nv->charW
+                              : FREQ_RIGHT + 2;
+          lv_obj_set_pos(s_cursor, cx, sy + VFO_FREQ_Y + 4);
           setHidden(s_cursor, !nv->blinkState);
         }
       } else if (s_cursor && i == currentVfo) {
@@ -344,7 +325,7 @@ public:
           w = VFO_RSSI_W; /* ConvertDomain не клампит сверху */
       }
       if (s_rssiBar[i] && w != s_prevRssi[i]) {
-        lv_obj_set_size(s_rssiBar[i], w, 6);
+        lv_obj_set_size(s_rssiBar[i], w, VFO_RSSI_H);
         s_prevRssi[i] = w;
       }
 
@@ -404,7 +385,7 @@ public:
       case KEY_SIDE1: /* группа диапазонов: вещание → SSB → службы */
         Radio_NextGroup();
         return true;
-      case KEY_SIDE2: /* светлая/тёмная тема (только VFO) */
+      case KEY_SIDE2: /* светлая/тёмная тема (глобально) */
         gThemeLight = !gThemeLight;
         Mode_Switch(*Mode_Current()); /* пересбор экрана с новой темой */
         return true;

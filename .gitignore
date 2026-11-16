@@ -4,3 +4,6 @@ build/
 *.map
 *.bin
 *.hex
+tools/preview/build/
+tools/preview/out/
+tools/preview/stub/lv_conf.h

@@ -15,7 +15,7 @@ static uint8_t menu_stack_top = 0;
 static Menu *active_menu = NULL;
 
 static void (*renderFn)(uint8_t x, uint16_t y, TextPos align, Color col,
-                        Color bg, const GFXfont *font, const char *fmt, ...);
+                        Color bg, Font font, const char *fmt, ...);
 
 // Вспомогательная функция для вычисления правой границы
 static inline uint8_t getMenuRightEdge(void) {
@@ -29,13 +29,13 @@ static void renderItem(uint16_t index, uint8_t i) {
   const uint8_t by = y + active_menu->itemHeight -
                      (active_menu->itemHeight >= MENU_ITEM_H ? 3 : 2);
 
-  renderFn(3, by, POS_L, C_WHITE, C_BLACK, F_SM, "%s %c", item->name,
+  renderFn(3, by, POS_L, C_WHITE, C_BLACK, F_M, "%s %c", item->name,
            item->submenu ? '>' : ' ');
 
   if (item->get_value_text) {
     char value_buf[32];
     item->get_value_text(item, value_buf, sizeof(value_buf));
-    PrintfEx(ex - 7, by, POS_R, C_WHITE, C_BLACK, F_SM, "%s", value_buf);
+    PrintfEx(ex - 7, by, POS_R, C_WHITE, C_BLACK, F_M, "%s", value_buf);
   }
 }
 

@@ -20,8 +20,6 @@
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
-#include "../ui/lvgl_fonts/lv_font_mono9.h"
-#include "../ui/lvgl_fonts/lv_font_tomthumb.h"
 #include "../ui/statusline.h"
 #include "lvgl.h"
 #include "mode.h"
@@ -33,9 +31,9 @@
 #define TITLE_Y 26
 #define LIST_Y 42
 #define ROW_H 15
-#define ROWS 16
+#define ROWS 15
 #define DETAIL_Y (LIST_Y + ROWS * ROW_H + 3)
-#define HINT_Y (DETAIL_Y + 17)
+#define HINT_Y (DETAIL_Y + 18)
 
 typedef enum { SORT_TIME, SORT_DUR, SORT_BL, SORT_F, SORT_COUNT } SortType;
 
@@ -73,7 +71,13 @@ static char s_titleBuf[40];
 static char s_detailBuf[48];
 
 static inline lv_color_t lvc(uint8_t r, uint8_t g, uint8_t b) {
-  return lv_color_make(r, g, b);
+  /* палитра «тёмной» темы → через TC() в светлую */
+  Color c = (Color)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  if (gThemeLight && r == 0 && g == 40 && b == 96)
+    return lv_color_make(190, 215, 255); /* подсветка выбранной строки */
+  c = TC(c);
+  return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
+                       (uint8_t)(c << 3));
 }
 
 static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
@@ -160,10 +164,11 @@ static void refresh(void) {
   }
   for (uint16_t r = 0; r < ROWS && s_top + r < n; ++r) {
     const Loot *it = LOOT_Item(s_top + r);
-    const char *col = it->blacklist ? "707070"
-                      : it->whitelist ? "40ff40"
-                      : it->open      ? "ffff00"
-                                      : "ffffff";
+    const bool L = gThemeLight;
+    const char *col = it->blacklist ? "909090"
+                      : it->whitelist ? (L ? "108010" : "40ff40")
+                      : it->open      ? (L ? "a08000" : "ffff00")
+                                      : (L ? "000000" : "ffffff");
     char ago[5], dur[5];
     fmtSec(ago, LOOT_SecondsAgo(it));
     fmtSec(dur, it->duration);
@@ -240,31 +245,32 @@ static void sortBy(SortType t) {
 class LootListMode : public Mode {
 public:
   void enter() override {
+    STATUSLINE_SetTitle("");
     s_keep = false;
     s_savedF = vfos[currentVfo].rxF;
     s_savedMod = vfos[currentVfo].modulation;
 
     UI_ReleaseLabels();
-    UI_ClearScreen(C_BLACK);
+    UI_ClearScreen(BG());
     Radio_Init();
 
     s_scr = mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, LCD_HEIGHT, lvc(0, 0, 0),
                   LV_OPA_TRANSP);
     s_sel = mkBox(s_scr, 0, LIST_Y, LCD_WIDTH, ROW_H, lvc(0, 40, 96),
                   LV_OPA_COVER);
-    s_title = mkLabel(s_scr, &lv_font_mono9, lvc(255, 255, 0), 4, TITLE_Y,
+    s_title = mkLabel(s_scr, F_M, lvc(255, 255, 0), 4, TITLE_Y,
                       LCD_WIDTH - 8);
-    s_list = mkLabel(s_scr, &lv_font_mono9, lvc(255, 255, 255), 4, LIST_Y,
+    s_list = mkLabel(s_scr, F_M, lvc(255, 255, 255), 4, LIST_Y,
                      LCD_WIDTH - 8);
     if (s_list)
       lv_label_set_recolor(s_list, true);
-    s_detail = mkLabel(s_scr, &lv_font_mono9, lvc(0, 255, 255), 4, DETAIL_Y,
+    s_detail = mkLabel(s_scr, F_M, lvc(0, 255, 255), 4, DETAIL_Y,
                        LCD_WIDTH - 8);
-    s_hint = mkLabel(s_scr, &lv_font_tomthumb, lvc(128, 128, 128), 4, HINT_Y,
+    s_hint = mkLabel(s_scr, F_S, lvc(128, 128, 128), 4, HINT_Y,
                      LCD_WIDTH - 8);
     if (s_hint)
       lv_label_set_text_static(
-          s_hint, "1 TIME 2 DUR 3 BL 4 FREQ  S1 BLACK S2 WHITE  0 DEL  MENU>VFO");
+          s_hint, "1 TIME 2 DUR 3 BL 4 FREQ\nS1 BLACK S2 WHITE 0 DEL MENU>VFO");
 
     if (!s_scr || !s_sel || !s_title || !s_list || !s_detail)
       return; /* куча LVGL исчерпана — экран пустой, но без падения */

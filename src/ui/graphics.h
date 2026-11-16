@@ -1,7 +1,7 @@
 #ifndef GRAPHICS_H
 #define GRAPHICS_H
 
-#include "gfxfont.h"
+#include "lvgl.h"
 #include "driver/st7789.h"
 #include <stdarg.h>
 #include <stdbool.h>
@@ -11,49 +11,49 @@
 #define LCD_HEIGHT ST7789_HEIGHT
 #define LCD_XCENTER (ST7789_WIDTH / 2)
 
-#include "fonts/FreeMono12pt7b.h"
-#include "fonts/FreeMono18pt7b.h"
-#include "fonts/FreeMono24pt7b.h"
-#include "fonts/FreeMono9pt7b.h"
-#include "fonts/TomThumb.h"
-#include "fonts/symbols.h"
-
-#define F_SS (&TomThumb)
-
-#define F_SYM (&Symbols)
-
-#define F_LG (&FreeMono18pt7b)
-// 12*11
-#define F_SM (&FreeMono9pt7b)
-#define F_NORM (&FreeMono12pt7b)
-#define F_MONO_LG (&FreeMono18pt7b)
+/* Шрифты — JetBrains Mono (tools/gen_fonts.sh): S 11, M 14 (Medium),
+ * L 20, XL 38 (ExtraBold). Все моноширинные. */
+extern const lv_font_t ui_font_s, ui_font_m, ui_font_l, ui_font_xl;
+typedef const lv_font_t *Font;
+#define F_S (&ui_font_s)
+#define F_M (&ui_font_m)
+#define F_L (&ui_font_l)
+#define F_XL (&ui_font_xl)
 
 typedef enum { POS_L, POS_C, POS_R } TextPos;
 typedef uint16_t Color;
 
-extern bool gInverted;   /* эффективная инверсия (светлая тема только в VFO) */
-extern bool gThemeLight; /* выбор пользователя: светлая тема (длинный SIDE2 в VFO) */
+/* Тема глобальная (длинный SIDE2 в VFO). Код рисует «тёмными» цветами
+ * C_WHITE/C_YELLOW/…; в светлой теме слой graphics отображает их через TC()
+ * (белый↔чёрный, насыщенные цвета темнее). Панели спектра/водопада
+ * остаются тёмными: на время их рисования gMapColors = false. */
+extern bool gThemeLight;
+extern bool gMapColors;
+Color TC(Color c);
+static inline Color BG(void) { return TC(C_BLACK); }
 
-/* Текущий цвет фона (учитывает инверсию) */
-static inline Color BG(void) { return gInverted ? C_WHITE : C_BLACK; }
+/* Метрики шрифта */
+int16_t FontW(Font f);      /* ширина символа (моноширинный) */
+int16_t FontH(Font f);      /* высота строки */
+int16_t FontAscent(Font f); /* от верха строки до базовой линии */
 
 /* ── Стиль текста — объединяет шрифт, цвета, выравнивание ── */
 typedef struct {
-  const GFXfont *font;
+  Font font;
   Color fg;
   Color bg;
   TextPos align;
 } TextStyle;
 
 static inline TextStyle text_style(Color fg, Color bg, TextPos align,
-                                    const GFXfont *font) {
+                                    Font font) {
   return (TextStyle){.font = font, .fg = fg, .bg = bg, .align = align};
 }
 
 /* Пресеты */
-#define STYLE_SM_WHITE   text_style(C_WHITE, C_BLACK, POS_L, F_SM)
-#define STYLE_SM_YELLOW  text_style(C_YELLOW, C_BLACK, POS_L, F_SM)
-#define STYLE_SS_DARK    text_style(C_DARK, C_BLACK, POS_C, F_SS)
+#define STYLE_SM_WHITE   text_style(C_WHITE, C_BLACK, POS_L, F_M)
+#define STYLE_SM_YELLOW  text_style(C_YELLOW, C_BLACK, POS_L, F_M)
+#define STYLE_SS_DARK    text_style(C_DARK, C_BLACK, POS_C, F_S)
 
 void UI_ClearScreen(Color bg);
 void UI_ReleaseLabels(void); /* удалить лейблы пула Printf* (см. graphics.cpp) */
@@ -67,11 +67,11 @@ void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillCircle(int16_t x, int16_t y, int16_t r, Color c);
 
 /* Ширина текста в пикселях */
-int16_t TextWidth(const char *s, const GFXfont *f);
+int16_t TextWidth(const char *s, Font f);
 
 void Printf(uint8_t x, uint16_t y, const char *fmt, ...);
 void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
-              const GFXfont *font, const char *fmt, ...);
+              Font font, const char *fmt, ...);
 
 /* Версия с TextStyle — 4 параметра вместо 7 */
 void PrintfT(uint8_t x, uint16_t y, TextStyle st, const char *fmt, ...);

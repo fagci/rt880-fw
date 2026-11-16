@@ -21,7 +21,7 @@ void Log(const char *fmt, ...) {
 void Log_Render(uint16_t x, uint16_t y, uint8_t lineH) {
   for (uint8_t i = 0; i < LOG_LINES; i++) {
     uint8_t idx = (logHead + i) % LOG_LINES;
-    PrintfEx(x, y + i * lineH, POS_L, C_YELLOW, C_BLACK, F_SS, "%s",
+    PrintfEx(x, y + i * lineH, POS_L, C_YELLOW, C_BLACK, F_S, "%s",
              logBuf[idx]);
   }
 }

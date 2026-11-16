@@ -136,7 +136,7 @@
 #define LV_USE_FONT_COMPRESSED 0
 #define LV_USE_FONT_SUBPX 0
 #define LV_USE_FONT_PLACEHOLDER 0
-#define LV_FONT_DEFAULT &lv_font_mono9
+#define LV_FONT_DEFAULT &ui_font_m
 
 #define LV_FONT_MONTSERRAT_8 0
 #define LV_FONT_MONTSERRAT_10 0
@@ -170,6 +170,6 @@
    где lv_conf встречается раньше объявления. */
 struct _lv_font_t;
 typedef struct _lv_font_t lv_font_t;
-extern const lv_font_t lv_font_mono9;
+extern const lv_font_t ui_font_m;
 
 #endif /* LV_CONF_H */

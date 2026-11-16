@@ -2,7 +2,6 @@
 #include "../driver/keyboard.h"
 #include "../ui/graphics.h"
 #include "../helper/unit_fmt.h" // InputUnit
-#include "gfxfont.h"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -14,7 +13,7 @@ typedef void (*NumVal_CB)(uint32_t value);
 typedef struct {
   // положение и шрифт
   uint16_t x, y;
-  const GFXfont *font;
+  Font font;
   uint8_t charW, charH;
 
   // выравнивание текста
@@ -51,7 +50,7 @@ typedef struct {
 
   /* Доп. точность: 2 маленьких знака справа */
   bool extraPrecision;
-  const GFXfont *extraFont;
+  Font extraFont;
   uint8_t extraCharW, extraCharH;
 } NumVal_t;
 
@@ -61,10 +60,10 @@ void NumVal_BindNative(NumVal_t *nv, void *lv_label);
 // multiplier и fracDigits выводятся из unit
 // pos — выравнивание: POS_L, POS_C, POS_R
 // extraFont/extraCharW/extraCharH — NULL/0 если доп. знаки не нужны
-void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, const GFXfont *font,
+void NumVal_Init(NumVal_t *nv, uint16_t x, uint16_t y, Font font,
                  uint8_t charW, uint8_t charH, InputUnit unit, uint32_t value,
                  uint32_t min, uint32_t max, NumVal_CB onChange, TextPos pos,
-                 const GFXfont *extraFont, uint8_t extraCharW, uint8_t extraCharH);
+                 Font extraFont, uint8_t extraCharW, uint8_t extraCharH);
 
 // вызывать периодически — управляет морганием курсора
 void NumVal_Update(NumVal_t *nv);

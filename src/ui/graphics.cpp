@@ -13,18 +13,31 @@
  */
 #include "graphics.h"
 #include "driver/st7789.h"
-#include "gfxfont.h"
-#include "lvgl_fonts/lv_font_mono12.h"
-#include "lvgl_fonts/lv_font_mono18.h"
-#include "lvgl_fonts/lv_font_mono9.h"
-#include "lvgl_fonts/lv_font_tomthumb.h"
 #include "lvgl.h"
 #include "printf.h"
 #include <stdlib.h>
 #include <string.h>
 
-bool gInverted;
 bool gThemeLight;
+bool gMapColors = true;
+
+Color TC(Color c) {
+  if (!gThemeLight || !gMapColors) return c;
+  switch (c) {
+  case C_BLACK: return C_WHITE;
+  case C_WHITE: return C_BLACK;
+  case C_YELLOW: return 0xA460;  /* тёмный янтарь */
+  case C_GREEN: return 0x0420;
+  case C_CYAN: return 0x0451;
+  case C_GRAY: return 0x7BEF;
+  case C_RED: return 0xC000;
+  default: return c;
+  }
+}
+
+int16_t FontW(Font f) { return (int16_t)lv_font_get_glyph_width(f, '0', 0); }
+int16_t FontH(Font f) { return (int16_t)f->line_height; }
+int16_t FontAscent(Font f) { return (int16_t)(f->line_height - f->base_line); }
 
 #define FB_W ST7789_WIDTH
 #define FB_H ST7789_HEIGHT
@@ -39,7 +52,7 @@ typedef struct {
   Color fg, bg;
   uint32_t text_hash; /* FNV-1a: не дергаем LVGL, если строка не изменилась */
   uint16_t text_len;
-  int8_t font_idx; /* в FONT_MAP — указатели GFXfont между TU несопоставимы */
+  const lv_font_t *font;
   TextPos align;
   bool styled;
   bool used;
@@ -77,6 +90,7 @@ static int16_t clip_y(int16_t y) {
 }
 
 void PutPixel(int16_t x, int16_t y, Color c) {
+  c = TC(c);
   x = clip_x(x);
   y = clip_y(y);
   st7789_set_addr_window(x, y, 1, 1);
@@ -87,6 +101,7 @@ void PutPixel(int16_t x, int16_t y, Color c) {
 }
 
 void DrawVLine(int16_t x, int16_t y, int16_t h, Color c) {
+  c = TC(c);
   if (x < 0 || x >= FB_W || h <= 0) return;
   if (y < 0) { h += y; y = 0; }
   if (y + h > FB_H) h = FB_H - y;
@@ -96,6 +111,7 @@ void DrawVLine(int16_t x, int16_t y, int16_t h, Color c) {
 }
 
 void DrawHLine(int16_t x, int16_t y, int16_t w, Color c) {
+  c = TC(c);
   if (y < 0 || y >= FB_H || w <= 0) return;
   if (x < 0) { w += x; x = 0; }
   if (x + w > FB_W) w = FB_W - x;
@@ -105,6 +121,7 @@ void DrawHLine(int16_t x, int16_t y, int16_t w, Color c) {
 }
 
 void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c) {
+  c = TC(c);
   if (x < 0) { w += x; x = 0; }
   if (y < 0) { h += y; y = 0; }
   if (x + w > FB_W) w = FB_W - x;
@@ -140,7 +157,7 @@ void DrawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, Color c) {
     if (x0 > x1) { int16_t t = x0; x0 = x1; x1 = t; }
     DrawHLine(x0, y0, x1 - x0 + 1, c);
   } else {
-    draw_aline(x0, y0, x1, y1, c);
+    { bool m = gMapColors; draw_aline(x0, y0, x1, y1, c); gMapColors = m; }
     /* диагональ рисуем попиксельно — инвалидируем весь bbox */
     int16_t xa = x0 < x1 ? x0 : x1, xb = x0 < x1 ? x1 : x0;
     int16_t ya = y0 < y1 ? y0 : y1, yb = y0 < y1 ? y1 : y0;
@@ -172,40 +189,9 @@ void FillCircle(int16_t x0, int16_t y0, int16_t r, Color c) {
 
 /* ─── Текст: пул лейблов поверх LVGL ─── */
 
-typedef struct {
-  const GFXfont *gfx;
-  const lv_font_t *lv;
-  uint8_t ascent; /* = line_height - base_line сконвертированного шрифта */
-} FontMap;
-
-static const FontMap FONT_MAP[] = {
-    {F_SS, &lv_font_tomthumb, 4},
-    {F_SM, &lv_font_mono9, 11},
-    {F_NORM, &lv_font_mono12, 15},
-    {F_LG, &lv_font_mono18, 22},
-};
-
-/* GFXfont объявлены static в заголовках — у каждого .cpp своя копия,
-   указатели между модулями несопоставимы. Идентифицируем по метрикам. */
-static int8_t font_map(const GFXfont *f) {
-  for (uint8_t i = 0; i < sizeof(FONT_MAP) / sizeof(FONT_MAP[0]); i++)
-    if (f->first == FONT_MAP[i].gfx->first &&
-        f->last == FONT_MAP[i].gfx->last &&
-        f->yAdvance == FONT_MAP[i].gfx->yAdvance)
-      return (int8_t)i;
-  return 2; /* F_NORM как fallback */
+int16_t TextWidth(const char *s, Font f) {
+  return (int16_t)lv_txt_get_width(s, strlen(s), f, 0, LV_TEXT_FLAG_NONE);
 }
-
-static int16_t text_width(const char *s, const GFXfont *f) {
-  int16_t x = 0;
-  for (; *s; s++) {
-    if (*s < f->first || *s > f->last) continue;
-    x += f->glyph[*s - f->first].xAdvance;
-  }
-  return x;
-}
-
-int16_t TextWidth(const char *s, const GFXfont *f) { return text_width(s, f); }
 
 /* LVGL хранит RGB565 байтами переключёнными (LV_COLOR_16_SWAP), поэтому
    собираем цвет через lv_color_make из компонентов, а не .full. */
@@ -258,8 +244,8 @@ void UI_ClearScreen(Color bg) {
   }
 }
 
-static void label_style(lv_obj_t *label, Color fg, Color bg, const FontMap *fm) {
-  lv_obj_set_style_text_font(label, fm->lv, LV_PART_MAIN);
+static void label_style(lv_obj_t *label, Color fg, Color bg, Font f) {
+  lv_obj_set_style_text_font(label, f, LV_PART_MAIN);
   lv_obj_set_style_text_color(label, to_lv(fg), LV_PART_MAIN);
   lv_obj_set_style_bg_color(label, to_lv(bg), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(label, LV_OPA_COVER, LV_PART_MAIN);
@@ -269,18 +255,17 @@ static void label_style(lv_obj_t *label, Color fg, Color bg, const FontMap *fm) 
 }
 
 static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
-                     const GFXfont *f, const char *fmt, va_list a) {
+                     Font f, const char *fmt, va_list a) {
   if (!s_lvgl_ready) return;
 
-  if (gInverted) { Color tmp = col; col = bg; bg = tmp; }
+  col = TC(col);
+  bg = TC(bg);
 
   char s[64];
   vsnprintf(s, sizeof(s), fmt, a);
   if (s[0] == '\0') return;
 
-  const int8_t fidx = font_map(f);
-  const FontMap *fm = &FONT_MAP[fidx];
-  int16_t tw = text_width(s, f);
+  int16_t tw = TextWidth(s, f);
 
   int16_t sx = x;
   if (align == POS_C) sx = x - (tw >> 1);
@@ -292,7 +277,7 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
   /* Ищем слот с тем же якорем — переиспользуем, не пересоздаём */
   LabelSlot *slot = NULL;
   for (uint8_t i = 0; i < LABEL_POOL; i++) {
-    if (s_pool[i].used && s_pool[i].font_idx == fidx && s_pool[i].x == x &&
+    if (s_pool[i].used && s_pool[i].font == f && s_pool[i].x == x &&
         s_pool[i].y == y && s_pool[i].align == align) {
       slot = &s_pool[i];
       break;
@@ -323,17 +308,17 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
 
   slot->x = x;
   slot->y = y;
-  slot->font_idx = fidx;
+  slot->font = f;
   slot->align = align;
 
   /* Позиция зависит от ширины текста — выставляем всегда */
-  lv_obj_set_pos(slot->label, sx, y - fm->ascent);
+  lv_obj_set_pos(slot->label, sx, y - FontAscent(f));
 
   if (!slot->styled || slot->fg != col || slot->bg != bg) {
     slot->fg = col;
     slot->bg = bg;
     slot->styled = true;
-    label_style(slot->label, col, bg, fm);
+    label_style(slot->label, col, bg, f);
   }
 
   slot->text_hash = hash;
@@ -344,12 +329,12 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
 void Printf(uint8_t x, uint16_t y, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
-  printfEx(x, y, POS_L, C_WHITE, C_BLACK, F_NORM, fmt, a);
+  printfEx(x, y, POS_L, C_WHITE, C_BLACK, F_M, fmt, a);
   va_end(a);
 }
 
 void PrintfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
-              const GFXfont *f, const char *fmt, ...) {
+              Font f, const char *fmt, ...) {
   va_list a;
   va_start(a, fmt);
   printfEx(x, y, align, col, bg, f, fmt, a);

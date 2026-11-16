@@ -10,33 +10,34 @@
 #include "../helper/measurements.h"
 #include "graphics.h"
 #include "lvgl.h"
-#include "lvgl_fonts/lv_font_tomthumb.h"
 #include "printf.h"
 #include <string.h>
 
-#define BAT_X (LCD_WIDTH - 46)
-#define BAT_Y 4
-#define BAT_W 42
-#define BAT_H 16
+#define BAT_W 22 /* корпус батареи */
+#define BAT_H 11
+#define BAT_X (LCD_WIDTH - 8 - BAT_W - 3)
+#define BAT_Y ((24 - BAT_H) / 2)
 #define BAT_MIN 600
 #define BAT_MAX 840
 
 static lv_obj_t *s_root;
-static lv_obj_t *s_divider;
 static lv_obj_t *s_batFrame;
+static lv_obj_t *s_batNub;
 static lv_obj_t *s_batFill;
 static lv_obj_t *s_batText;
-static lv_obj_t *s_fltLbl;
+static lv_obj_t *s_title;
 static uint16_t s_prevBatDraw;
-static uint16_t s_prevFltDraw = 0xFFFF;
+static const char *s_titleText = "";
 
 static inline lv_color_t lvc(Color c) {
+  c = TC(c);
   return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
                        (uint8_t)(c << 3));
 }
 
 static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
-                       lv_coord_t w, lv_coord_t h, Color bg, lv_opa_t opa) {
+                       lv_coord_t w, lv_coord_t h, Color bg, lv_opa_t opa,
+                       lv_coord_t radius) {
   lv_obj_t *o = lv_obj_create(parent);
   if (!o)
     return NULL;
@@ -44,62 +45,61 @@ static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
   lv_obj_set_size(o, w, h);
   lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
   lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
-  lv_obj_set_style_radius(o, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(o, radius, LV_PART_MAIN);
   lv_obj_set_style_bg_color(o, lvc(bg), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(o, opa, LV_PART_MAIN);
   return o;
 }
 
-/* Светлая тема (только VFO): текст напряжения батареи — тёмный на белом.
- * Остальное (серый, зелёный/жёлтый/красный) читается на обоих фонах. */
-void STATUSLINE_ApplyTheme(void) {
-  if (s_batText)
-    lv_obj_set_style_text_color(s_batText, lvc(gInverted ? C_BLACK : C_WHITE),
-                                LV_PART_MAIN);
+static lv_obj_t *mkText(lv_coord_t x, lv_coord_t w, lv_text_align_t al,
+                        Color c) {
+  lv_obj_t *l = lv_label_create(s_root);
+  if (!l)
+    return NULL;
+  lv_obj_set_pos(l, x, (24 - FontH(F_S)) / 2);
+  lv_obj_set_width(l, w);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
+  lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
+  lv_obj_set_style_text_font(l, F_S, LV_PART_MAIN);
+  lv_obj_set_style_text_color(l, lvc(c), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
+  return l;
 }
 
 static void build(void) {
-  s_root = mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, 24, C_BLACK, LV_OPA_TRANSP);
+  s_root = mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, 24, C_BLACK, LV_OPA_TRANSP, 0);
   if (!s_root)
     return;
-  s_divider = mkBox(s_root, 0, 23, LCD_WIDTH, 1, C_GRAY, LV_OPA_COVER);
-
+  /* батарея: контур с носиком, заливка внутри */
   s_batFrame = mkBox(s_root, BAT_X, BAT_Y, BAT_W, BAT_H, C_BLACK,
-                     LV_OPA_TRANSP);
+                     LV_OPA_TRANSP, 3);
   if (s_batFrame) {
     lv_obj_set_style_border_width(s_batFrame, 1, LV_PART_MAIN);
     lv_obj_set_style_border_color(s_batFrame, lvc(C_GRAY), LV_PART_MAIN);
-    lv_obj_set_style_border_side(s_batFrame, LV_BORDER_SIDE_FULL,
-                                 LV_PART_MAIN);
   }
+  s_batNub = mkBox(s_root, BAT_X + BAT_W, BAT_Y + 3, 2, 5, C_GRAY,
+                   LV_OPA_COVER, 1);
   s_batFill = mkBox(s_root, BAT_X + 2, BAT_Y + 2, 0, BAT_H - 4, C_GREEN,
-                    LV_OPA_COVER);
+                    LV_OPA_COVER, 1);
+  s_batText = mkText(BAT_X - 8 - 30, 30, LV_TEXT_ALIGN_RIGHT, C_GRAY);
+  s_title = mkText(8, 120, LV_TEXT_ALIGN_LEFT, C_GRAY);
+  if (s_title)
+    lv_label_set_text_static(s_title, s_titleText);
+  s_prevBatDraw = 0;
+}
 
-  s_batText = lv_label_create(s_root);
-  if (s_batText) {
-    lv_obj_set_pos(s_batText, BAT_X, BAT_Y + 5);
-    lv_obj_set_width(s_batText, BAT_W);
-    lv_label_set_long_mode(s_batText, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_align(s_batText, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_batText, &lv_font_tomthumb, LV_PART_MAIN);
-    lv_obj_set_style_text_color(s_batText, lvc(C_WHITE), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_batText, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_batText, 0, LV_PART_MAIN);
-  }
+/* Смена темы: пересобираем виджеты в новых цветах */
+void STATUSLINE_ApplyTheme(void) {
+  if (s_root)
+    lv_obj_del(s_root);
+  s_root = s_batFrame = s_batNub = s_batFill = s_batText = s_title = NULL;
+}
 
-  s_fltLbl = lv_label_create(s_root);
-  if (s_fltLbl) {
-    lv_obj_set_pos(s_fltLbl, 4, 5);
-    lv_obj_set_width(s_fltLbl, BAT_X - 12);
-    lv_label_set_long_mode(s_fltLbl, LV_LABEL_LONG_CLIP);
-    lv_obj_set_style_text_align(s_fltLbl, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
-    lv_obj_set_style_text_font(s_fltLbl, &lv_font_tomthumb, LV_PART_MAIN);
-    lv_obj_set_style_text_color(s_fltLbl, lvc(C_GRAY), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_fltLbl, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(s_fltLbl, 0, LV_PART_MAIN);
-    lv_label_set_recolor(s_fltLbl, true);
-  }
+void STATUSLINE_SetTitle(const char *t) {
+  s_titleText = t ? t : "";
+  if (s_title)
+    lv_label_set_text_static(s_title, s_titleText);
 }
 
 void STATUSLINE_render(void) {
@@ -107,30 +107,6 @@ void STATUSLINE_render(void) {
     build();
   if (!s_root)
     return;
-
-  uint16_t flt = BK4819_GetFilter();
-  if (flt != s_prevFltDraw && s_fltLbl) {
-    s_prevFltDraw = flt;
-    static char buf[56];
-    const struct {
-      uint16_t mask;
-      const char *name;
-    } F[] = {{FILTER_HF, "HF"},
-             {FILTER_VHF, "VHF"},
-             {FILTER_UHF, "UHF"},
-             {FILTER_800, "800"}};
-    buf[0] = '\0';
-    for (uint8_t i = 0; i < 4; i++) {
-      if (i)
-        strncat(buf, " ", sizeof(buf) - strlen(buf) - 1);
-      if (flt & F[i].mask)
-        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), "#41CA41 %s#",
-                 F[i].name);
-      else
-        strncat(buf, F[i].name, sizeof(buf) - strlen(buf) - 1);
-    }
-    lv_label_set_text_static(s_fltLbl, buf);
-  }
 
   uint16_t bat = battery_voltage_cv();
   /* гистерезис 2 cV: без него ADC-шум дёргает перерисовку каждый кадр */
@@ -140,13 +116,9 @@ void STATUSLINE_render(void) {
 
   uint8_t fill =
       (uint8_t)ConvertDomain((int)bat, BAT_MIN, BAT_MAX, 0, BAT_W - 4);
-  Color fcol;
-  if (bat >= 740)
-    fcol = C_GREEN;
-  else if (bat >= 680)
-    fcol = C_YELLOW;
-  else
-    fcol = C_RED;
+  if (fill > BAT_W - 4)
+    fill = BAT_W - 4;
+  Color fcol = bat >= 740 ? C_GREEN : bat >= 680 ? C_YELLOW : C_RED;
 
   if (s_batFill) {
     lv_obj_set_size(s_batFill, fill, BAT_H - 4);
@@ -154,7 +126,7 @@ void STATUSLINE_render(void) {
   }
   if (s_batText) {
     static char t[8];
-    snprintf(t, sizeof(t), "%u.%02u", bat / 100, bat % 100);
+    snprintf(t, sizeof(t), "%u.%02uV", bat / 100, bat % 100);
     lv_label_set_text_static(s_batText, t);
   }
 }

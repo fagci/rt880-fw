@@ -21,14 +21,14 @@ void Mode_Update() {
      * чужого экрана и даже в память зоны аппаратного скролла (чёрные полосы
      * в водопаде по x-диапазонам надписей). Освобождаем при каждой смене. */
     UI_ReleaseLabels();
-    /* Светлая тема действует только в VFO (остальные режимы рисуют прямой
-     * заливкой на чёрном). Меняется тема — перекрашиваем корневой фон LVGL и
-     * сразу перерисовываем экран ДО enter(): иначе отложенная перерисовка
-     * LVGL затёрла бы то, что режим нарисует в enter()/первом render(). */
-    bool wasInv = gInverted;
-    gInverted = gThemeLight && next == &MODE_VFO;
-    if (gInverted != wasInv) {
-      UI_ClearScreen(BG());
+    /* Тема глобальная: корневой фон LVGL задаём на каждой смене режима.
+     * При смене темы — сразу перерисовываем экран ДО enter(), иначе
+     * отложенная перерисовка LVGL затёрла бы то, что режим нарисует. */
+    static bool appliedLight;
+    bool themeChanged = (gThemeLight != appliedLight);
+    appliedLight = gThemeLight;
+    UI_ClearScreen(BG());
+    if (themeChanged) {
       lv_refr_now(NULL);
       STATUSLINE_ApplyTheme();
     }

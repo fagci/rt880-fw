@@ -11,8 +11,6 @@
 #include "../ui/numval.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
-#include "../ui/lvgl_fonts/lv_font_mono9.h"
-#include "../ui/lvgl_fonts/lv_font_tomthumb.h"
 #include "lvgl.h"
 #include "mode.h"
 #include "vfo.h"
@@ -22,7 +20,7 @@
 
 #define STATUS_H 24
 #define SP_H 54
-/* Над спектром — поля границ диапазона (лейблы F_SM [y-11,y+4], y=SPECTRUM_Y-10)
+/* Над спектром — поля границ диапазона (лейблы F_M [y-11,y+4], y=SPECTRUM_Y-10)
  * и подчёркивание выбранной границы (SPECTRUM_Y-4..-3). Под спектром — зазор
  * до строки информации (иначе цифры перекрывали низ спектра), строка
  * информации и запас до водопада: лейблы не должны заходить в зону
@@ -79,6 +77,7 @@ static char s_info[3][24];
 static lv_obj_t *s_infoLbl[3];
 
 static inline lv_color_t lvc565(uint16_t c) {
+  c = TC(c);
   return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
                        (uint8_t)(c << 3));
 }
@@ -93,7 +92,7 @@ static lv_obj_t *mkInfoLabel(const lv_font_t *font, lv_coord_t x, lv_coord_t y,
   lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
   lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
   lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(l, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(l, lvc565(C_BLACK), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(l, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
   return l;
@@ -307,10 +306,12 @@ static void eraseCursorZone() {
   uint8_t x0 = anaCtx.prevCursorStart;
   uint8_t x1 = anaCtx.prevCursorEnd;
 
+  gMapColors = false; /* панель спектра тёмная в любой теме */
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
   DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_BLACK);
   DrawVLine(x0, SPECTRUM_Y, SP_H, C_BLACK);
   DrawVLine(x1, SPECTRUM_Y, SP_H, C_BLACK);
+  gMapColors = true;
 
   anaCtx.prevCursorActive = false;
 }
@@ -319,10 +320,12 @@ static void drawCursorZone() {
   uint8_t x0 = getCursorStart();
   uint8_t x1 = getCursorEnd();
 
+  gMapColors = false;
   DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
   DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_CYAN);
   DrawVLine(x0, SPECTRUM_Y, SP_H, C_CYAN);
   DrawVLine(x1, SPECTRUM_Y, SP_H, C_CYAN);
+  gMapColors = true;
 
   anaCtx.prevCursorStart = x0;
   anaCtx.prevCursorEnd = x1;
@@ -377,6 +380,7 @@ static NumVal_t *editingVal(void) {
 class AnalyserMode : public Mode {
 public:
   void enter() override {
+    STATUSLINE_SetTitle("SPECTRUM");
     /* ВАЖНО: memset обнуляет весь anaCtx, включая savedVfo — сохраняем
      * до него и пишем после (раньше выход всегда уходил в VFO 0) */
     uint8_t entryVfo = currentVfo;
@@ -388,22 +392,22 @@ public:
     anaCtx.savedFreq = vfos[currentVfo].rxF;
     /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
      * в фиксированной зоне над водопадом (строка cursor info). */
-    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, INFO_BASE, F_SM, 11, 12,
+    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, INFO_BASE, F_M, 11, 12,
                 UNIT_MHZ, vfos[currentVfo].rxF, BK4819_F_MIN, BK4819_F_MAX,
                 onFreqInput, POS_R, nullptr, 0, 0);
     /* границы: слева — от левого края, справа — от правого (pos задаёт и
      * выравнивание при вводе) */
-    NumVal_Init(&anaCtx.startVal, 8, BORDER_Y, F_SM, 11, 12, UNIT_MHZ, 0,
+    NumVal_Init(&anaCtx.startVal, 8, BORDER_Y, F_M, 11, 12, UNIT_MHZ, 0,
                 BK4819_F_MIN, BK4819_F_MAX, onStartEntered, POS_L, nullptr, 0, 0);
-    NumVal_Init(&anaCtx.endVal, LCD_WIDTH - 8, BORDER_Y, F_SM, 11, 12,
+    NumVal_Init(&anaCtx.endVal, LCD_WIDTH - 8, BORDER_Y, F_M, 11, 12,
                 UNIT_MHZ, 0, BK4819_F_MIN, BK4819_F_MAX, onEndEntered, POS_R,
                 nullptr, 0, 0);
     /* строка информации: узкие непересекающиеся зоны, центр создаём первым */
-    s_infoLbl[1] = mkInfoLabel(&lv_font_mono9, 60, INFO_BASE - 11, 120,
+    s_infoLbl[1] = mkInfoLabel(F_M, 60, INFO_BASE - 11, 120,
                                LV_TEXT_ALIGN_CENTER);
-    s_infoLbl[0] = mkInfoLabel(&lv_font_tomthumb, 4, INFO_BASE - 4, 56,
+    s_infoLbl[0] = mkInfoLabel(F_S, 4, INFO_BASE - 4, 56,
                                LV_TEXT_ALIGN_LEFT);
-    s_infoLbl[2] = mkInfoLabel(&lv_font_tomthumb, LCD_WIDTH - 4 - 56,
+    s_infoLbl[2] = mkInfoLabel(F_S, LCD_WIDTH - 4 - 56,
                                INFO_BASE - 4, 56, LV_TEXT_ALIGN_RIGHT);
     initRange();
     onRangeChanged();
@@ -462,7 +466,7 @@ public:
     /* подчёркивание редактируемой границы — прямая заливка, LVGL про неё не
      * знает и может закрасить, поэтому каждый кадр (как в сканере) */
     {
-      const int16_t uy = SPECTRUM_Y - 4, uw = 9 * 11;
+      const int16_t uy = SPECTRUM_Y - 4, uw = 8 * FontW(F_M);
       FillRect(8, uy, uw, 2, anaCtx.borderSel ? C_BLACK : C_YELLOW);
       FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2,
                anaCtx.borderSel ? C_YELLOW : C_BLACK);
@@ -616,11 +620,9 @@ public:
       anaCtx.cursorActive = false;
       NumVal_StartEdit(&anaCtx.freqVal);
       return true;
-    case KEY_EXIT:
-      if (anaCtx.listen)
-        exitListen(); /* сначала выйти из прослушивания */
-      else
-        anaCtx.cursorActive = false;
+    case KEY_EXIT: /* как везде: выход в VFO на прежнюю частоту */
+      anaCtx.captureF = 0;
+      Mode_Switch(MODE_VFO);
       return true;
     default:
       break;

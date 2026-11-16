@@ -58,9 +58,9 @@ static void onEndEntered(uint32_t f) {
 }
 
 static void initNumVals() {
-  NumVal_Init(&simpleScannerCtx.numVal[0], 8, SPECTRUM_Y - 2, F_SM, 11, 12, UNIT_MHZ,
+  NumVal_Init(&simpleScannerCtx.numVal[0], 8, SPECTRUM_Y - 2, F_M, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0, 0);
-  NumVal_Init(&simpleScannerCtx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_SM, 11, 12,
+  NumVal_Init(&simpleScannerCtx.numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 2, F_M, 11, 12,
               UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr, 0,
               0);
 }
@@ -137,10 +137,10 @@ public:
       DrawHLine(LCD_WIDTH - 8 - 32, SPECTRUM_Y, 32, !endFSel ? C_BLACK : C_WHITE);
 
       {
-        int16_t tw = TextWidth("9999/s", F_SM);
+        int16_t tw = TextWidth("9999/s", F_M);
         FillRect(LCD_XCENTER - tw / 2, SPECTRUM_Y - 14, tw, 12, BG());
         PrintfT(LCD_XCENTER, SPECTRUM_Y - 2,
-                text_style(C_WHITE, C_BLACK, POS_C, F_SM), "%4u/s", stepsPerSec);
+                text_style(C_WHITE, C_BLACK, POS_C, F_M), "%4u/s", stepsPerSec);
       }
       rendered = true;
     }
