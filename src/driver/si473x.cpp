@@ -154,6 +154,139 @@ static uint8_t i2c_read_byte(bool send_ack) {
   return data;
 }
 
+/* ─── Аппаратный I2C1 (PC0 = SCL, PC1 = SDA, AF7) ───────────────
+ * Так сделано и в стоке 1.16 (I2C1, AF7, адрес на шине 0x22/0x23, таймаут
+ * 2000). Бит-бэнг остаётся как откат: если аппаратная шина не ответила на
+ * пробу, SI47XX_IsAlive переключается на него и логирует это. Аппаратный
+ * I2C не требует маскировать прерывания и не зависит от задержек цикла. */
+#define HW_I2C I2C1
+#define HW_I2C_SPEED_HZ 100000u
+#define HW_I2C_TIMEOUT_MS 50u /* одна транзакция (≤ 9 байт при 100 кГц ≈ 1 мс) */
+
+static bool s_hw; /* true — шина аппаратная, false — бит-бэнг */
+
+/* Значение CLKCTRL (формат как TIMINGR у STM32F0: PRESC[31:28] SCLDEL[23:20]
+ * SDADEL[19:16] SCLH[15:8] SCLL[7:0]) под HW_I2C_SPEED_HZ и частоту PCLK1.
+ * Префильтр: тик ≈ 133 нс; SCLDEL ≥ 250 нс (tSU;DAT стандартного режима). */
+static uint32_t hw_clkctrl(uint32_t pclk) {
+  uint32_t presc = (pclk + 7500000u - 1) / 7500000u;
+  if (presc < 1)
+    presc = 1;
+  if (presc > 16)
+    presc = 16;
+  uint32_t tp = pclk / presc; /* частота тика после делителя */
+  uint32_t n = tp / HW_I2C_SPEED_HZ; /* тиков на период SCL */
+  if (n < 8)
+    n = 8;
+  uint32_t sclh = n / 2 - 1, scll = n - n / 2 - 1;
+  if (sclh > 255)
+    sclh = 255;
+  if (scll > 255)
+    scll = 255;
+  uint32_t scldel = (uint32_t)((uint64_t)tp * 250 / 1000000000ull) + 1;
+  if (scldel > 15)
+    scldel = 15;
+  return ((presc - 1) << 28) | (scldel << 20) | (1u << 16) | (sclh << 8) | scll;
+}
+
+static void busUseBitbang(void) {
+  i2c_enable(HW_I2C, FALSE);
+  gpio_init_type g;
+  gpio_default_para_init(&g);
+  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+  g.gpio_out_type = GPIO_OUTPUT_OPEN_DRAIN;
+  g.gpio_mode = GPIO_MODE_OUTPUT;
+  g.gpio_pull = GPIO_PULL_UP;
+  g.gpio_pins = PIN_SCL | PIN_SDA;
+  gpio_init(PORT_SCL, &g);
+  PIN_SET(PORT_SCL, PIN_SCL);
+  PIN_SET(PORT_SDA, PIN_SDA);
+  s_hw = false;
+}
+
+static void busUseHw(void) {
+  crm_periph_clock_enable(CRM_I2C1_PERIPH_CLOCK, TRUE);
+  crm_i2c_clock_select(CRM_I2C1, CRM_I2C_CLOCK_SOURCE_PCLK);
+
+  gpio_init_type g;
+  gpio_default_para_init(&g);
+  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER; /* как в стоке */
+  g.gpio_out_type = GPIO_OUTPUT_OPEN_DRAIN;
+  g.gpio_mode = GPIO_MODE_MUX;
+  g.gpio_pull = GPIO_PULL_UP;
+  g.gpio_pins = PIN_SCL | PIN_SDA;
+  gpio_init(PORT_SCL, &g);
+  gpio_pin_mux_config(PORT_SCL, GPIO_PINS_SOURCE0, GPIO_MUX_7);
+  gpio_pin_mux_config(PORT_SDA, GPIO_PINS_SOURCE1, GPIO_MUX_7);
+
+  crm_clocks_freq_type clk;
+  crm_clocks_freq_get(&clk);
+  i2c_init(HW_I2C, 0x00, hw_clkctrl(clk.apb1_freq));
+  i2c_enable(HW_I2C, TRUE);
+  s_hw = true;
+}
+
+/* сброс автомата (PE=0 очищает флаги/состояние) */
+static void hw_recover(void) {
+  i2c_enable(HW_I2C, FALSE);
+  i2c_enable(HW_I2C, TRUE);
+}
+
+/* ждём флаг; false — NACK, ошибка шины или таймаут */
+static bool hw_wait(uint32_t flag) {
+  uint32_t t0 = DWT->CYCCNT;
+  const uint32_t lim = (SystemCoreClock / 1000u) * HW_I2C_TIMEOUT_MS;
+  while (i2c_flag_get(HW_I2C, flag) == RESET) {
+    if (i2c_flag_get(HW_I2C, I2C_ACKFAIL_FLAG) != RESET ||
+        i2c_flag_get(HW_I2C, I2C_BUSERR_FLAG) != RESET ||
+        i2c_flag_get(HW_I2C, I2C_ARLOST_FLAG) != RESET)
+      return false;
+    if (DWT->CYCCNT - t0 > lim)
+      return false;
+  }
+  return true;
+}
+
+/* конец транзакции: STOP (авто) → снять флаги; при ошибке — сброс автомата */
+static bool hw_finish(bool ok) {
+  if (ok)
+    ok = hw_wait(I2C_STOPF_FLAG);
+  if (ok) {
+    i2c_flag_clear(HW_I2C, I2C_STOPF_FLAG);
+  } else {
+    hw_recover();
+  }
+  return ok;
+}
+
+static bool hw_write(const uint8_t *buf, uint8_t len) {
+  if (i2c_flag_get(HW_I2C, I2C_BUSYF_FLAG) != RESET)
+    hw_recover(); /* шина «занята» с прошлого раза */
+  i2c_transmit_set(HW_I2C, I2C_ADDR << 1, len, I2C_AUTO_STOP_MODE,
+                   I2C_GEN_START_WRITE);
+  bool ok = true;
+  for (uint8_t i = 0; ok && i < len; i++) {
+    ok = hw_wait(I2C_TDIS_FLAG);
+    if (ok)
+      i2c_data_send(HW_I2C, buf[i]);
+  }
+  return hw_finish(ok);
+}
+
+static bool hw_read(uint8_t *buf, uint8_t len) {
+  if (i2c_flag_get(HW_I2C, I2C_BUSYF_FLAG) != RESET)
+    hw_recover();
+  i2c_transmit_set(HW_I2C, I2C_ADDR << 1, len, I2C_AUTO_STOP_MODE,
+                   I2C_GEN_START_READ);
+  bool ok = true;
+  for (uint8_t i = 0; ok && i < len; i++) {
+    ok = hw_wait(I2C_RDBF_FLAG);
+    if (ok)
+      buf[i] = i2c_data_receive(HW_I2C);
+  }
+  return hw_finish(ok);
+}
+
 /* ─── Buffer I/O ───────────────────────────────────────────────── */
 /* Линии SI4732 (PC0/PC1) разделяются с клавишами SIDE1/SIDE2: пока идёт
  * бит-банг I2C, SysTick-сканер клавиатуры видит мусор и плодит фантомные
@@ -161,6 +294,10 @@ static uint8_t i2c_read_byte(bool send_ack) {
  * задерживается на доли миллисекунды; загрузка SSB-патча — на секунду,
  * что безвредно). */
 void SI47XX_WriteBuffer(const uint8_t *buf, uint8_t len) {
+  if (s_hw) {
+    hw_write(buf, len);
+    return;
+  }
   uint32_t pm = __get_PRIMASK();
   __disable_irq();
   i2c_start();
@@ -172,6 +309,11 @@ void SI47XX_WriteBuffer(const uint8_t *buf, uint8_t len) {
 }
 
 void SI47XX_ReadBuffer(uint8_t *buf, uint8_t len) {
+  if (s_hw) {
+    if (!hw_read(buf, len))
+      memset(buf, 0, len); /* как бит-бэнг при таймауте: нули */
+    return;
+  }
   uint32_t pm = __get_PRIMASK();
   __disable_irq();
   i2c_start();
@@ -203,14 +345,10 @@ void SI47XX_Init(void) {
   crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
   crm_periph_clock_enable(CRM_GPIOC_PERIPH_CLOCK, TRUE);
 
+  /* PORT_SCL == PORT_SDA == GPIOC. Шина: аппаратный I2C1 (как в стоке),
+   * при отсутствии ответа SI47XX_IsAlive откатывается на бит-бэнг. */
   gpio_init_type g;
-  gpio_default_para_init(&g);
-  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
-  g.gpio_out_type = GPIO_OUTPUT_OPEN_DRAIN;
-  g.gpio_mode = GPIO_MODE_OUTPUT;
-  g.gpio_pull = GPIO_PULL_UP;
-  g.gpio_pins = PIN_SCL | PIN_SDA;
-  gpio_init(PORT_SCL, &g); /* PORT_SCL == PORT_SDA == GPIOC */
+  busUseHw();
 
   /* RST pin — push-pull, start LOW (chip in reset) */
   gpio_default_para_init(&g);
@@ -400,10 +538,13 @@ void SI47XX_PatchPowerUp(bool ssb) {
  * FM-вещание (WFM) на SI4732 — стерео/RDS-приёмник чипа; цена — смена
  * семейства: AM/SSB ↔ FM = re-power (+ заливка патча при возврате). */
 static void siPowerUpFor(uint8_t want) {
+  uint32_t t0 = millis();
   if (want == 3)
     SI47XX_PowerUp(); /* FUNC_FM — по si4732mode */
   else
     SI47XX_PatchPowerUp(want == 2);
+  Log("SI up %s: %lu ms, I2C %s", want == 3 ? "FM" : want == 2 ? "SSB" : "AM",
+      (unsigned long)(millis() - t0), s_hw ? "HW" : "bit-bang");
 }
 
 bool SI47XX_Acquire(SI47XX_MODE mode) {
@@ -575,12 +716,32 @@ void SI47XX_SetAMFrontendAGC(uint8_t minGainIdx, uint8_t attnBackup) {
                (uint16_t)((minGainIdx << 8) | attnBackup));
 }
 
-bool SI47XX_IsAlive(void) {
-  // Quick I2C check with timeout
+static bool bbProbe(void) {
   i2c_start();
   bool ack = i2c_write_byte(I2C_ADDR << 1); // 0x44, W
   i2c_stop();
   return ack; // true = чип ответил ACK
+}
+
+bool SI47XX_UsesHwI2C(void) { return s_hw; }
+
+/* Проба: аппаратная шина (чтение 1 байта статуса — безобидно), при неудаче —
+ * бит-бэнг. Ответил бит-бэнг — остаёмся на нём (логируем). Не ответил никто —
+ * чипа нет; шина возвращается на HW для следующей попытки. */
+bool SI47XX_IsAlive(void) {
+  if (s_hw) {
+    uint8_t st;
+    if (hw_read(&st, 1))
+      return true;
+    busUseBitbang();
+    if (bbProbe()) {
+      Log("SI: HW I2C no ACK, bit-bang OK");
+      return true;
+    }
+    busUseHw();
+    return false;
+  }
+  return bbProbe();
 }
 
 bool SI47XX_CheckCTS(void) {
@@ -609,6 +770,9 @@ bool SI47XX_CheckChipID(void) {
 void SI47XX_I2C_Scan(void) {
   Log("I2C scan...");
   uint8_t found = 0;
+  bool wasHw = s_hw;
+  if (wasHw)
+    busUseBitbang(); /* сканируем бит-бэнгом; потом вернём шину */
 
   for (uint8_t addr = 0x08; addr < 0x78; addr++) {
     i2c_start();
@@ -620,6 +784,9 @@ void SI47XX_I2C_Scan(void) {
       found++;
     }
   }
+
+  if (wasHw)
+    busUseHw();
 
   if (found == 0)
     Log("  No devices found");

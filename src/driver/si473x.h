@@ -595,6 +595,7 @@ void SI47XX_SetVolume(uint8_t volume);
 void SI47xx_GetStatus(uint8_t intack, uint8_t cancel);
 
 bool SI47XX_IsAlive(void);
+bool SI47XX_UsesHwI2C(void); /* true — шина аппаратная (I2C1), false — бит-бэнг */
 bool SI47XX_CheckCTS(void);
 bool SI47XX_CheckChipID(void);
 void SI47XX_I2C_Scan(void);
