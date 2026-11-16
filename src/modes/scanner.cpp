@@ -99,6 +99,7 @@ static bool waterfall = true;
 static bool dacOn;
 static uint8_t warm;        /* шагов калибровки шума после смены диапазона */
 static uint8_t creepCnt;    /* медленный подъём порога в HOLD на «шуме» */
+static uint8_t savedMod;    /* модуляция VFO на входе (скан идёт в FM) */
 static uint8_t savedStep;   /* шаг VFO сканера на входе */
 static bool monitorMode;  /* слушать и белый список */
 /* Тест второго BK (U400/B): на каждом шаге B настраивается на ту же частоту,
@@ -312,6 +313,9 @@ public:
       currentVfo = 0;
     scanVfo = currentVfo;
     savedStep = vfos[scanVfo].step;
+    savedMod = vfos[scanVfo].modulation;
+    if (savedMod == MOD_WFM) /* WFM 64–108 = SI4732, а скан идёт по BK */
+      vfos[scanVfo].modulation = MOD_FM;
     savedFreq = vfos[scanVfo].rxF; /* после Radio_Init */
 
     initNumVals();
@@ -427,6 +431,7 @@ public:
     if (!(captureOnExit && scanVfo == savedVfo)) {
       currentVfo = scanVfo;
       vfos[scanVfo].rxF = savedFreq;
+      vfos[scanVfo].modulation = static_cast<ModulationType>(savedMod);
       vfos[scanVfo].step = static_cast<Step>(savedStep); /* шаг скана — не в VFO */
       Radio_TuneTo(savedFreq, true); /* заодно приёмник, модуляция, шумодав */
     }

@@ -43,6 +43,7 @@ struct {
   uint32_t scanF;
   uint8_t savedVfo;
   uint8_t scanVfo;     /* VFO, которым сканируем (BK-A) */
+  uint8_t savedMod;    /* модуляция VFO на входе (скан идёт в FM) */
   uint32_t savedFreq;  /* его частота на входе */
   uint32_t captureF;   /* MENU: частота курсора — в VFO (0 = нет) */
   bool spectrumReady;
@@ -386,6 +387,11 @@ public:
     anaCtx.savedVfo = entryVfo;
     anaCtx.scanVfo = currentVfo;
     anaCtx.savedFreq = vfos[currentVfo].rxF;
+    /* WFM на 64–108 МГц — это SI4732, а BK измеряет по FM: на время скана
+     * VFO в FM, иначе приёмник уходит на SI и спектр — шум чужого тракта. */
+    anaCtx.savedMod = vfos[currentVfo].modulation;
+    if (vfos[currentVfo].modulation == MOD_WFM)
+      vfos[currentVfo].modulation = MOD_FM;
     /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
      * в фиксированной зоне над водопадом (строка cursor info). */
     NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, INFO_BASE, F_M, 11, 12,
@@ -528,6 +534,7 @@ public:
     } else {
       currentVfo = anaCtx.scanVfo;
       vfos[currentVfo].rxF = anaCtx.savedFreq;
+      vfos[currentVfo].modulation = static_cast<ModulationType>(anaCtx.savedMod);
       Radio_TuneTo(anaCtx.savedFreq, true);
     }
     currentVfo = anaCtx.savedVfo;
