@@ -16,9 +16,10 @@ gen ui_font_s  JetBrainsMono-Medium.ttf    11 0x20-0x7E
 gen ui_font_m  JetBrainsMono-Medium.ttf    14 0x20-0x7E
 gen ui_font_l  JetBrainsMono-ExtraBold.ttf 20 0x20-0x7E
 # цифры частоты: Liberation Mono Bold без точки в нуле (tools/font_fix.py nodot),
-# 4 bpp + гамма 0.55 — сглаживание остаётся, но края плотные, текст не бледнеет
+# 4 bpp + пороговое сглаживание (snap 2..6): контур полностью плотный,
+# полупрозрачные пиксели остаются только на скруглениях/диагоналях
 TMP=$(mktemp -d)
 python3 "$(dirname "$0")/font_fix.py" nodot /usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf "$TMP/xl.ttf"
 F=$TMP gen ui_font_xl xl.ttf 38 0x20,0x25,0x2B-0x3A
-python3 "$(dirname "$0")/font_fix.py" gamma "$OUT/ui_font_xl.c" 0.55
+python3 "$(dirname "$0")/font_fix.py" snap "$OUT/ui_font_xl.c" 2 6
 rm -rf "$TMP"
