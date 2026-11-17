@@ -11,12 +11,13 @@
 #include "graphics.h"
 #include "lvgl.h"
 #include "printf.h"
+#include "screen_layout.h"
 #include <string.h>
 
 #define BAT_W 22 /* корпус батареи */
 #define BAT_H 11
 #define BAT_X (LCD_WIDTH - 8 - BAT_W - 3)
-#define BAT_Y ((24 - BAT_H) / 2)
+#define BAT_Y ((UI_STATUS_H - BAT_H) / 2)
 #define BAT_MIN 600
 #define BAT_MAX 840
 
@@ -56,7 +57,7 @@ static lv_obj_t *mkText(lv_coord_t x, lv_coord_t w, lv_text_align_t al,
   lv_obj_t *l = lv_label_create(s_root);
   if (!l)
     return NULL;
-  lv_obj_set_pos(l, x, (24 - FontH(F_S)) / 2);
+  lv_obj_set_pos(l, x, (UI_STATUS_H - FontH(F_S)) / 2);
   lv_obj_set_width(l, w);
   lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
   lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
@@ -68,7 +69,8 @@ static lv_obj_t *mkText(lv_coord_t x, lv_coord_t w, lv_text_align_t al,
 }
 
 static void build(void) {
-  s_root = mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, 24, C_BLACK, LV_OPA_TRANSP, 0);
+  s_root =
+      mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, UI_STATUS_H, C_BLACK, LV_OPA_TRANSP, 0);
   if (!s_root)
     return;
   /* батарея: контур с носиком, заливка внутри */

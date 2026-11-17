@@ -263,16 +263,6 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
 
   char s[64];
   vsnprintf(s, sizeof(s), fmt, a);
-  if (s[0] == '\0') return;
-
-  int16_t tw = TextWidth(s, f);
-
-  int16_t sx = x;
-  if (align == POS_C) sx = x - (tw >> 1);
-  else if (align == POS_R) sx = x - tw;
-
-  uint16_t len;
-  uint32_t hash = fnv1a(s, &len);
 
   /* Ищем слот с тем же якорем — переиспользуем, не пересоздаём */
   LabelSlot *slot = NULL;
@@ -283,6 +273,27 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
       break;
     }
   }
+
+  /* Пустая строка скрывает слот: так освобождают зону на время ввода
+   * (например, соседнее поле границы или центральная подпись). Следующий
+   * непустой Printf* снова покажет лейбл. */
+  if (s[0] == '\0') {
+    if (slot) {
+      lv_obj_add_flag(slot->label, LV_OBJ_FLAG_HIDDEN);
+      slot->text_hash = 0;
+      slot->text_len = 0xFFFF;
+    }
+    return;
+  }
+
+  int16_t tw = TextWidth(s, f);
+
+  int16_t sx = x;
+  if (align == POS_C) sx = x - (tw >> 1);
+  else if (align == POS_R) sx = x - tw;
+
+  uint16_t len;
+  uint32_t hash = fnv1a(s, &len);
 
   if (slot && slot->styled && slot->text_hash == hash &&
       slot->text_len == len && slot->fg == col && slot->bg == bg) {
@@ -310,6 +321,7 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
   slot->y = y;
   slot->font = f;
   slot->align = align;
+  lv_obj_clear_flag(slot->label, LV_OBJ_FLAG_HIDDEN);
 
   /* Позиция зависит от ширины текста — выставляем всегда */
   lv_obj_set_pos(slot->label, sx, y - FontAscent(f));

@@ -38,6 +38,7 @@
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
+#include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "loot_screen.h"
@@ -47,20 +48,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Раскладка экрана. ВАЖНО: водопад использует hardware vscroll зоны
- * [WF_Y, HEIGHT) — ниже этой линии нельзя размещать никакой текст/виджеты,
- * они будут «плыть» вместе с водопадом. */
-#define STATUS_H 24
-/* поля частот — лейблы F_M [y-11, y+4] с y = SPECTRUM_Y-10; под ними
- * (SPECTRUM_Y-4..-3) полоса-подчёркивание выбранной границы; ниже — спектр */
-#define SPECTRUM_Y (STATUS_H + 24)
-#define SP_H 52
-#define STATE_Y (SPECTRUM_Y + SP_H + 10) /* строка состояния (с запасом от спектра) */
-/* LVGL-лейбл F_M занимает [y-11, y+4]: строка состояния (baseline
- * STATE_Y+12) кончается на STATE_Y+16. Водопад начинаем ниже — иначе
- * перерисовка лейбла (чёрный фон) пишет в память зоны скролла. */
-#define INFO_Y (STATE_Y + 28)           /* строка находок (baseline) */
-#define WF_Y (STATE_Y + 33)             /* водопад отсюда и до низа */
+/* Раскладка общая с анализатором — src/ui/screen_layout.h. ВАЖНО: ниже
+ * UI_WATERFALL_Y начинается аппаратный vscroll: текста и виджетов там быть
+ * не должно, иначе они «плывут» вместе с водопадом. */
 
 #define LISTEN_TIMEOUT_MS 5000
 #define SQL_DELAY_MS 30
@@ -118,7 +108,7 @@ static uint32_t lastWfRender;
 static void onRangeChanged() {
   WF_Reset();
   /* чистим всё под статусом: мусор прошлого экрана и старый водопад */
-  FillRect(0, STATUS_H, LCD_WIDTH, LCD_HEIGHT - STATUS_H, C_BLACK);
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, LCD_HEIGHT - UI_STATUS_H, C_BLACK);
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   curF = range.start;
@@ -155,12 +145,11 @@ static void onEndEntered(uint32_t f) {
 static void initNumVals() {
   /* выравнивание значения (и при вводе) задаёт pos: левое поле — от левого
    * края, правое — от правого */
-  NumVal_Init(&numVal[0], 8, SPECTRUM_Y - 10, F_M, 11, 12, UNIT_MHZ,
+  NumVal_Init(&numVal[0], UI_LEFT_X, UI_RANGE_BASE, F_M, 11, 12, UNIT_MHZ,
               range.start, 0, 1340 * MHZ, onStartEntered, POS_L, nullptr, 0,
               0);
-  NumVal_Init(&numVal[1], LCD_WIDTH - 8, SPECTRUM_Y - 10, F_M, 11, 12,
-              UNIT_MHZ, range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr,
-              0, 0);
+  NumVal_Init(&numVal[1], UI_RIGHT_X, UI_RANGE_BASE, F_M, 11, 12, UNIT_MHZ,
+              range.end, 0, 1340 * MHZ, onEndEntered, POS_R, nullptr, 0, 0);
 }
 
 static void setAudio(bool on) {
@@ -352,68 +341,89 @@ public:
 
   void render() override {
     STATUSLINE_render();
+
+    bool editStart = NumVal_IsEditing(&numVal[0]);
+    bool editEnd = NumVal_IsEditing(&numVal[1]);
     NumVal_Render(&numVal[0]);
     NumVal_Render(&numVal[1]);
+    /* Пока правим одну границу, вторую прячем: длинный ввод не должен
+     * заходить на соседнее поле. */
+    if (editStart)
+      PrintfT(UI_RIGHT_X, UI_RANGE_BASE,
+              text_style(C_WHITE, C_BLACK, POS_R, F_M), "");
+    if (editEnd)
+      PrintfT(UI_LEFT_X, UI_RANGE_BASE,
+              text_style(C_WHITE, C_BLACK, POS_L, F_M), "");
 
     uint32_t now = millis();
     if (now - lastSpRender >= 300) {
-      SP_Render(&range, SPECTRUM_Y, SP_H);
+      SP_Render(&range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       lastSpRender = now;
     }
     if (sweepDone) { /* строка водопада — раз за полный проход */
       sweepDone = false;
       if (waterfall)
-        WF_Render(WF_Y, true);
+        WF_Render(UI_WATERFALL_Y, true);
     }
 
-    /* подчёркивание редактируемой границы (жёлтое), у другой — чёрное.
-     * Рисуется ПРЯМОЙ заливкой, а LVGL про неё не знает: любая его
-     * перерисовка пересекающейся области (смена текста, удаление объектов
-     * прошлого экрана) закрашивает её. Поэтому не «по смене», а каждый
-     * кадр — две заливки 99×2 px. */
+    /* Подчёркивание выбранной границы — ровно под значением. Рисуется
+     * ПРЯМОЙ заливкой, а LVGL про неё не знает: любая его перерисовка
+     * пересекающейся области закрашивает её. Поэтому каждый кадр. */
     {
-      const int16_t uy = SPECTRUM_Y - 4, uw = 8 * FontW(F_M);
-      FillRect(8, uy, uw, 2, endFSel ? C_BLACK : C_YELLOW);
-      FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2, endFSel ? C_YELLOW : C_BLACK);
+      const int16_t uy = UI_RANGE_UNDERLINE_Y;
+      const int16_t ws = UI_FreqWidth(range.start);
+      const int16_t we = UI_FreqWidth(range.end);
+      FillRect(UI_LEFT_X, uy, ws, UI_RANGE_UNDERLINE_H,
+               endFSel ? C_BLACK : C_YELLOW);
+      FillRect(UI_RIGHT_X - we, uy, we, UI_RANGE_UNDERLINE_H,
+               endFSel ? C_YELLOW : C_BLACK);
     }
 
-    /* шаг и выдержка на частоте — между полями границ (мелким шрифтом) */
+    /* шаг между полями границ; на время ввода прячем */
     uint32_t stp = StepFrequencyTable[vfos[currentVfo].step];
-    PrintfT(LCD_XCENTER, SPECTRUM_Y - 6,
-            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%u.%02uk %uus",
-            (unsigned)(stp / 100), (unsigned)(stp % 100),
-            (unsigned)DWELL_US[dwellIdx]);
+    TextStyle topStyle = text_style(C_YELLOW, C_BLACK, POS_C, F_S);
+    if (editStart || editEnd) {
+      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "");
+    } else {
+      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%u.%02luk",
+              (unsigned)(stp / 100), (unsigned)(stp % 100));
+    }
 
-    /* строка состояния: SCAN/HOLD/PAUSE + частота + скорость */
-    char state[6];
-    strcpy(state, !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN"));
-    PrintfT(4, STATE_Y + 12, text_style(C_GREEN, C_BLACK, POS_L, F_M),
-            "%s %u.%05u", state, curF / 100000, curF % 100000);
-    PrintfT(LCD_WIDTH - 4, STATE_Y + 12,
-            text_style(C_YELLOW, C_BLACK, POS_R, F_M), "%4u/s", stepsPerSec);
+    /* Строка 1: состояние | текущая частота | скорость. */
+    const char *state = !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN");
+    Color stateCol = !scanning ? C_GRAY : (isListening ? C_YELLOW : C_GREEN);
+    PrintfT(UI_LEFT_X, UI_INFO1_BASE,
+            text_style(stateCol, C_BLACK, POS_L, F_M), "%s", state);
+    PrintfT(LCD_XCENTER, UI_INFO1_BASE,
+            text_style(C_WHITE, C_BLACK, POS_C, F_M), "%u.%05u",
+            (unsigned)(curF / 100000), (unsigned)(curF % 100000));
+    PrintfT(UI_RIGHT_X, UI_INFO1_BASE,
+            text_style(C_YELLOW, C_BLACK, POS_R, F_M), "%u/s",
+            (unsigned)stepsPerSec);
 
-    /* строка находок: последняя находка (+белый/-чёрный), сколько назад;
-     * справа — размер списка и режим мониторинга */
+    /* Строка 2: последняя находка | выдержка | список/мониторинг (или A/B). */
     const Loot *ll = gLastActiveLoot;
     if (ll) {
-      uint32_t ago = LOOT_SecondsAgo(ll);
-      PrintfT(4, INFO_Y, text_style(C_WHITE, C_BLACK, POS_L, F_M),
-              "%c%u.%05u %2u:%02u", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ',
-              (unsigned)(ll->f / MHZ), (unsigned)(ll->f % MHZ),
-              (unsigned)(ago / 60 % 100), (unsigned)(ago % 60));
+      PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+              text_style(ll->open ? C_YELLOW : C_WHITE, C_BLACK, POS_L, F_S),
+              "%c%u.%05u", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ',
+              (unsigned)(ll->f / MHZ), (unsigned)(ll->f % MHZ));
     } else {
-      PrintfT(4, INFO_Y, text_style(C_GRAY, C_BLACK, POS_L, F_M),
-              "no loot yet     ");
+      PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+              text_style(C_GRAY, C_BLACK, POS_L, F_S), "no loot yet");
     }
+    PrintfT(LCD_XCENTER, UI_INFO2_BASE,
+            text_style(C_GRAY, C_BLACK, POS_C, F_S), "%uus",
+            (unsigned)DWELL_US[dwellIdx]);
     if (probeB) {
       /* A и B: RSSI в дБм на текущей частоте (B ≈ A при подключённом входе) */
-      PrintfT(LCD_WIDTH - 4, INFO_Y,
-              text_style(C_YELLOW, C_BLACK, POS_R, F_S), "A%d B%d  ",
+      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
+              text_style(C_YELLOW, C_BLACK, POS_R, F_S), "A%d B%d",
               (int)(probeRssiA >> 1) - 160, (int)(probeRssiB >> 1) - 160);
     } else {
-      PrintfT(LCD_WIDTH - 4, INFO_Y,
+      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
               text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
-              "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "    ");
+              "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "");
     }
   }
 
@@ -458,7 +468,8 @@ public:
         waterfall = !waterfall;
         if (!waterfall) {
           WF_Reset();
-          FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+          FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
+                   C_BLACK);
         }
         return true;
       case KEY_SIDE2: /* мониторинг: слушать и белый список */

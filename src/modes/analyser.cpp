@@ -9,30 +9,17 @@
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/numval.h"
+#include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
-#include "lvgl.h"
 #include "mode.h"
 #include "vfo.h"
 #include "printf.h"
 #include <stdlib.h>
 #include <string.h>
 
-#define STATUS_H 24
-#define SP_H 54
-/* Над спектром — поля границ диапазона (лейблы F_M [y-11,y+4], y=SPECTRUM_Y-10)
- * и подчёркивание выбранной границы (SPECTRUM_Y-4..-3). Под спектром — зазор
- * до строки информации (иначе цифры перекрывали низ спектра), строка
- * информации и запас до водопада: лейблы не должны заходить в зону
- * аппаратного скролла (с WF_Y). */
-#define SPECTRUM_Y (STATUS_H + 24)
-#define CURSOR_Y (SPECTRUM_Y + SP_H + 6)
-#define INFO_BASE (CURSOR_Y + 16) /* baseline строки информации и ввода частоты */
-/* Запас от низа подписей (INFO_BASE+4) до зоны скролла — 14 строк: надписи
- * ни при каких обстоятельствах не должны попадать в память водопада */
-#define WF_Y (INFO_BASE + 18)
-#define CURSOR_H (WF_Y - CURSOR_Y)
-#define BORDER_Y (SPECTRUM_Y - 10)
+/* Раскладка общая со сканером — src/ui/screen_layout.h. Ниже
+ * UI_WATERFALL_Y начинается аппаратный vscroll: текста там быть не должно. */
 
 #define CURSOR_TIMEOUT_MS 5000
 
@@ -65,47 +52,6 @@ struct {
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
 } anaCtx;
 
-/* Кэш строки информации: перерисовываем только при смене текста. Раньше
- * чёрная заливка и повторная отрисовка лейблов шли каждый кадр — лишние
- * записи в зону экрана рядом с водопадом. */
-static bool s_infoValid;
-static uint8_t s_infoMode;
-static char s_info[3][24];
-
-/* Строка информации — три нативных LVGL-лейбла (создаются в enter, удаляются
- * в exit): слева — шаг/левая граница рамки/LISTEN, центр — диапазон/частота
- * курсора, справа — скорость/правая граница. Узкие непересекающиеся зоны. */
-static lv_obj_t *s_infoLbl[3];
-
-static inline lv_color_t lvc565(uint16_t c) {
-  c = TC(c);
-  return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
-                       (uint8_t)(c << 3));
-}
-
-static lv_obj_t *mkInfoLabel(const lv_font_t *font, lv_coord_t x, lv_coord_t y,
-                             lv_coord_t w, lv_text_align_t al) {
-  lv_obj_t *l = lv_label_create(lv_scr_act());
-  if (!l)
-    return nullptr;
-  lv_obj_set_pos(l, x, y);
-  lv_obj_set_width(l, w);
-  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-  lv_obj_set_style_text_font(l, font, LV_PART_MAIN);
-  lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(l, lvc565(C_BLACK), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(l, LV_OPA_COVER, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
-  return l;
-}
-
-static void setInfo(uint8_t i, const char *text, uint16_t color) {
-  if (!s_infoLbl[i])
-    return;
-  lv_obj_set_style_text_color(s_infoLbl[i], lvc565(color), LV_PART_MAIN);
-  lv_label_set_text(s_infoLbl[i], text);
-}
-
 static uint8_t getCursorStart() {
   if (anaCtx.cursorCenter >= anaCtx.cursorHalfW)
     return anaCtx.cursorCenter - anaCtx.cursorHalfW;
@@ -123,6 +69,19 @@ static uint8_t getCursorEnd() {
  * точкам, попавшим в столбец, так что число точек влияет только на время
  * прохода (диапазон / шаг / ~160 точек в секунду). */
 static uint32_t scanStep() { return StepFrequencyTable[vfos[currentVfo].step]; }
+
+/* Компактная частота/полоса: вход в единицах 10 Гц → 24.00k / 1.20M / 1.79G. */
+static void fmtSpan(char *buf, size_t n, uint32_t f) {
+  if (f >= 100000000u) /* ≥ 1 ГГц */
+    snprintf(buf, n, "%lu.%02luG", (unsigned long)(f / 100000000u),
+             (unsigned long)((f % 100000000u) / 1000000u));
+  else if (f >= 100000u) /* ≥ 1 МГц */
+    snprintf(buf, n, "%lu.%02luM", (unsigned long)(f / 100000u),
+             (unsigned long)((f % 100000u) / 1000u));
+  else
+    snprintf(buf, n, "%lu.%02luk", (unsigned long)(f / 100u),
+             (unsigned long)(f % 100u));
+}
 
 /* BK4819 принимает 18–660 и 840–1300 МГц; остальное пропускаем */
 static bool bkCovers(uint32_t f) {
@@ -155,9 +114,8 @@ static void onRangeChanged() {
   anaCtx.lastStepTime = millis();
   anaCtx.stepsPerSec = 0;
   anaCtx.prevCursorActive = false;
-  s_infoValid = false;
 
-  FillRect(0, STATUS_H, LCD_WIDTH, WF_Y - STATUS_H, C_BLACK);
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
 }
 
 static void shiftRange(int32_t deltaStep) {
@@ -320,10 +278,10 @@ static void eraseCursorZone() {
   uint8_t x0 = anaCtx.prevCursorStart;
   uint8_t x1 = anaCtx.prevCursorEnd;
 
-  DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
-  DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_BLACK);
-  DrawVLine(x0, SPECTRUM_Y, SP_H, C_BLACK);
-  DrawVLine(x1, SPECTRUM_Y, SP_H, C_BLACK);
+  DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
+  DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_BLACK);
+  DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
+  DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
 
   anaCtx.prevCursorActive = false;
 }
@@ -332,25 +290,34 @@ static void drawCursorZone() {
   uint8_t x0 = getCursorStart();
   uint8_t x1 = getCursorEnd();
 
-  DrawHLine(x0, SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
-  DrawHLine(x0, SPECTRUM_Y + SP_H - 1, x1 - x0 + 1, C_CYAN);
-  DrawVLine(x0, SPECTRUM_Y, SP_H, C_CYAN);
-  DrawVLine(x1, SPECTRUM_Y, SP_H, C_CYAN);
+  DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
+  DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_CYAN);
+  DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
+  DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
 
   anaCtx.prevCursorStart = x0;
   anaCtx.prevCursorEnd = x1;
   anaCtx.prevCursorActive = true;
 }
 
+/* Ввод центральной частоты: диапазон центрируется на значении (поле стоит
+ * в центральной ячейке строки 1), у краёв приёмника — прижимается к границе. */
 static void onFreqInput(uint32_t val) {
-  if (val >= BK4819_F_MIN && val <= BK4819_F_MAX) {
-    Radio_TuneToAuto(val);
-    uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
-    uint32_t span = step * SP_MAX_POINTS;
-    anaCtx.range.start = val;
-    anaCtx.range.end = val + span;
-    onRangeChanged();
+  if (val < BK4819_F_MIN || val > BK4819_F_MAX)
+    return;
+  Radio_TuneToAuto(val);
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  uint32_t span = step * SP_MAX_POINTS;
+  uint32_t half = span / 2;
+  uint32_t start = val > half ? val - half : BK4819_F_MIN;
+  uint32_t end = start + span;
+  if (end > BK4819_F_MAX) {
+    end = BK4819_F_MAX;
+    start = end - span;
   }
+  anaCtx.range.start = start;
+  anaCtx.range.end = end;
+  onRangeChanged();
 }
 
 /* Произвольные границы: начало/конец задаются независимо. Шаг остаётся
@@ -406,29 +373,24 @@ public:
     anaCtx.savedMod = vfos[currentVfo].modulation;
     if (vfos[currentVfo].modulation == MOD_WFM)
       vfos[currentVfo].modulation = MOD_FM;
-    /* ВАЖНО: ниже WF_Y экран скроллится аппаратно — поле ввода держим
-     * в фиксированной зоне над водопадом (строка cursor info). */
-    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER + 5 * 11, INFO_BASE, F_M, 11, 12,
+    /* Поля и строка ввода — в общей сетке (screen_layout.h): частота центра
+     * стоит в строке 1, поэтому ввод не перекрывает соседние подписи. */
+    NumVal_Init(&anaCtx.freqVal, LCD_XCENTER, UI_INFO1_BASE, F_M, 11, 12,
                 UNIT_MHZ, vfos[currentVfo].rxF, BK4819_F_MIN, BK4819_F_MAX,
-                onFreqInput, POS_R, nullptr, 0, 0);
+                onFreqInput, POS_C, nullptr, 0, 0);
     /* границы: слева — от левого края, справа — от правого (pos задаёт и
      * выравнивание при вводе) */
-    NumVal_Init(&anaCtx.startVal, 8, BORDER_Y, F_M, 11, 12, UNIT_MHZ, 0,
-                BK4819_F_MIN, BK4819_F_MAX, onStartEntered, POS_L, nullptr, 0, 0);
-    NumVal_Init(&anaCtx.endVal, LCD_WIDTH - 8, BORDER_Y, F_M, 11, 12,
+    NumVal_Init(&anaCtx.startVal, UI_LEFT_X, UI_RANGE_BASE, F_M, 11, 12,
+                UNIT_MHZ, 0, BK4819_F_MIN, BK4819_F_MAX, onStartEntered, POS_L,
+                nullptr, 0, 0);
+    NumVal_Init(&anaCtx.endVal, UI_RIGHT_X, UI_RANGE_BASE, F_M, 11, 12,
                 UNIT_MHZ, 0, BK4819_F_MIN, BK4819_F_MAX, onEndEntered, POS_R,
                 nullptr, 0, 0);
-    /* строка информации: узкие непересекающиеся зоны, центр создаём первым */
-    s_infoLbl[1] = mkInfoLabel(F_M, 80, INFO_BASE - 11, 80,
-                               LV_TEXT_ALIGN_CENTER);
-    s_infoLbl[0] = mkInfoLabel(F_S, 4, INFO_BASE - 4, 76,
-                               LV_TEXT_ALIGN_LEFT);
-    s_infoLbl[2] = mkInfoLabel(F_S, LCD_WIDTH - 4 - 76,
-                               INFO_BASE - 4, 76, LV_TEXT_ALIGN_RIGHT);
     initRange();
     onRangeChanged();
 
-    FillRect(0, WF_Y, LCD_WIDTH, LCD_HEIGHT - WF_Y, C_BLACK);
+    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
+             C_BLACK);
   }
 
   void update() override {
@@ -482,33 +444,58 @@ public:
 
   void render() override {
     STATUSLINE_render();
+
+    bool editStart = NumVal_IsEditing(&anaCtx.startVal);
+    bool editEnd = NumVal_IsEditing(&anaCtx.endVal);
+    bool editFreq = NumVal_IsEditing(&anaCtx.freqVal);
     NumVal_Render(&anaCtx.startVal);
     NumVal_Render(&anaCtx.endVal);
+    /* В обычном режиме поле ввода показывает частоту центра курсора —
+     * тогда клавиша 0 открывает редактор с тем же значением, что на экране. */
+    if (!editFreq)
+      anaCtx.freqVal.value = xToFreq(anaCtx.cursorCenter);
+    NumVal_Render(&anaCtx.freqVal);
 
-    /* подчёркивание редактируемой границы — прямая заливка, LVGL про неё не
-     * знает и может закрасить, поэтому каждый кадр (как в сканере) */
+    /* Пока правим одну границу, вторую прячем: длинный ввод не должен
+     * заходить на соседнее поле. */
+    if (editStart)
+      PrintfT(UI_RIGHT_X, UI_RANGE_BASE,
+              text_style(C_WHITE, C_BLACK, POS_R, F_M), "");
+    if (editEnd)
+      PrintfT(UI_LEFT_X, UI_RANGE_BASE,
+              text_style(C_WHITE, C_BLACK, POS_L, F_M), "");
+
+    /* Подчёркивание выбранной границы — ровно под значением; прямая
+     * заливка, поэтому каждый кадр (как в сканере). */
     {
-      const int16_t uy = SPECTRUM_Y - 4, uw = 8 * FontW(F_M);
-      FillRect(8, uy, uw, 2, anaCtx.borderSel ? C_BLACK : C_YELLOW);
-      FillRect(LCD_WIDTH - 8 - uw, uy, uw, 2,
+      const int16_t uy = UI_RANGE_UNDERLINE_Y;
+      const int16_t ws = UI_FreqWidth(anaCtx.range.start);
+      const int16_t we = UI_FreqWidth(anaCtx.range.end);
+      FillRect(UI_LEFT_X, uy, ws, UI_RANGE_UNDERLINE_H,
+               anaCtx.borderSel ? C_BLACK : C_YELLOW);
+      FillRect(UI_RIGHT_X - we, uy, we, UI_RANGE_UNDERLINE_H,
                anaCtx.borderSel ? C_YELLOW : C_BLACK);
     }
 
-    if (NumVal_IsEditing(&anaCtx.freqVal)) {
-      NumVal_Render(&anaCtx.freqVal);
-      s_infoValid = false; /* зону информации перерисуем после ввода */
-      return;
+    /* шаг между полями границ; на время ввода прячем */
+    uint32_t step = scanStep();
+    TextStyle topStyle = text_style(C_YELLOW, C_BLACK, POS_C, F_S);
+    if (editStart || editEnd) {
+      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "");
+    } else {
+      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%u.%02luk",
+              (unsigned)(step / 100), (unsigned)(step % 100));
     }
 
     bool spectrumRedrawn = false;
     if (anaCtx.spectrumReady || millis() - lastSpectrumRender >= 500) {
-      SP_Render(&anaCtx.range, SPECTRUM_Y, SP_H);
+      SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       lastSpectrumRender = millis();
       spectrumRedrawn = true;
     }
 
     if (anaCtx.spectrumReady) {
-      WF_Render(WF_Y, true);
+      WF_Render(UI_WATERFALL_Y, true);
       anaCtx.spectrumReady = false;
       /* историю не сбрасываем: osy должен совпадать с тем, что на экране,
        * иначе старые пики остаются «призраками». SP_AddPoint перезапишет. */
@@ -522,29 +509,27 @@ public:
      *    перерисовать весь спектр (иначе остаются «призраки» линий);
      *  - после любой перерисовки спектра рамку рисуем заново (SP_Render
      *    мог закрасить её линии). */
-    bool want = anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout;
+    /* На время ввода центральной частоты рамку прячем: редактор стоит в
+     * строке 1, а рамка — вплотную к ней; так ввод остаётся единственным
+     * акцентом и ничего не перекрывает. */
+    bool want =
+        anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout && !editFreq;
     bool moved = anaCtx.prevCursorActive &&
                  (!want || getCursorStart() != anaCtx.prevCursorStart ||
                   getCursorEnd() != anaCtx.prevCursorEnd);
     if (moved) {
       eraseCursorZone();
-      SP_Invalidate(SP_H);
-      SP_Render(&anaCtx.range, SPECTRUM_Y, SP_H);
+      SP_Invalidate(UI_SPECTRUM_H);
+      SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       lastSpectrumRender = millis();
       spectrumRedrawn = true;
     }
     if (want && (spectrumRedrawn || !anaCtx.prevCursorActive))
       drawCursorZone();
-    renderCursorInfo();
+    renderInfo(editFreq, want);
   }
 
   void exit() override {
-    for (uint8_t i = 0; i < 3; i++) {
-      if (s_infoLbl[i]) {
-        lv_obj_del(s_infoLbl[i]);
-        s_infoLbl[i] = nullptr;
-      }
-    }
     /* BK и rxF остались на последней точке скана — возвращаем VFO сканера
      * его частоту и настраиваем чип (иначе шумодав читается по чужой
      * частоте, а VFO уезжает). MENU на курсоре — забрать его частоту. */
@@ -638,9 +623,7 @@ public:
       NumVal_StartEdit(anaCtx.borderSel ? &anaCtx.endVal : &anaCtx.startVal);
       return true;
     case KEY_0: /* ввод центральной частоты */
-      s_infoValid = false;
-      FillRect(0, CURSOR_Y, LCD_WIDTH, WF_Y - CURSOR_Y, C_BLACK);
-      anaCtx.cursorActive = false;
+      NumVal_SetValue(&anaCtx.freqVal, xToFreq(anaCtx.cursorCenter));
       NumVal_StartEdit(&anaCtx.freqVal);
       return true;
     case KEY_EXIT: /* как везде: выход в VFO на прежнюю частоту */
@@ -654,57 +637,54 @@ public:
   }
 
 private:
-  void renderCursorInfo() {
-    char b0[24], b1[24], b2[24];
-    uint8_t mode;
+  /* Информационные строки (общая сетка screen_layout.h).
+   * Строка 1 (F_M): левая граница/LISTEN | центр | правая граница.
+   * Строка 2 (F_S): ширина рамки курсора | скорость скана.
+   * При вводе центральной частоты боковые значения строки 1 прячем, чтобы
+   * длинный ввод не наезжал на них; редактор занимает тот же слот, что и
+   * обычное значение центра. */
+  void renderInfo(bool editFreq, bool cursorOn) {
+    uint8_t x0 = getCursorStart();
+    uint8_t x1 = getCursorEnd();
+    uint32_t leftF = xToFreq(x0);
+    uint32_t rightF = xToFreq(x1);
+    uint32_t centerF = xToFreq(anaCtx.cursorCenter);
 
-    if (anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout) {
-      uint8_t x0 = getCursorStart();
-      uint8_t x1 = getCursorEnd();
-      uint32_t leftF = xToFreq(x0);
-      uint32_t rightF = xToFreq(x1);
-      uint32_t centerF = xToFreq(anaCtx.cursorCenter);
-      mode = anaCtx.listen ? 2 : 1;
+    Color sideCol = cursorOn ? C_CYAN : C_GRAY;
+    TextStyle leftStyle =
+        text_style(anaCtx.listen ? C_GREEN : sideCol, C_BLACK, POS_L, F_M);
+    TextStyle midStyle = text_style(C_WHITE, C_BLACK, POS_C, F_M);
+    TextStyle rightStyle = text_style(sideCol, C_BLACK, POS_R, F_M);
 
+    if (editFreq) {
+      PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "");
+      PrintfT(UI_RIGHT_X, UI_INFO1_BASE, rightStyle, "");
+    } else {
       if (anaCtx.listen)
-        snprintf(b0, sizeof(b0), "LISTEN");
+        PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "LISTEN");
       else
-        snprintf(b0, sizeof(b0), "%lu.%03lu", leftF / MHZ, (leftF % MHZ) / 1000);
-      snprintf(b1, sizeof(b1), "%lu.%03lu", centerF / MHZ, (centerF % MHZ) / 1000);
-      snprintf(b2, sizeof(b2), "%lu.%03lu", rightF / MHZ, (rightF % MHZ) / 1000);
-    } else {
-      uint32_t step = scanStep();
-      uint32_t span = anaCtx.range.end - anaCtx.range.start;
-      mode = 0;
-      snprintf(b0, sizeof(b0), "Step %lu.%02luk", step / 100, step % 100);
-      snprintf(b1, sizeof(b1), "%lu MHz", span / MHZ);
-      snprintf(b2, sizeof(b2), "%4lu/s", anaCtx.stepsPerSec);
-      anaCtx.cursorActive = false;
+        PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "%lu.%03lu",
+                (unsigned long)(leftF / MHZ),
+                (unsigned long)((leftF % MHZ) / 100));
+      PrintfT(LCD_XCENTER, UI_INFO1_BASE, midStyle, "%lu.%03lu",
+              (unsigned long)(centerF / MHZ),
+              (unsigned long)((centerF % MHZ) / 100));
+      PrintfT(UI_RIGHT_X, UI_INFO1_BASE, rightStyle, "%lu.%03lu",
+              (unsigned long)(rightF / MHZ),
+              (unsigned long)((rightF % MHZ) / 100));
     }
 
-    /* ничего не изменилось — не трогаем экран */
-    if (s_infoValid && mode == s_infoMode && !strcmp(b0, s_info[0]) &&
-        !strcmp(b1, s_info[1]) && !strcmp(b2, s_info[2]))
-      return;
-
-    /* Три нативных LVGL-лейбла с непрозрачным фоном и фиксированной шириной:
-     * текст/цвет меняются на месте, старый текст стирается самим лейблом.
-     * Раньше это был пул Printf* с разными шрифтами в разных режимах — старый
-     * лейбл другого режима оставался и просвечивал поверх нового. */
-    if (mode == 0) {
-      setInfo(0, b0, C_GRAY);
-      setInfo(1, b1, C_GRAY);
-      setInfo(2, b2, C_GRAY);
-    } else {
-      setInfo(0, b0, mode == 2 ? C_GREEN : C_CYAN);
-      setInfo(1, b1, C_WHITE);
-      setInfo(2, b2, C_CYAN);
-    }
-    s_infoMode = mode;
-    strcpy(s_info[0], b0);
-    strcpy(s_info[1], b1);
-    strcpy(s_info[2], b2);
-    s_infoValid = true;
+    char bw[16];
+    fmtSpan(bw, sizeof(bw), rightF - leftF);
+    PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+            text_style(C_GRAY, C_BLACK, POS_L, F_S), "BW %s", bw);
+    char span[16];
+    fmtSpan(span, sizeof(span), anaCtx.range.end - anaCtx.range.start);
+    PrintfT(LCD_XCENTER, UI_INFO2_BASE,
+            text_style(C_GRAY, C_BLACK, POS_C, F_S), "%s", span);
+    PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
+            text_style(C_GRAY, C_BLACK, POS_R, F_S), "%lu/s",
+            (unsigned long)anaCtx.stepsPerSec);
   }
 
   uint32_t lastSpectrumRender = 0;
