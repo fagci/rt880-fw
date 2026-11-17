@@ -15,6 +15,10 @@ gen() { # имя файл-шрифта размер диапазон [bpp, по 
 gen ui_font_s  JetBrainsMono-Medium.ttf    11 0x20-0x7E
 gen ui_font_m  JetBrainsMono-Medium.ttf    14 0x20-0x7E
 gen ui_font_l  JetBrainsMono-ExtraBold.ttf 20 0x20-0x7E
-# цифры частоты: простой Liberation Mono Bold, 1 bpp (без серых краёв — не бледнеет на LCD)
-F=${LIB_DIR:-/usr/share/fonts/truetype/liberation}
-gen ui_font_xl LiberationMono-Bold.ttf 38 0x20,0x25,0x2B-0x3A 1
+# цифры частоты: Liberation Mono Bold без точки в нуле (tools/font_fix.py nodot),
+# 4 bpp + гамма 0.55 — сглаживание остаётся, но края плотные, текст не бледнеет
+TMP=$(mktemp -d)
+python3 "$(dirname "$0")/font_fix.py" nodot /usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf "$TMP/xl.ttf"
+F=$TMP gen ui_font_xl xl.ttf 38 0x20,0x25,0x2B-0x3A
+python3 "$(dirname "$0")/font_fix.py" gamma "$OUT/ui_font_xl.c" 0.55
+rm -rf "$TMP"
