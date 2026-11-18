@@ -1,12 +1,13 @@
 #include "spectrum.h"
+#include "driver/board.h"
 #include "driver/st7789.h"
 #include "helper/measurements.h"
 #include <string.h>
 
 static uint16_t rssiHistory[SP_MAX_POINTS] = {0};
+static uint16_t peakHistory[SP_MAX_POINTS] = {0};
 static uint16_t noiseHistory[SP_MAX_POINTS] = {0};
 static bool markers[SP_MAX_POINTS] = {0};
-static bool needRedraw[SP_MAX_POINTS] = {0};
 static uint8_t lastX = 255;
 static uint8_t filledPoints;
 
@@ -20,9 +21,23 @@ static FRange range;
 static DBmRange dBmRange = {-110, -50};
 
 static bool ticksRendered = false;
+static bool forceRedraw = true;
+
+/* Верх столбца в координатах экрана: 0 — верх спектра, sh — столбца нет.
+ * Отдельный массив для пикового удержания и прошлого кадра, чтобы
+ * перерисовывать только изменившиеся строки. */
+static uint8_t topRow[SP_MAX_POINTS];
+static uint8_t peakRow[SP_MAX_POINTS];
+static uint8_t drawnTop[SP_MAX_POINTS];
+static uint8_t drawnPeak[SP_MAX_POINTS];
 
 static uint8_t wf[WF_YN][WF_XN] = {0};
-static uint16_t osy[SP_MAX_POINTS] = {0};
+
+/* Оценка шумового пола для пикового удержания: минимум по столбцам.
+ * Линии пиков ниже пола + запас не рисуем — иначе шум даёт «пунктир». */
+static uint16_t peakFloor;
+static bool peakFloorInit;
+static bool peakDecayInit;
 
 extern bool gThemeLight; /* graphics.cpp */
 
@@ -60,6 +75,33 @@ static void init_palette(void) {
       GRADIENT_PALETTE[i] = rgb565(r, g, b);
     }
   }
+}
+
+/* Цвет столбца — та же палитра, что у водопада: высота столбца (уровень)
+ * даёт индекс в GRADIENT_PALETTE. В светлой теме младшие индексы почти
+ * белые и сливались бы с фоном, поэтому начинаем с 4-го. */
+static uint16_t barRamp[SP_MAX_POINTS];
+static uint8_t barRampH;
+static int8_t barRampTheme = -1;
+static uint16_t colColor[SP_MAX_POINTS];
+
+static void initBarRamp(uint8_t sh) {
+  if (barRampH == sh && barRampTheme == (int8_t)gThemeLight)
+    return;
+  barRampH = sh;
+  barRampTheme = gThemeLight;
+  const uint8_t first = gThemeLight ? 4 : 1;
+  const uint8_t span = 14 - first;
+  for (uint8_t h = 0; h <= sh; h++) {
+    uint8_t idx = first;
+    if (sh)
+      idx = (uint8_t)(first + (uint16_t)h * span / sh);
+    barRamp[h] = GRADIENT_PALETTE[idx];
+  }
+}
+
+static uint16_t peakLineColor(void) {
+  return gThemeLight ? rgb565(150, 0, 0) : C_WHITE;
 }
 
 /* Адаптивные уровни водопада (единицы RSSI, 0.5 дБ): низ — медленно
@@ -109,27 +151,31 @@ void SP_ResetHistory(void) {
   for (uint8_t y = 0; y < ARRAY_SIZE(wf); ++y)
     memset(wf[y], 0, ARRAY_SIZE(wf[0]));
   for (uint8_t i = 0; i < SP_MAX_POINTS; ++i) {
-    osy[i] = rssiHistory[i] = 0;
+    rssiHistory[i] = peakHistory[i] = 0;
     noiseHistory[i] = UINT16_MAX;
     markers[i] = false;
-    needRedraw[i] = false;
+    topRow[i] = drawnTop[i] = 0xFF;
+    peakRow[i] = drawnPeak[i] = 0xFF;
   }
+  lastX = 255;
   filledPoints = 0;
   currentStep = 0;
   lvlInit = false;
+  peakFloorInit = false;
+  peakDecayInit = false;
+  forceRedraw = true;
 }
 
 /* Пометить спектр «неактуальным»: следующий SP_Render перерисует всю
- * область (высоты до sh) — стирает всё, что рисовали поверх (курсор). */
+ * область целиком — сотрёт всё, что рисовали поверх (курсор, рамку). */
 void SP_Invalidate(uint8_t sh) {
-  for (uint16_t i = 0; i < SP_MAX_POINTS; ++i)
-    osy[i] = sh;
+  (void)sh;
+  forceRedraw = true;
 }
 
 void SP_ResetRender(void) {
   ticksRendered = false;
-  for (uint8_t i = 0; i < SP_MAX_POINTS; ++i)
-    needRedraw[i] = true;
+  forceRedraw = true;
 }
 
 void SP_Begin(void) { currentStep = 0; }
@@ -160,6 +206,8 @@ void SP_AddPoint(Measurement *msm) {
   }
   if (msm->rssi > rssiHistory[x])
     rssiHistory[x] = msm->rssi;
+  if (msm->rssi > peakHistory[x])
+    peakHistory[x] = msm->rssi;
   if (msm->noise < noiseHistory[x])
     noiseHistory[x] = msm->noise;
   if (markers[x] == false && msm->open)
@@ -172,6 +220,8 @@ void SP_AddPoint(Measurement *msm) {
     rssiHistory[nx] = rssiHistory[x];
     noiseHistory[nx] = noiseHistory[x];
     markers[nx] = markers[x];
+    if (peakHistory[nx] < rssiHistory[x])
+      peakHistory[nx] = rssiHistory[x];
   }
   if (x > filledPoints && x < SP_MAX_POINTS)
     filledPoints = x + 1;
@@ -216,74 +266,178 @@ static void renderWfColumn(uint8_t x, uint16_t val) {
   }
 }
 
-static uint16_t nsy[SP_MAX_POINTS] = {0};
-
 // 2 × 240 × 2 = 960 байт — буферы уже в big-endian для SPI
 #define SP_BYTES (SP_MAX_POINTS * 2)
 static uint8_t sp_buf[2][SP_BYTES];
 
-static void fill_sp_row(uint8_t *buf, int16_t row) {
+static void fill_sp_row(uint8_t *buf, uint8_t row) {
+  const uint16_t bg = gThemeLight ? C_WHITE : C_BLACK;
+  const uint16_t peak = peakLineColor();
   for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
-    uint16_t c;
-    if ((int16_t)nsy[x] > row) {
-      // top pixel — bright yellow line; fill below — dark amber
-      if (gThemeLight)
-        c = ((int16_t)nsy[x] - 1 == row) ? 0xA460 : 0xFF38;
-      else
-        c = ((int16_t)nsy[x] - 1 == row) ? 0xFFE0 : 0x8400;
-    } else {
-      c = gThemeLight ? C_WHITE : C_BLACK; /* фон темы */
-    }
+    uint16_t c = bg;
+    if (peakRow[x] == row)
+      c = peak;
+    else if (topRow[x] <= row)
+      c = colColor[x];
     buf[x * 2] = (uint8_t)(c >> 8);
     buf[x * 2 + 1] = (uint8_t)(c);
   }
 }
 
+/* Пиковое удержание спадает очень медленно: 0.5 дБ (1 единица RSSI) за
+ * 2 секунды. Пик на 40 дБ живёт больше двух минут; сбросить его можно
+ * вручную (SP_ResetPeaks), иначе он висел бы до смены диапазона. */
+#define PEAK_DECAY_MS 2000
+#define PEAK_DECAY_STEP 1
+static uint32_t lastPeakDecay;
+
+static void decayPeaks(void) {
+  uint32_t now = millis();
+  if (!peakDecayInit) {
+    lastPeakDecay = now;
+    peakDecayInit = true;
+    return;
+  }
+  uint32_t elapsed = now - lastPeakDecay;
+  if (elapsed < PEAK_DECAY_MS)
+    return;
+  uint32_t steps = elapsed / PEAK_DECAY_MS;
+  lastPeakDecay = now;
+  if (steps > 8)
+    steps = 8;
+  steps *= PEAK_DECAY_STEP;
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+    uint16_t cur = rssiHistory[x];
+    if (peakHistory[x] > cur + steps)
+      peakHistory[x] -= steps;
+    else
+      peakHistory[x] = cur;
+  }
+}
+
+/* Сброс пикового удержания: оставляем только текущий кадр. Вызывается
+ * вручную (длинная 5) — иначе накопленные пики висят до смены диапазона. */
+void SP_ResetPeaks(void) {
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++)
+    peakHistory[x] = rssiHistory[x];
+  peakDecayInit = false;
+  peakFloorInit = false;
+  forceRedraw = true;
+}
+
+static void updatePeakFloor(void) {
+  uint16_t mn = UINT16_MAX;
+  for (uint8_t x = 0; x < SP_MAX_POINTS; x++)
+    if (rssiHistory[x] && rssiHistory[x] < mn)
+      mn = rssiHistory[x];
+  if (mn == UINT16_MAX)
+    return;
+  if (!peakFloorInit) {
+    peakFloor = mn;
+    peakFloorInit = true;
+  } else if (mn < peakFloor) {
+    peakFloor = mn;
+  } else {
+    peakFloor += (mn - peakFloor) / 32;
+  }
+}
+
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   init_palette();
+  initBarRamp(sh);
   const uint16_t vMin = (dBmRange.min + 160) * 2;
   const uint16_t vMax = (dBmRange.max + 160) * 2;
   dBmRange.min = Rssi2DBm(vMin);
   dBmRange.max = Rssi2DBm(vMax);
 
-  memset(nsy, 0, sizeof(nsy));
+  decayPeaks();
+  updatePeakFloor();
+
   for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
     uint16_t hv = ConvertDomain(v(x) * 2, vMin * 2, vMax * 2, 0, sh);
-    nsy[x] = hv > sh ? sh : hv;
+    uint8_t h = hv > sh ? sh : hv;
+    topRow[x] = (uint8_t)(sh - h);
+    colColor[x] = barRamp[h];
+
+    uint16_t pv =
+        ConvertDomain(peakHistory[x] * 2, vMin * 2, vMax * 2, 0, sh);
+    uint8_t ph = pv > sh ? sh : pv;
+    /* Держим только заметно ушедший пик (≥4 дБ и ≥3 px над столбцом):
+     * иначе шумовые выбросы рисуют «пунктир» по всему низу спектра. */
+    uint16_t d = peakHistory[x] > rssiHistory[x]
+                     ? peakHistory[x] - rssiHistory[x]
+                     : 0;
+    bool held = peakFloorInit && peakHistory[x] >= peakFloor + 14;
+    peakRow[x] = (held && d >= 8 && ph >= h + 3) ? (uint8_t)(sh - ph) : 0xFF;
   }
 
-  uint8_t min_y = sh, max_y = 0;
-  bool any = false;
-  for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
-    if (nsy[x] != osy[x]) {
-      uint8_t lo = nsy[x] < osy[x] ? nsy[x] : osy[x];
-      uint8_t hi = nsy[x] > osy[x] ? nsy[x] : osy[x];
-      if (lo < min_y)
-        min_y = lo;
-      if (hi > max_y)
-        max_y = hi;
+  bool full = forceRedraw;
+  forceRedraw = false;
+
+  uint8_t first = sh, last = 0;
+  bool any = full;
+  if (full) {
+    first = 0;
+    last = sh - 1;
+  } else {
+    for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
+      if (topRow[x] == drawnTop[x] && peakRow[x] == drawnPeak[x])
+        continue;
+
+      uint8_t lo = 0xFF, hi = 0;
+      if (topRow[x] < sh) {
+        lo = topRow[x];
+        hi = sh - 1;
+      }
+      if (drawnTop[x] < sh) {
+        if (drawnTop[x] < lo)
+          lo = drawnTop[x];
+        if (sh - 1 > hi)
+          hi = sh - 1;
+      }
+      if (peakRow[x] != 0xFF) {
+        if (peakRow[x] < lo)
+          lo = peakRow[x];
+        if (peakRow[x] > hi)
+          hi = peakRow[x];
+      }
+      if (drawnPeak[x] != 0xFF) {
+        if (drawnPeak[x] < lo)
+          lo = drawnPeak[x];
+        if (drawnPeak[x] > hi)
+          hi = drawnPeak[x];
+      }
+      if (lo == 0xFF)
+        continue;
+      if (lo < first)
+        first = lo;
+      if (hi > last)
+        last = hi;
       any = true;
     }
   }
 
   if (!any) {
-    SP_DrawTicks(sy, sh, p);
+    if (!ticksRendered) {
+      SP_DrawTicks(sy, sh, p);
+      ticksRendered = true;
+    }
     return;
   }
+  if (last >= sh)
+    last = sh - 1;
 
-  uint16_t top_y = sy + sh - 1 - max_y;
-  uint8_t rect_h = max_y - min_y + 1;
-
+  uint8_t rows = last - first + 1;
   st7789_cs_low();
-  st7789_set_addr_window_raw(0, top_y, SP_MAX_POINTS, rect_h);
+  st7789_set_addr_window_raw(0, sy + first, SP_MAX_POINTS, rows);
 
   // Первую строку готовим заранее и сразу стартуем DMA
   uint8_t cur = 0;
-  fill_sp_row(sp_buf[cur], max_y);
+  fill_sp_row(sp_buf[cur], first);
   st7789_dma_start(sp_buf[cur], SP_BYTES);
 
   // Со второй строки: CPU заполняет buf[cur^1] пока DMA гонит buf[cur]
-  for (int16_t row = max_y - 1; row >= (int16_t)min_y; row--) {
+  for (uint8_t row = first + 1; row <= last; row++) {
     cur ^= 1;
     fill_sp_row(sp_buf[cur], row);
     st7789_dma_wait();
@@ -293,8 +447,14 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   st7789_dma_wait();
   st7789_cs_high();
 
-  memcpy(osy, nsy, sizeof(nsy));
-  SP_DrawTicks(sy, sh, p);
+  memcpy(drawnTop, topRow, sizeof(topRow));
+  memcpy(drawnPeak, peakRow, sizeof(peakRow));
+
+  /* Тики лежат в нижних 4 строках: если их не перерисовали — они целы. */
+  if (full || last + 4 >= sh) {
+    SP_DrawTicks(sy, sh, p);
+    ticksRendered = true;
+  }
 }
 
 static uint16_t wfLine[SP_MAX_POINTS];

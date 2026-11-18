@@ -57,6 +57,7 @@ struct {
   NumVal_t endVal;
   bool borderSel;    /* false — начало, true — конец ('#' переключает) */
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
+  bool spectrumDirty; /* перерисовать спектр вне очереди (сброс пиков) */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
 } anaCtx;
 
@@ -88,6 +89,24 @@ static uint8_t getCursorEnd() {
  * прохода (диапазон / шаг / ~160 точек в секунду). */
 static uint32_t scanStep() { return StepFrequencyTable[vfos[currentVfo].step]; }
 
+/* Привязка частоты к сетке шага, проходящей через base. Абсолютное
+ * округление (f % step) не годится для шагов вроде 8.33 кГц: у авиадиапазона
+ * каналы отсчитываются от начала диапазона, а не от нуля. */
+static uint32_t snapToGrid(uint32_t f, uint32_t base, uint32_t step) {
+  if (!step)
+    return f;
+  int64_t off = (int64_t)f - (int64_t)base;
+  int64_t rem = off % (int64_t)step;
+  if (rem < 0)
+    rem += step;
+  if (rem > (int64_t)step / 2)
+    off += step - rem;
+  else
+    off -= rem;
+  int64_t v = (int64_t)base + off;
+  return v < 0 ? 0 : (uint32_t)v;
+}
+
 /* Компактная частота/полоса: вход в единицах 10 Гц → 24.00k / 1.20M / 1.79G. */
 static void fmtSpan(char *buf, size_t n, uint32_t f) {
   if (f >= 100000000u) /* ≥ 1 ГГц */
@@ -115,7 +134,25 @@ static void initRange() {
 
 static void exitListen(void);
 
+/* Сетку скана задаёт range.start: с него начинается проход, все следующие
+ * точки идут через шаг VFO. Поэтому границы/зум/курсор привязываем к этой
+ * сетке, а не к абсолютному нулю — так работает и 8.33 кГц. Правую границу
+ * держим в пределах приёмника, чтобы широкий диапазон не ушёл за BK4819_F_MAX. */
+static void snapRange() {
+  uint32_t step = scanStep();
+  uint32_t start = anaCtx.range.start;
+  uint32_t end = snapToGrid(anaCtx.range.end, start, step);
+  if (end > BK4819_F_MAX) {
+    uint32_t off = BK4819_F_MAX >= start ? BK4819_F_MAX - start : 0;
+    end = start + (off / step) * step;
+  }
+  anaCtx.range.end = end;
+  if (anaCtx.range.end <= anaCtx.range.start)
+    anaCtx.range.end = anaCtx.range.start + step;
+}
+
 static void onRangeChanged() {
+  snapRange();
   if (anaCtx.listen)
     exitListen(); /* диапазон сменился — курсор и сетка новые */
   uint32_t step = scanStep();
@@ -175,9 +212,12 @@ static void zoomIn() {
   if (x1 - x0 < 10)
     return;
   uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  uint32_t newStart = anaCtx.range.start + (uint64_t)x0 * span / SP_MAX_POINTS;
-  uint32_t newEnd = anaCtx.range.start + (uint64_t)x1 * span / SP_MAX_POINTS;
-  if (newEnd - newStart >= step * 10) {
+  uint32_t base = anaCtx.range.start;
+  uint32_t newStart = base + (uint64_t)x0 * span / SP_MAX_POINTS;
+  uint32_t newEnd = base + (uint64_t)x1 * span / SP_MAX_POINTS;
+  newStart = snapToGrid(newStart, base, step);
+  newEnd = snapToGrid(newEnd, base, step);
+  if (newEnd > newStart && newEnd - newStart >= step * 10) {
     anaCtx.range.start = newStart;
     anaCtx.range.end = newEnd;
     onRangeChanged();
@@ -185,10 +225,11 @@ static void zoomIn() {
 }
 
 static void zoomOut() {
-  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  uint32_t step = scanStep();
+  uint32_t base = anaCtx.range.start;
   int64_t span = anaCtx.range.end - anaCtx.range.start;
   int64_t newSpan = span * 2;
-  int64_t newStart = (int64_t)anaCtx.range.start - span / 2;
+  int64_t newStart = (int64_t)base - span / 2;
   /* в границах приёмника; без знаковых переходов (uint32 уходил в мусор) */
   if (newSpan > (int64_t)(BK4819_F_MAX - BK4819_F_MIN)) {
     newSpan = BK4819_F_MAX - BK4819_F_MIN;
@@ -198,10 +239,13 @@ static void zoomOut() {
     newStart = BK4819_F_MIN;
   if (newStart + newSpan > (int64_t)BK4819_F_MAX)
     newStart = (int64_t)BK4819_F_MAX - newSpan;
-  anaCtx.range.start = (uint32_t)newStart;
-  anaCtx.range.end = (uint32_t)(newStart + newSpan);
-  if ((uint32_t)(anaCtx.range.end - anaCtx.range.start) >= step * 10)
+  uint32_t ns = snapToGrid((uint32_t)newStart, base, step);
+  uint32_t ne = snapToGrid((uint32_t)(newStart + newSpan), base, step);
+  if (ne > ns && ne - ns >= step * 10) {
+    anaCtx.range.start = ns;
+    anaCtx.range.end = ne;
     onRangeChanged();
+  }
 }
 
 static uint32_t xToFreq(uint8_t x);
@@ -296,8 +340,16 @@ static void resizeCursor(int8_t dir) {
 }
 
 static uint32_t xToFreq(uint8_t x) {
-  uint32_t span = anaCtx.range.end - anaCtx.range.start;
-  return anaCtx.range.start + (uint64_t)x * span / SP_MAX_POINTS;
+  uint32_t step = scanStep();
+  uint32_t base = anaCtx.range.start;
+  uint32_t span = anaCtx.range.end - base;
+  uint32_t f =
+      snapToGrid(base + (uint64_t)x * span / SP_MAX_POINTS, base, step);
+  /* range.end — граница прохода, последняя измеренная точка на шаг ниже:
+   * правый край экрана тоже должен попадать в измеренную сетку. */
+  if (f >= anaCtx.range.end)
+    f -= step;
+  return f < base ? base : f;
 }
 
 /* Границы курсора на экране: в обычном режиме это края рамки, в режиме
@@ -370,7 +422,8 @@ static void onFreqInput(uint32_t val) {
   if (val < BK4819_F_MIN || val > BK4819_F_MAX)
     return;
   Radio_TuneToAuto(val);
-  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  /* план диапазона мог сменить шаг — диапазон строим уже по новому */
+  uint32_t step = scanStep();
   uint32_t span = step * SP_MAX_POINTS;
   uint32_t half = span / 2;
   uint32_t start = val > half ? val - half : BK4819_F_MIN;
@@ -566,34 +619,11 @@ public:
               (unsigned)ANA_DWELL_US[s_dwellIdx]);
     }
 
-    bool spectrumRedrawn = false;
-    /* В прослушивании спектр заморожен — периодически перерисовывать его
-     * нельзя: это лишние миллисекунды и мигание стрелки. */
-    if (anaCtx.spectrumReady ||
-        (!anaCtx.listen && millis() - lastSpectrumRender >= 500)) {
-      SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
-      lastSpectrumRender = millis();
-      spectrumRedrawn = true;
-    }
-
-    if (anaCtx.spectrumReady) {
-      WF_Render(UI_WATERFALL_Y, true);
-      anaCtx.spectrumReady = false;
-      /* историю не сбрасываем: osy должен совпадать с тем, что на экране,
-       * иначе старые пики остаются «призраками». SP_AddPoint перезапишет. */
-      SP_Begin();
-      anaCtx.scanF = anaCtx.range.start;
-    }
-
-    /* Рамка курсора рисуется ПОВЕРХ спектра, а SP_Render теперь перерисовывает
-     * только изменившиеся строки. Поэтому:
-     *  - сдвинули/изменили/спрятали рамку → стираем старую и просим
-     *    перерисовать весь спектр (иначе остаются «призраки» линий);
-     *  - после любой перерисовки спектра рамку рисуем заново (SP_Render
-     *    мог закрасить её линии). */
-    /* На время ввода центральной частоты рамку прячем: редактор стоит в
-     * строке 1, а рамка — вплотную к ней; так ввод остаётся единственным
-     * акцентом и ничего не перекрывает. */
+    /* Рамка курсора рисуется ПОВЕРХ спектра, а SP_Render перерисовывает
+     * только изменившиеся строки. Поэтому стираем старую рамку и просим
+     * полную перерисовку ДО рендера спектра — иначе нижняя часть рамки
+     * оставалась чёрной, когда она пропадала по таймауту.
+     * На время ввода центральной частоты рамку прячем. */
     bool want =
         anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout && !editFreq;
     bool moved = anaCtx.prevCursorActive &&
@@ -602,10 +632,30 @@ public:
     if (moved) {
       eraseCursorZone();
       SP_Invalidate(UI_SPECTRUM_H);
+    }
+
+    bool spectrumRedrawn = false;
+    /* В прослушивании спектр заморожен — периодически перерисовывать его
+     * нельзя: это лишние миллисекунды и мигание стрелки. Но при движении
+     * курсора/стрелки спектр под ней всё равно нужно восстановить. */
+    if (moved || anaCtx.spectrumDirty || anaCtx.spectrumReady ||
+        (!anaCtx.listen && millis() - lastSpectrumRender >= 500)) {
       SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       lastSpectrumRender = millis();
+      anaCtx.spectrumDirty = false;
       spectrumRedrawn = true;
     }
+
+    if (anaCtx.spectrumReady) {
+      WF_Render(UI_WATERFALL_Y, true);
+      anaCtx.spectrumReady = false;
+      /* историю не сбрасываем: drawnTop должен совпадать с тем, что на
+       * экране, иначе старые пики остаются «призраками». SP_AddPoint
+       * перезапишет. */
+      SP_Begin();
+      anaCtx.scanF = anaCtx.range.start;
+    }
+
     if (want && (spectrumRedrawn || !anaCtx.prevCursorActive))
       drawCursorZone();
     renderInfo(editFreq, want);
@@ -635,6 +685,17 @@ public:
     if (NumVal_t *ev = editingVal()) {
       if (NumVal_Key(ev, k, state))
         return true;
+      return false;
+    }
+
+    if (state == KEY_LONG_PRESSED) {
+      /* длинная 5 — сброс пикового удержания; короткая 5 остаётся
+       * входом/выходом из прослушивания (release после long не приходит) */
+      if (k == KEY_5) {
+        SP_ResetPeaks();
+        anaCtx.spectrumDirty = true; /* в still спектр сам не перерисуется */
+        return true;
+      }
       return false;
     }
 

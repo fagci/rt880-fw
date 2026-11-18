@@ -27,10 +27,15 @@ int ConvertDomain(int aValue, int aMin, int aMax, int bMin, int bMax) {
   const int bRange = bMax - bMin;
   aValue = Clamp(aValue, aMin, aMax);
   /* 10-Гц единицы частоты × ширина экрана переполняют int (470 МГц × 240):
-   * на таких диапазонах считаем в 64 бита (иначе индекс за массивом → fault) */
+   * на таких диапазонах считаем в 64 бита (иначе индекс за массивом → fault).
+   * Проверять нужно и умножение, и прибавление aRange/2: произведение может
+   * влезть в int, а сумма с половиной диапазона — уже нет (104–439 МГц:
+   * 8.9M × 239 + 16.7M > INT_MAX, результат уходил в минус и заворачивался
+   * в uint8_t → «горизонтальная линия» через полэкрана). */
   int p;
-  if (!__builtin_mul_overflow(aValue - aMin, bRange, &p))
-    return (p + aRange / 2) / aRange + bMin;
+  if (!__builtin_mul_overflow(aValue - aMin, bRange, &p) &&
+      !__builtin_add_overflow(p, aRange / 2, &p))
+    return p / aRange + bMin;
   return (int)(((int64_t)(aValue - aMin) * bRange + aRange / 2) / aRange) + bMin;
 }
 

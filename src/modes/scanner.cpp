@@ -93,12 +93,6 @@ static uint8_t creepCnt;    /* медленный подъём порога в H
 static uint8_t savedMod;    /* модуляция VFO на входе (скан идёт в FM) */
 static uint8_t savedStep;   /* шаг VFO сканера на входе */
 static bool monitorMode;  /* слушать и белый список */
-/* Тест второго BK (U400/B): на каждом шаге B настраивается на ту же частоту,
- * на экране — RSSI обоих. По схеме RT880 V2 вход B к антенне не подключён
- * (RSSI низкий); с сигналом на LNAIN/после доработки платы видно, слышит ли B
- * и насколько согласован с A. ALARM — вкл/выкл (замедляет скан). */
-static bool probeB;
-static uint16_t probeRssiA, probeRssiB;
 static uint8_t scanChip; /* чип, которым сканируем (A) */
 static bool captureOnExit; /* MENU: оставить частоту в VFO */
 static uint32_t listenUntil;
@@ -186,15 +180,6 @@ static void scanStep() {
   tuneHere();
   delay_us(DWELL_US[dwellIdx]);
   uint16_t rssi = BK4819_GetRSSI();
-
-  if (probeB) { /* B на ту же частоту, замер, возврат на A */
-    probeRssiA = rssi;
-    BK4819_SelectChip(1);
-    BK4819_TuneTo(curF, false);
-    delay_us(DWELL_US[dwellIdx]);
-    probeRssiB = BK4819_GetRSSI();
-    BK4819_SelectChip(scanChip);
-  }
 
   /* калибровка шума после смены диапазона: быстрое усреднение, без поиска.
    * Иначе заниженная первая выборка давала порог ниже шума — «всё открыто»,
@@ -313,7 +298,6 @@ public:
     onRangeChanged();
     scanChip = vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0;
     BK4819_SelectChip(scanChip);
-    probeB = false;
     dacOn = false;
     Radio_ScanAudio(false);
     captureOnExit = false;
@@ -417,25 +401,14 @@ public:
     PrintfT(LCD_XCENTER, UI_INFO2_BASE,
             text_style(C_GRAY, C_BLACK, POS_C, F_S), "%uus",
             (unsigned)DWELL_US[dwellIdx]);
-    if (probeB) {
-      /* A и B: RSSI в дБм на текущей частоте (B ≈ A при подключённом входе) */
-      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
-              text_style(C_YELLOW, C_BLACK, POS_R, F_S), "A%d B%d",
-              (int)(probeRssiA >> 1) - 160, (int)(probeRssiB >> 1) - 160);
-    } else {
-      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
-              text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
-              "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "");
-    }
+    PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
+            text_style(monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
+            "L%u%s", (unsigned)LOOT_Size(), monitorMode ? " MON" : "");
   }
 
   void exit() override {
     setAudio(false);
     LOOT_Standby();
-    if (probeB) { /* тест B включён — усыпить на выходе */
-      probeB = false;
-      Radio_BkBWake(false);
-    }
     /* BK остаётся настроенным на последнюю частоту скана (и её фильтр
      * диапазона) — возвращаем VFO сканера его частоту и настраиваем чип,
      * иначе шумодав в VFO читается по чужой частоте. Исключение: MENU
@@ -481,6 +454,9 @@ public:
       case KEY_STAR: /* выдержка на частоте (скорость скана) */
         dwellIdx = (dwellIdx + 1) % DWELL_N;
         return true;
+      case KEY_5: /* сброс пикового удержания */
+        SP_ResetPeaks();
+        return true;
       default:
         return false;
       }
@@ -514,10 +490,6 @@ public:
         LOOT_WhitelistLast();
         releaseHold();
       }
-      return true;
-    case KEY_ALARM: /* тест второго BK: RSSI A и B на одной частоте */
-      probeB = !probeB;
-      Radio_BkBWake(probeB); /* B обычно спит — будим только на время теста */
       return true;
     case KEY_STAR:
       NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);

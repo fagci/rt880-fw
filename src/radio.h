@@ -95,9 +95,6 @@ bool Radio_ApplyBandPlan(uint32_t f);
 const char *Radio_BandName(uint32_t f); /* "40m", "AIR"...; "" вне плана */
 void Radio_NextBand(int8_t dir);        /* +1/-1: следующий/пред. диапазон группы */
 void Radio_NextGroup(void);
-/* BK4819 B спит (нет антенны, передачи нет). Для теста (ALARM в сканере) —
- * разбудить на приём без звука / усыпить обратно. */
-void Radio_BkBWake(bool on);             /* группа: вещание → SSB → службы */
 void Radio_TuneStep(int8_t dir);
 void Radio_NextVfo(void);
 void Radio_SwitchToVfo(uint8_t idx);

@@ -156,18 +156,6 @@ static void bkSleepB(void) {
   BK4819_WriteRegister(BK4819_REG_37, 0x1D00);
 }
 
-/* Разбудить/усыпить B на время теста (ALARM в сканере). */
-void Radio_BkBWake(bool on) {
-  BK4819_SelectChip(1);
-  if (on) {
-    BK4819_RX_TurnOn();
-    BK4819_ToggleAFDAC(false); /* звук B не нужен — только RSSI */
-  } else {
-    bkSleepB();
-  }
-  BK4819_SelectChip(0); /* активный приёмник — всегда A */
-}
-
 /* ── Выбор приёмника ───────────────────────────────────────────
  * f — в единицах 10 Гц.
  * Факты о плате (схема RT880 V2 и разбор стока, uv98-rust/research/dual-rx,
