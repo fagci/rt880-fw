@@ -83,6 +83,7 @@ extern const char *FILTER_NAMES[];
 extern uint8_t filterIndex;
 
 extern const uint16_t StepFrequencyTable[15];
+extern const char *const STEP_NAMES[STEP_COUNT];
 
 void Radio_Init(void);
 /* Автовыбор приёмника по частоте (10 Гц) и модуляции */

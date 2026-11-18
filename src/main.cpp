@@ -8,8 +8,6 @@
 #include "ui/lv_port.h"
 #include "lvgl.h"
 
-#define RENDER_INTERVAL_MS 50
-
 int main(void) {
   board_init();
 
@@ -36,7 +34,7 @@ int main(void) {
     Mode_Update();
 
     uint32_t now = millis();
-    if (now - lastRender >= RENDER_INTERVAL_MS) {
+    if (now - lastRender >= Mode_RenderInterval()) {
       Mode_Render();
       lastRender = now;
     }

@@ -9,6 +9,7 @@
 #include "lv_port.h"
 #include "../driver/st7789.h"
 #include "lvgl.h"
+#include "screen_layout.h"
 #include <string.h>
 
 extern void Graphics_MarkLvglReady(void);
@@ -21,18 +22,53 @@ extern void Graphics_MarkLvglReady(void);
 static lv_color_t draw_buf1[LV_BUF_PX];
 static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
+static bool s_directAreas;
+
+void lv_port_set_direct_areas(bool on) { s_directAreas = on; }
+
+static void flush_rows(const lv_area_t *area, const lv_color_t *color_p,
+                       int32_t y1, int32_t y2) {
+  int32_t w = area->x2 - area->x1 + 1;
+  int32_t h = y2 - y1 + 1;
+  if (w <= 0 || h <= 0)
+    return;
+
+  const lv_color_t *src = color_p + (y1 - area->y1) * w;
+
+  st7789_cs_low();
+  st7789_set_addr_window_raw((uint16_t)area->x1, (uint16_t)y1, (uint16_t)w,
+                             (uint16_t)h);
+  st7789_dma_start((const uint8_t *)src, (uint16_t)(w * h * 2));
+  st7789_dma_wait();
+  st7789_cs_high();
+}
 
 static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
                      lv_color_t *color_p) {
-  int32_t w = area->x2 - area->x1 + 1;
-  int32_t h = area->y2 - area->y1 + 1;
+  if (!s_directAreas) {
+    flush_rows(area, color_p, area->y1, area->y2);
+    lv_disp_flush_ready(drv);
+    return;
+  }
 
-  st7789_cs_low();
-  st7789_set_addr_window_raw((uint16_t)area->x1, (uint16_t)area->y1,
-                             (uint16_t)w, (uint16_t)h);
-  st7789_dma_start((const uint8_t *)color_p, (uint16_t)(w * h * 2));
-  st7789_dma_wait();
-  st7789_cs_high();
+  /* В сканере/анализаторе спектр и водопад рисуются напрямую в ST7789.
+   * Пропускаем только разрешённые полосы: над спектром и между спектром и
+   * водопадом. Иначе непрозрачный фон лейбла затирает спектр, а пиксели,
+   * попавшие в память аппаратного vscroll, ползут вниз чёрными
+   * прямоугольниками. */
+  int32_t y2 = area->y2 < UI_SPECTRUM_Y - 1 ? area->y2 : UI_SPECTRUM_Y - 1;
+  if (area->y1 <= y2)
+    flush_rows(area, color_p, area->y1, y2);
+
+  int32_t y1 = area->y1 > UI_SPECTRUM_Y + UI_SPECTRUM_H
+                   ? area->y1
+                   : UI_SPECTRUM_Y + UI_SPECTRUM_H;
+  /* 2 px запаса до зоны аппаратного скролла: граница TFA не должна
+   * попадать в LVGL-flush. */
+  const int32_t clip_bottom = UI_WATERFALL_Y - 3;
+  y2 = area->y2 < clip_bottom ? area->y2 : clip_bottom;
+  if (y1 <= y2)
+    flush_rows(area, color_p, y1, y2);
 
   lv_disp_flush_ready(drv);
 }

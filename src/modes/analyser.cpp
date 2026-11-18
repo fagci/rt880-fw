@@ -8,6 +8,7 @@
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
+#include "../ui/lv_port.h"
 #include "../ui/numval.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
@@ -22,6 +23,12 @@
  * UI_WATERFALL_Y начинается аппаратный vscroll: текста там быть не должно. */
 
 #define CURSOR_TIMEOUT_MS 5000
+
+/* Стрелка прослушивания: 9×8 px, остриё вниз, стоит на верхней кромке
+ * спектра. Половина ширины нужна clampCursor, чтобы маркер не уезжал
+ * за край экрана. */
+#define LISTEN_ARROW_HALF 4
+#define LISTEN_ARROW_H 8
 
 #define DEFAULT_RANGE_START 43300000U
 
@@ -44,6 +51,7 @@ struct {
   uint8_t prevCursorStart;
   uint8_t prevCursorEnd;
   bool prevCursorActive;
+  bool prevListen; /* прошлый кадр рисовал стрелку прослушивания */
   NumVal_t freqVal;  /* центр: ввод частоты (клавиша 0) */
   NumVal_t startVal; /* границы диапазона: произвольный ввод (клавиша *) */
   NumVal_t endVal;
@@ -51,6 +59,16 @@ struct {
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
 } anaCtx;
+
+/* Выдержка на точке перед чтением RSSI, мкс. Малые значения (0/25/50) —
+ * максимально быстрый обзор: 200 кГц / 2.5 кГц = 80 точек, проход
+ * укладывается в несколько кадров. 600 мкс — прежний режим с более
+ * плотными пиками (ПЛЛ/АРУ успевают установиться).
+ * Меняется боковыми клавишами, текущее значение видно в верхней строке. */
+static const uint16_t ANA_DWELL_US[] = {0,   25,  50,  100, 200,
+                                        400, 600, 1000, 2000};
+#define ANA_DWELL_N (sizeof(ANA_DWELL_US) / sizeof(ANA_DWELL_US[0]))
+static uint8_t s_dwellIdx = 6; /* 600 мкс, как было */
 
 static uint8_t getCursorStart() {
   if (anaCtx.cursorCenter >= anaCtx.cursorHalfW)
@@ -115,7 +133,11 @@ static void onRangeChanged() {
   anaCtx.stepsPerSec = 0;
   anaCtx.prevCursorActive = false;
 
-  FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
+  /* Смена диапазона/шага: сбрасываем аппаратный скролл водопада и чистим
+   * всё под статусом, иначе старый водопад продолжает «ездить» и его
+   * строки выглядывают поверх нового спектра. */
+  WF_Reset();
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, LCD_HEIGHT - UI_STATUS_H, C_BLACK);
 }
 
 static void shiftRange(int32_t deltaStep) {
@@ -184,16 +206,22 @@ static void zoomOut() {
 
 static uint32_t xToFreq(uint8_t x);
 
-/* Режим «still» (как маркер в Mayhem): скан стоит, спектр заморожен, приёмник
- * настроен на частоту курсора — слышно через обычный шумодав
- * (Radio_Update в update()). Курсор двигается по экрану, приёмник идёт
- * следом. Рамка на время прослушивания сужается до маркера. */
+/* Режим «still» (как маркер в Mayhem): скан стоит, спектр заморожен,
+ * приёмник настроен на частоту курсора. Звук открыт принудительно, как
+ * пауза в сканере, — шумодав не скрывает слабый пик под стрелкой.
+ * Курсор двигается по экрану, приёмник идёт следом. */
 static void tuneListen(void) {
   Radio_TuneTo(xToFreq(anaCtx.cursorCenter), true); /* precise: мод., фильтр, шумодав */
+  /* Слушаем без шумодава, как пауза в сканере: иначе слабый пик под
+   * стрелкой не слышно. Для SI4732 (ниже 18 МГц) звук уже открыл applyVfo;
+   * Radio_ScanAudio его бы заглушил. */
+  if (vfos[currentVfo].radio != RADIO_SI4732)
+    Radio_ScanAudio(true);
 }
 
 static void clampCursor(void) {
-  int16_t lo = anaCtx.cursorHalfW, hi = SP_MAX_POINTS - 1 - anaCtx.cursorHalfW;
+  int16_t margin = anaCtx.listen ? LISTEN_ARROW_HALF : anaCtx.cursorHalfW;
+  int16_t lo = margin, hi = SP_MAX_POINTS - 1 - margin;
   if (anaCtx.cursorCenter < lo)
     anaCtx.cursorCenter = (uint8_t)lo;
   if (anaCtx.cursorCenter > hi)
@@ -206,15 +234,16 @@ static void enterListen(void) {
   anaCtx.cursorHalfW = 2;
   clampCursor();
   anaCtx.cursorActive = true;
-  anaCtx.cursorTimeout = 0xFFFFFFFFu; /* пока слушаем — рамка не гаснет */
-  tuneListen();
+  anaCtx.cursorTimeout = 0xFFFFFFFFu; /* пока слушаем — стрелка не гаснет */
+  tuneListen(); /* заодно открывает звук принудительно */
 }
 
 static void exitListen(void) {
   anaCtx.listen = false;
   anaCtx.cursorHalfW = anaCtx.savedHalfW;
+  clampCursor();
   anaCtx.cursorTimeout = millis() + CURSOR_TIMEOUT_MS;
-  Radio_ScanAudio(false);      /* дальше скан — тишина */
+  Radio_ScanAudio(false); /* дальше скан — тишина */
   anaCtx.scanF = anaCtx.range.start; /* скан с начала диапазона */
   anaCtx.spectrumReady = false;
   SP_Begin();
@@ -271,32 +300,67 @@ static uint32_t xToFreq(uint8_t x) {
   return anaCtx.range.start + (uint64_t)x * span / SP_MAX_POINTS;
 }
 
+/* Границы курсора на экране: в обычном режиме это края рамки, в режиме
+ * прослушивания — одна колонка под стрелкой. */
+static uint8_t cursorX0() {
+  return anaCtx.listen ? anaCtx.cursorCenter : getCursorStart();
+}
+
+static uint8_t cursorX1() {
+  return anaCtx.listen ? anaCtx.cursorCenter : getCursorEnd();
+}
+
 static void eraseCursorZone() {
   if (!anaCtx.prevCursorActive)
     return;
 
-  uint8_t x0 = anaCtx.prevCursorStart;
-  uint8_t x1 = anaCtx.prevCursorEnd;
+  if (anaCtx.prevListen) {
+    FillRect((int16_t)anaCtx.prevCursorStart - LISTEN_ARROW_HALF,
+             UI_SPECTRUM_Y, LISTEN_ARROW_HALF * 2 + 1, LISTEN_ARROW_H, C_BLACK);
+  } else {
+    uint8_t x0 = anaCtx.prevCursorStart;
+    uint8_t x1 = anaCtx.prevCursorEnd;
 
-  DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
-  DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_BLACK);
-  DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
-  DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
+    DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_BLACK);
+    DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_BLACK);
+    DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
+    DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_BLACK);
+  }
 
   anaCtx.prevCursorActive = false;
 }
 
+/* Красная стрелка, остриё вниз: древко + треугольная головка. */
+static void drawListenArrow(uint8_t x) {
+  FillRect(x, UI_SPECTRUM_Y, 1, 3, C_RED);
+  for (int8_t i = 0; i <= LISTEN_ARROW_HALF; i++) {
+    int8_t w = 1 + 2 * (LISTEN_ARROW_HALF - i);
+    DrawHLine((int16_t)x - (w >> 1), UI_SPECTRUM_Y + 3 + i, w, C_RED);
+  }
+}
+
 static void drawCursorZone() {
-  uint8_t x0 = getCursorStart();
-  uint8_t x1 = getCursorEnd();
+  if (anaCtx.listen) {
+    /* Красная стрелка на частоте курсора вместо рамки: сразу видно, где
+     * слушаем. SP_Render после стирания восстанавливает строки спектра. */
+    drawListenArrow(anaCtx.cursorCenter);
 
-  DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
-  DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_CYAN);
-  DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
-  DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
+    anaCtx.prevCursorStart = anaCtx.cursorCenter;
+    anaCtx.prevCursorEnd = anaCtx.cursorCenter;
+  } else {
+    uint8_t x0 = getCursorStart();
+    uint8_t x1 = getCursorEnd();
 
-  anaCtx.prevCursorStart = x0;
-  anaCtx.prevCursorEnd = x1;
+    DrawHLine(x0, UI_SPECTRUM_Y, x1 - x0 + 1, C_CYAN);
+    DrawHLine(x0, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1, x1 - x0 + 1, C_CYAN);
+    DrawVLine(x0, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
+    DrawVLine(x1, UI_SPECTRUM_Y, UI_SPECTRUM_H, C_CYAN);
+
+    anaCtx.prevCursorStart = x0;
+    anaCtx.prevCursorEnd = x1;
+  }
+
+  anaCtx.prevListen = anaCtx.listen;
   anaCtx.prevCursorActive = true;
 }
 
@@ -353,17 +417,22 @@ static NumVal_t *editingVal(void) {
 }
 
 #define SCAN_STEPS_PER_UPDATE 128
-#define ANA_DWELL_US 600 /* выдержка на точке перед чтением RSSI */
 
 class AnalyserMode : public Mode {
 public:
+  uint16_t renderIntervalMs() override { return 16; } /* до 60 кадров/с */
+
   void enter() override {
     STATUSLINE_SetTitle("SPECTRUM");
+    lv_port_set_direct_areas(true);
     /* ВАЖНО: memset обнуляет весь anaCtx, включая savedVfo — сохраняем
      * до него и пишем после (раньше выход всегда уходил в VFO 0) */
     uint8_t entryVfo = currentVfo;
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
+    /* Анализатор всегда работает трактом BK A: даже если в VFO остался
+     * выбор SI4732, скан и звук должны идти с BK. */
+    vfos[currentVfo].radio = RADIO_BK4819A;
     memset(&anaCtx, 0, sizeof(anaCtx));
     anaCtx.savedVfo = entryVfo;
     anaCtx.scanVfo = currentVfo;
@@ -391,6 +460,11 @@ public:
 
     FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
              C_BLACK);
+
+    /* Скан идёт молча: при входе из VFO звук мог остаться открытым по
+     * шумодаву, и тогда весь проход шипел бы. Прослушивание (5) откроет
+     * звук принудительно. */
+    Radio_ScanAudio(false);
   }
 
   void update() override {
@@ -399,21 +473,26 @@ public:
     NumVal_Update(&anaCtx.endVal);
     if (editingVal())
       return;
-    if (anaCtx.listen) { /* still: скан стоит, звук — по шумодаву */
-      Radio_Update();
+    if (anaCtx.listen) /* still: скан стоит, звук открыт в enterListen */
       return;
-    }
     if (anaCtx.spectrumReady)
       return;
 
+    /* Настраиваем BK явно, а не через Radio_TuneTo: applyVfo по модуляции
+     * может выбрать SI4732 (WFM), и тогда BK остаётся на старой частоте —
+     * спектр и водопад пустые, хотя звук в прослушивании есть. */
     for (uint8_t i = 0; i < SCAN_STEPS_PER_UPDATE; i++) {
       const bool covered = bkCovers(anaCtx.scanF);
       if (covered) {
-        Radio_TuneTo(anaCtx.scanF, false);
+        vfos[currentVfo].rxF = anaCtx.scanF;
+        BK4819_SelectFilterByFrequency(anaCtx.scanF);
         BK4819_SelectChip(0);
+        BK4819_TuneTo(anaCtx.scanF, false);
         /* без паузы RSSI читается до установления ПЛЛ/АРУ и «размазывает»
-         * пики вдоль прохода (кривая горка) */
-        delay_us(ANA_DWELL_US);
+         * пики вдоль прохода (кривая горка); выдержка настраивается */
+        const uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
+        if (dwell)
+          delay_us(dwell);
       }
       Measurement m = {
           .f = anaCtx.scanF,
@@ -477,18 +556,21 @@ public:
                anaCtx.borderSel ? C_YELLOW : C_BLACK);
     }
 
-    /* шаг между полями границ; на время ввода прячем */
-    uint32_t step = scanStep();
+    /* шаг и выдержка между полями границ; на время ввода прячем */
     TextStyle topStyle = text_style(C_YELLOW, C_BLACK, POS_C, F_S);
     if (editStart || editEnd) {
       PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "");
     } else {
-      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%u.%02luk",
-              (unsigned)(step / 100), (unsigned)(step % 100));
+      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%s %uus",
+              STEP_NAMES[vfos[currentVfo].step],
+              (unsigned)ANA_DWELL_US[s_dwellIdx]);
     }
 
     bool spectrumRedrawn = false;
-    if (anaCtx.spectrumReady || millis() - lastSpectrumRender >= 500) {
+    /* В прослушивании спектр заморожен — периодически перерисовывать его
+     * нельзя: это лишние миллисекунды и мигание стрелки. */
+    if (anaCtx.spectrumReady ||
+        (!anaCtx.listen && millis() - lastSpectrumRender >= 500)) {
       SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       lastSpectrumRender = millis();
       spectrumRedrawn = true;
@@ -515,8 +597,8 @@ public:
     bool want =
         anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout && !editFreq;
     bool moved = anaCtx.prevCursorActive &&
-                 (!want || getCursorStart() != anaCtx.prevCursorStart ||
-                  getCursorEnd() != anaCtx.prevCursorEnd);
+                 (!want || cursorX0() != anaCtx.prevCursorStart ||
+                  cursorX1() != anaCtx.prevCursorEnd);
     if (moved) {
       eraseCursorZone();
       SP_Invalidate(UI_SPECTRUM_H);
@@ -545,6 +627,7 @@ public:
     currentVfo = anaCtx.savedVfo;
     Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
                                дальше решает шумодав в VFO */
+    lv_port_set_direct_areas(false);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
@@ -626,6 +709,14 @@ public:
       NumVal_SetValue(&anaCtx.freqVal, xToFreq(anaCtx.cursorCenter));
       NumVal_StartEdit(&anaCtx.freqVal);
       return true;
+    case KEY_SIDE1: /* выдержка на точке + */
+      if (s_dwellIdx + 1 < (int)ANA_DWELL_N)
+        s_dwellIdx++;
+      return true;
+    case KEY_SIDE2: /* выдержка на точке − */
+      if (s_dwellIdx > 0)
+        s_dwellIdx--;
+      return true;
     case KEY_EXIT: /* как везде: выход в VFO на прежнюю частоту */
       anaCtx.captureF = 0;
       Mode_Switch(MODE_VFO);
@@ -652,7 +743,7 @@ private:
 
     Color sideCol = cursorOn ? C_CYAN : C_GRAY;
     TextStyle leftStyle =
-        text_style(anaCtx.listen ? C_GREEN : sideCol, C_BLACK, POS_L, F_M);
+        text_style(anaCtx.listen ? C_RED : sideCol, C_BLACK, POS_L, F_M);
     TextStyle midStyle = text_style(C_WHITE, C_BLACK, POS_C, F_M);
     TextStyle rightStyle = text_style(sideCol, C_BLACK, POS_R, F_M);
 

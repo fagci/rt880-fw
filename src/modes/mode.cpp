@@ -52,6 +52,10 @@ void Mode_Render() {
     current->render();
 }
 
+uint16_t Mode_RenderInterval() {
+  return current ? current->renderIntervalMs() : 50;
+}
+
 void Mode_Key(KEY_Code_t key, Key_State_t state) {
   if (current)
     current->key(key, state);

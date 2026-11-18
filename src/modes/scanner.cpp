@@ -37,6 +37,7 @@
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
+#include "../ui/lv_port.h"
 #include "../ui/numval.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
@@ -294,6 +295,7 @@ class ScannerMode : public Mode {
 public:
   void enter() override {
     STATUSLINE_SetTitle("SCAN");
+    lv_port_set_direct_areas(true);
     savedVfo = currentVfo;
     savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
@@ -448,6 +450,7 @@ public:
     currentVfo = savedVfo;
     Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
                                дальше решает шумодав в VFO (Radio_Update) */
+    lv_port_set_direct_areas(false);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
