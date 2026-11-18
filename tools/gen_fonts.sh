@@ -1,25 +1,49 @@
 #!/bin/sh
-# Генерация LVGL-шрифтов интерфейса из JetBrains Mono (OFL).
-# Нужно: node + `npm i -g lv_font_conv`, шрифты (apt: fonts-jetbrains-mono).
-# Одна гарнитура, строгая и технична: Medium для текста, ExtraBold для акцентов.
+# Генерация LVGL-шрифтов интерфейса.
+# Мелкий — Cozette 13 px / 1 bpp (MIT, tools/fonts/), совпадает с
+# растровым cozette.bdf пиксель в пиксель. M/L/XL — JetBrains Mono
+# (Medium/ExtraBold); XL — ExtraBold 38 px для цифр частоты.
+# Во всех шрифтах убран/заменён ноль: у Cozette — диагональная черта,
+# у JetBrains — точка просто удаляется.
+# Нужно: node + `npm i -g lv_font_conv` (1.5.3), fonts-jetbrains-mono.
 # Запуск: sh tools/gen_fonts.sh   (результат — src/ui/lvgl_fonts/ui_font_*.c)
 set -e
-F=${JB_DIR:-/usr/share/fonts/truetype/jetbrains-mono}
-OUT=$(dirname "$0")/../src/ui/lvgl_fonts
-gen() { # имя файл-шрифта размер диапазон [bpp, по умолчанию 4]
-  lv_font_conv --font "$F/$2" -r "$4" --size "$3" --bpp "${5:-4}" --format lvgl --no-compress \
-    --lv-font-name "$1" --lv-include lvgl.h -o "$OUT/$1.c"
+DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+OUT="$DIR/../src/ui/lvgl_fonts"
+FONTS="$DIR/fonts"
+JB=${JB_DIR:-/usr/share/fonts/truetype/jetbrains-mono}
+if [ -f "$JB/JetBrainsMono-Medium.ttf" ]; then
+  JB_MED=JetBrainsMono-Medium.ttf
+  JB_XB=JetBrainsMono-ExtraBold.ttf
+else
+  JB=${JB_DIR:-$HOME/.fonts}
+  JB_MED=JetBrainsMonoNerdFontMono-Medium.ttf
+  JB_XB=JetBrainsMonoNerdFontMono-ExtraBold.ttf
+fi
+
+gen() { # имя файл-шрифта размер диапазон bpp подпись
+  lv_font_conv --font "$2" -r "$4" --size "$3" --bpp "$5" \
+    --format lvgl --no-compress --lv-font-name "$1" --lv-include lvgl.h \
+    -o "$OUT/$1.c"
   # в конфиге LVGL LV_USE_USER_DATA=0 — поля user_data нет
   sed -i '/\.user_data = NULL,/d' "$OUT/$1.c"
+  # стабильный заголовок вместо пути к временному файлу
+  sed -i "/^ \* Opts:/c\\ * Opts: $6" "$OUT/$1.c"
 }
-gen ui_font_s  JetBrainsMono-Medium.ttf    11 0x20-0x7E
-gen ui_font_m  JetBrainsMono-Medium.ttf    14 0x20-0x7E
-gen ui_font_l  JetBrainsMono-ExtraBold.ttf 20 0x20-0x7E
-# цифры частоты: Liberation Mono Bold без точки в нуле (tools/font_fix.py nodot),
-# 4 bpp + пороговое сглаживание (snap 2..6): контур полностью плотный,
-# полупрозрачные пиксели остаются только на скруглениях/диагоналях
+
 TMP=$(mktemp -d)
-python3 "$(dirname "$0")/font_fix.py" nodot /usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf "$TMP/xl.ttf"
-F=$TMP gen ui_font_xl xl.ttf 38 0x20,0x25,0x2B-0x3A
-python3 "$(dirname "$0")/font_fix.py" snap "$OUT/ui_font_xl.c" 2 6
-rm -rf "$TMP"
+trap 'rm -rf "$TMP"' EXIT
+
+python3 "$DIR/font_fix.py" slashzero "$FONTS/CozetteVector.ttf" \
+  "$TMP/CozetteVector-slash.ttf"
+python3 "$DIR/font_fix.py" nodot "$JB/$JB_MED" "$TMP/jb-medium.ttf"
+python3 "$DIR/font_fix.py" nodot "$JB/$JB_XB" "$TMP/jb-extrabold.ttf"
+
+gen ui_font_s  "$TMP/CozetteVector-slash.ttf" 13 0x20-0x7E 1 \
+  "Cozette 1.30.0 (tools/fonts), zero = slash"
+gen ui_font_m  "$TMP/jb-medium.ttf"           14 0x20-0x7E 4 \
+  "JetBrains Mono Medium 14 px, zero = nodot"
+gen ui_font_l  "$TMP/jb-extrabold.ttf"        20 0x20-0x7E 4 \
+  "JetBrains Mono ExtraBold 20 px, zero = nodot"
+gen ui_font_xl "$TMP/jb-extrabold.ttf"        38 0x20,0x25,0x2B-0x3A 4 \
+  "JetBrains Mono ExtraBold 38 px, zero = nodot"

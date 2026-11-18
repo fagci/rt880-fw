@@ -11,9 +11,10 @@
 #define LCD_HEIGHT ST7789_HEIGHT
 #define LCD_XCENTER (ST7789_WIDTH / 2)
 
-/* Шрифты — JetBrains Mono (tools/gen_fonts.sh): S 11, M 14 (Medium),
- * L 20 (ExtraBold); XL 38 — Liberation Mono Bold без точки в нуле (цифры
- * частоты, гамма-коррекция сглаживания). Все моноширинные. */
+/* Шрифты (tools/gen_fonts.sh): S — Cozette 13 px / 1 bpp (пиксельный,
+ * ноль перечёркнут); M/L — JetBrains Mono Medium/ExtraBold 14/20 px;
+ * XL — JetBrains Mono ExtraBold 38 px. В M/L/XL точка в нуле убрана.
+ * Все моноширинные. */
 extern const lv_font_t ui_font_s, ui_font_m, ui_font_l, ui_font_xl;
 typedef const lv_font_t *Font;
 #define F_S (&ui_font_s)
