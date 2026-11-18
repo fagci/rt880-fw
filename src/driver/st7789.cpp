@@ -72,7 +72,7 @@ static void spi_hw_init(void) {
   spi_default_para_init(&s);
   s.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
   s.master_slave_mode = SPI_MODE_MASTER;
-  s.mclk_freq_division = SPI_MCLK_DIV_4; /* 150/4 = 37.5 МГц */
+  s.mclk_freq_division = SPI_MCLK_DIV_3; /* 150/3 = 50 МГц */
   s.first_bit_transmission = SPI_FIRST_BIT_MSB;
   s.frame_bit_num = SPI_FRAME_8BIT;
   s.clock_polarity = SPI_CLOCK_POLARITY_LOW;
@@ -277,9 +277,17 @@ void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 
   uint32_t left = (uint32_t)w * h;
 
-  for (uint32_t i = 0; i < ST7789_DMA_PIXELS_PER_CHUNK; i++) {
-    st7789_dma_buf[i * 2 + 0] = (uint8_t)(color >> 8);
-    st7789_dma_buf[i * 2 + 1] = (uint8_t)(color & 0xFF);
+  /* Паттерн одинаков для всех пикселей: заполняем буфер только на реально
+   * нужное число пикселей, а не на весь чанк (для линий/тиков это экономит
+   * до 1024 итераций на вызов). */
+  uint32_t prefill = left > ST7789_DMA_PIXELS_PER_CHUNK
+                         ? ST7789_DMA_PIXELS_PER_CHUNK
+                         : left;
+  uint8_t hi = (uint8_t)(color >> 8);
+  uint8_t lo = (uint8_t)(color & 0xFF);
+  for (uint32_t i = 0; i < prefill; i++) {
+    st7789_dma_buf[i * 2 + 0] = hi;
+    st7789_dma_buf[i * 2 + 1] = lo;
   }
 
   st7789_cs_low();
