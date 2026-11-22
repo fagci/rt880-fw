@@ -30,8 +30,8 @@
 
 #define TITLE_Y 26
 #define LIST_Y 42
-#define ROW_H 15
-#define ROWS 15
+#define ROW_H 16 /* line_height шрифта F_M: иначе подсветка уезжает от текста */
+#define ROWS 13
 #define DETAIL_Y (LIST_Y + ROWS * ROW_H + 3)
 #define HINT_Y (DETAIL_Y + 18)
 

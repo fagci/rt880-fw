@@ -571,6 +571,9 @@ void SI47XX_Init(void);
 void SI47XX_PowerUp();
 void SI47XX_PatchPowerUp(bool ssb);
 bool SI47XX_Acquire(SI47XX_MODE mode);
+/* Штатный AM-ром без continuous-патча: встроенный seek не работает с
+ * AM-патчем. Следующий SI47XX_Acquire вернёт патч обратно. */
+bool SI47XX_AcquireRawAm(void);
 void SI47XX_PowerDown();
 void SI47XX_SetFreq(uint16_t freq);
 void SI47XX_ReadRDS(uint8_t buf[13]);
@@ -579,6 +582,16 @@ bool SI47XX_IsSSB();
 void RSQ_GET();
 void SI47XX_SetAutomaticGainControl(uint8_t AGCDIS, uint8_t AGCIDX);
 void SI47XX_Seek(bool up, bool wrap);
+bool SI47XX_SeekAmStart(uint32_t bottom, uint32_t top, uint32_t spacing,
+                        uint16_t rssiThr, bool up, bool wrap);
+typedef struct {
+  uint32_t freq; /* ед. 10 Гц, как в режимах */
+  uint8_t rssi;  /* дБмкВ */
+  bool done;     /* STC: настройка завершена (у seek не опорный) */
+  bool valid;    /* валидный канал */
+  bool limit;    /* поиск дошёл до границы полосы */
+} SI47XX_SeekStatus;
+void SI47XX_TuneStatusGet(SI47XX_SeekStatus *st);
 uint32_t SI47XX_getFrequency(bool *valid);
 void SI47XX_SetBandwidth(SI47XX_FilterBW AMCHFLT, bool AMPLFLT);
 void SI47XX_SetSsbBandwidth(SI47XX_SsbFilterBW bw);

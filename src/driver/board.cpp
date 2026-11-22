@@ -88,6 +88,10 @@ void SysTick_Handler(void) {
  * здесь. */
 void led_rx_set(bool on) { gpio_pin_write(&PIN_LED_GREEN, on); }
 
+void keyboard_backlight_set(bool on) {
+  gpio_pin_write(&PIN_KEYBOARD_BACKLIGHT, on);
+}
+
 void delay_us(uint32_t us) {
   uint32_t start = DWT->CYCCNT;
   uint32_t cycles = us * (SystemCoreClock / 1000000U);
@@ -249,7 +253,7 @@ void board_init(void) {
   UI_ClearScreen(C_BLACK);
 
   st7789_backlight_on();
-  gpio_pin_set(&PIN_KEYBOARD_BACKLIGHT);
+  keyboard_backlight_set(true);
 
   keyboard_init();
 }

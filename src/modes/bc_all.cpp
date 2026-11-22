@@ -1,10 +1,10 @@
-/* BC ALL — проход по всем вещательным КВ-диапазонам SI4732.
+/* BC ALL — обход всех вещательных КВ-диапазонов SI4732 встроенным seek.
  *
- * В отличие от BC-сканера (одна полоса с водопадом), этот режим сам
- * обходит BC_BANDS: сначала калибрует шумовой пол каждой полосы, затем
- * повторно проходит её с порогом пол+10 дБ и складывает найденные
- * частоты в общий LOOT. После обхода открывается список находок, по
- * которому можно ходить UP/DOWN и слушать выбранную станцию.
+ * Раньше полоса проходилась вручную по каналам 5 кГц в два прохода
+ * (калибровка + поиск). Теперь чип сам ищет станции по порогу RSSI:
+ * полоса задаётся свойствами AM_SEEK_*, а режим только опрашивает
+ * TUNE_STATUS и складывает найденное в общий LOOT. После обхода
+ * открывается список находок.
  *
  * Вход: VFO → длинный 3. Выход — EXIT (в VFO), MENU во время скана —
  * открыть уже найденное.
@@ -13,7 +13,6 @@
 #include "bc_bands.h"
 #include "../driver/board.h"
 #include "../driver/si473x.h"
-#include "../driver/st7789.h"
 #include "../helper/lootlist.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -26,51 +25,58 @@
 #include "vfo.h"
 #include <stdio.h>
 
-#define BC_ALL_SETTLE_MS 35
-#define BC_ALL_MARGIN 10
-#define BC_ALL_THR_MIN 12
-#define BC_ALL_THR_MAX 120
+#define BC_ALL_SEEK_POLL_MS 25
+#define BC_ALL_SEEK_RETRY_MS 200
+#define BC_ALL_SEEK_STALL_MS 8000
+#define BC_ALL_SEEK_RSSI 10 /* порог встроенного seek, дБмкВ */
+#define BC_ALL_THR_MIN 5
+#define BC_ALL_THR_MAX 60
+#define BC_ALL_THR_STEP 5
 
 static uint8_t s_band;
-static uint16_t s_chan;
 static uint16_t s_channels;
-static uint16_t s_floor;
-static uint16_t s_thr;
+static uint32_t s_freq;
 static uint16_t s_rssi;
+static uint16_t s_seekThr = BC_ALL_SEEK_RSSI;
+static uint16_t s_shownPct;
 static uint16_t s_found;
 static uint16_t s_total;
-static bool s_cal;
 static bool s_done;
 static bool s_noSi;
 static bool s_restored;
 static uint32_t s_nextAt;
+static uint32_t s_lastSeekAt;
+static uint32_t s_progressAt;
+static uint32_t s_lastFoundF;
 static uint32_t s_savedF;
 static uint8_t s_savedMod;
 static uint8_t s_savedStep;
 
-static uint16_t bandChannels(void) {
-  const BcBand *b = &BC_BANDS[s_band];
+static uint16_t bandChannelsAt(uint8_t band) {
+  const BcBand *b = &BC_BANDS[band];
   uint32_t n = (b->end - b->start) / BC_CH_STEP;
   return n ? (uint16_t)n : 1;
 }
 
-static uint32_t channelFreq(void) {
-  return BC_BANDS[s_band].start + (uint32_t)s_chan * BC_CH_STEP;
-}
-
-static void tuneCurrent(void) {
-  vfos[currentVfo].rxF = channelFreq();
-  SI47XX_TuneTo(channelFreq());
+static uint16_t currentChannel(void) {
+  const BcBand *b = &BC_BANDS[s_band];
+  uint32_t off = s_freq > b->start ? s_freq - b->start : 0;
+  uint16_t ch = (uint16_t)(off / BC_CH_STEP);
+  return ch < s_channels ? ch : (uint16_t)(s_channels - 1);
 }
 
 static void startBand(void) {
-  s_channels = bandChannels();
-  s_chan = 0;
-  s_floor = 0xFFFF;
-  s_thr = BC_ALL_THR_MIN;
-  s_cal = true;
-  tuneCurrent();
-  s_nextAt = millis() + BC_ALL_SETTLE_MS;
+  const BcBand *b = &BC_BANDS[s_band];
+  s_channels = bandChannelsAt(s_band);
+  s_freq = b->start;
+  s_rssi = 0;
+  vfos[currentVfo].rxF = b->start;
+  /* top — последний канал полосы (end исключительный) */
+  SI47XX_SeekAmStart(b->start, b->end - BC_CH_STEP, BC_CH_STEP, s_seekThr,
+                     true, false);
+  s_lastSeekAt = millis();
+  s_progressAt = millis();
+  s_nextAt = millis() + BC_ALL_SEEK_POLL_MS;
 }
 
 static void restoreVfo(void) {
@@ -92,36 +98,8 @@ static void openLoot(void) {
   LOOTLIST_OpenFrom(MODE_VFO);
 }
 
-static void advanceChannel(void) {
-  if (s_cal) {
-    if (s_chan + 1 < s_channels) {
-      s_chan++;
-      tuneCurrent();
-      s_nextAt = millis() + BC_ALL_SETTLE_MS;
-      return;
-    }
-    /* Полоса откалибрована: второй проход уже с порогом. */
-    uint16_t thr = s_floor + BC_ALL_MARGIN;
-    if (thr < BC_ALL_THR_MIN)
-      thr = BC_ALL_THR_MIN;
-    if (thr > BC_ALL_THR_MAX)
-      thr = BC_ALL_THR_MAX;
-    s_thr = thr;
-    s_cal = false;
-    s_chan = 0;
-    tuneCurrent();
-    s_nextAt = millis() + BC_ALL_SETTLE_MS;
-    return;
-  }
-
-  if (s_chan + 1 < s_channels) {
-    s_chan++;
-    tuneCurrent();
-    s_nextAt = millis() + BC_ALL_SETTLE_MS;
-    return;
-  }
-
-  if (s_band + 1 < BC_BAND_COUNT) {
+static void nextBand(void) {
+  if (s_band + 1u < BC_BAND_COUNT) {
     s_band++;
     startBand();
     return;
@@ -129,26 +107,67 @@ static void advanceChannel(void) {
   openLoot();
 }
 
-static void measure(void) {
-  uint16_t r = SI47XX_GetRssi();
-  s_rssi = r;
-  if (s_cal) {
-    if (r < s_floor)
-      s_floor = r;
-  } else if (r >= s_thr) {
-    LOOT_Hit(channelFreq(), r, MOD_AM, vfos[currentVfo].bw, RADIO_SI4732);
-    s_found++;
+static void sendSeek(void) {
+  SI47XX_Seek(true, false); /* вверх от текущей частоты */
+  s_lastSeekAt = millis();
+  s_nextAt = millis() + BC_ALL_SEEK_POLL_MS;
+}
+
+static void pollSeek(void) {
+  SI47XX_SeekStatus st;
+  SI47XX_TuneStatusGet(&st);
+  if (st.freq) {
+    s_freq = st.freq;
+    s_rssi = st.rssi;
   }
-  advanceChannel();
+
+  if (st.valid) {
+    uint32_t now = millis();
+    bool isNew = (st.freq != s_lastFoundF);
+    if (isNew) {
+      vfos[currentVfo].rxF = st.freq;
+      LOOT_Hit(st.freq, st.rssi, MOD_AM, vfos[currentVfo].bw, RADIO_SI4732);
+      s_found++;
+      s_lastFoundF = st.freq;
+      s_progressAt = now;
+    }
+    if (st.limit) {
+      nextBand();
+      return;
+    }
+    if (isNew || (uint32_t)(now - s_lastSeekAt) >= BC_ALL_SEEK_RETRY_MS) {
+      sendSeek();
+      return;
+    }
+    s_nextAt = now + BC_ALL_SEEK_POLL_MS;
+    return;
+  }
+
+  if (st.limit) {
+    nextBand();
+    return;
+  }
+
+  /* Не валид и не предел: STC с AM-патчем приходит не всегда, поэтому
+   * опираемся на VALID/BLTF, а команду периодически повторяем от текущей
+   * частоты (как SI4735 seekStationProgress). */
+  uint32_t now = millis();
+  if ((uint32_t)(now - s_progressAt) >= BC_ALL_SEEK_STALL_MS) {
+    nextBand(); /* полоса не двигается — не залипаем */
+    return;
+  }
+  if (st.done || (uint32_t)(now - s_lastSeekAt) >= BC_ALL_SEEK_RETRY_MS) {
+    sendSeek();
+    return;
+  }
+  s_nextAt = now + BC_ALL_SEEK_POLL_MS;
 }
 
 static uint16_t completedChannels(void) {
   uint16_t done = 0;
-  for (uint8_t i = 0; i < s_band; i++) {
-    uint32_t n = (BC_BANDS[i].end - BC_BANDS[i].start) / BC_CH_STEP;
-    done += (uint16_t)(2 * n);
-  }
-  done += s_cal ? s_chan : (uint16_t)(s_channels + s_chan);
+  for (uint8_t i = 0; i < s_band; i++)
+    done += bandChannelsAt(i);
+  done += currentChannel();
   if (done > s_total)
     done = s_total;
   return done;
@@ -162,24 +181,24 @@ public:
 
     Radio_Init();
     s_band = 0;
-    s_chan = 0;
     s_found = 0;
     s_done = false;
     s_noSi = false;
     s_restored = false;
     s_rssi = 0;
+    s_shownPct = 0;
+    s_lastFoundF = 0;
     s_total = 0;
-    for (uint8_t i = 0; i < BC_BAND_COUNT; i++) {
-      uint32_t n = (BC_BANDS[i].end - BC_BANDS[i].start) / BC_CH_STEP;
-      s_total += (uint16_t)(2 * n);
-    }
+    for (uint8_t i = 0; i < BC_BAND_COUNT; i++)
+      s_total += bandChannelsAt(i);
 
     s_savedF = vfos[currentVfo].rxF;
     s_savedMod = vfos[currentVfo].modulation;
     s_savedStep = vfos[currentVfo].step;
 
     vfos[currentVfo].radio = RADIO_SI4732;
-    if (!SI47XX_Acquire(SI47XX_AM)) {
+    /* Штатный AM-ром: с continuous-патчем seek игнорирует AM_SEEK_*. */
+    if (!SI47XX_AcquireRawAm()) {
       s_noSi = true;
       Radio_ScanAudio(false);
       return;
@@ -208,7 +227,7 @@ public:
       return;
     if ((int32_t)(millis() - s_nextAt) < 0)
       return;
-    measure();
+    pollSeek();
   }
 
   void render() override {
@@ -223,16 +242,23 @@ public:
     }
 
     char buf[48];
-    snprintf(buf, sizeof(buf), "%s  %s %u/%u", BC_BANDS[s_band].name,
-             s_cal ? "CAL" : "SCAN", (unsigned)(s_chan + 1),
-             (unsigned)s_channels);
+    snprintf(buf, sizeof(buf), "%s  SEEK %u/%u", BC_BANDS[s_band].name,
+             (unsigned)(currentChannel() + 1), (unsigned)s_channels);
     PrintfT(LCD_XCENTER, UI_INFO1_BASE,
             text_style(C_WHITE, C_BLACK, POS_C, F_M), "%s", buf);
 
     uint16_t done = completedChannels();
-    uint16_t pct = s_total ? (uint16_t)((uint32_t)done * 100 / s_total) : 0;
+    uint16_t target = s_total ? (uint16_t)((uint32_t)done * 100 / s_total) : 0;
+    /* Прогресс seek приходит рывками (по станциям) — подтягиваем
+     * отображаемый процент к фактическому за несколько кадров. */
+    if (s_shownPct < target) {
+      uint16_t step = (uint16_t)((target - s_shownPct + 3) / 4);
+      s_shownPct = (uint16_t)(s_shownPct + (step ? step : 1));
+      if (s_shownPct > target)
+        s_shownPct = target;
+    }
     snprintf(buf, sizeof(buf), "found %u  %u%%", (unsigned)s_found,
-             (unsigned)pct);
+             (unsigned)s_shownPct);
     PrintfT(LCD_XCENTER, UI_INFO2_BASE,
             text_style(C_GREEN, C_BLACK, POS_C, F_M), "%s", buf);
 
@@ -240,17 +266,30 @@ public:
     const uint16_t bw = LCD_WIDTH - 2 * bx;
     const uint16_t by = UI_INFO2_BASE + 24;
     FillRect(bx, by, bw, 8, C_GRAY);
-    if (pct) {
-      uint16_t w = (uint16_t)((uint32_t)bw * pct / 100);
+    if (s_shownPct) {
+      uint16_t w = (uint16_t)((uint32_t)bw * s_shownPct / 100);
       FillRect(bx, by, w, 8, C_GREEN);
     }
 
     PrintfT(LCD_XCENTER, by + 24,
             text_style(C_GRAY, C_BLACK, POS_C, F_S),
-            "RSSI %u  scan all BC  EXIT abort", (unsigned)s_rssi);
+            "RSSI %u  thr %u  1/7  EXIT abort", (unsigned)s_rssi,
+            (unsigned)s_seekThr);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    /* Порог seek: 7 — выше (чище, меньше станций), 1 — ниже. */
+    if (state == KEY_EVT_LONG_PRESS && (k == KEY_1 || k == KEY_7)) {
+      if (k == KEY_7) {
+        if (s_seekThr < BC_ALL_THR_MAX)
+          s_seekThr += BC_ALL_THR_STEP;
+      } else if (s_seekThr > BC_ALL_THR_MIN) {
+        s_seekThr -= BC_ALL_THR_STEP;
+      }
+      SI47XX_SetSeekAmRssiThreshold(s_seekThr);
+      return true;
+    }
+
     if (state != KEY_EVT_RELEASE)
       return false;
 

@@ -11,6 +11,8 @@ extern volatile uint32_t tick_ms;
 extern uint8_t g_clockStage; /* стадия clock_init (диагностика) */
 /* Зелёный светодиод = «шумодав открыт / слушаем». Одна точка управления. */
 void led_rx_set(bool on);
+/* Подсветка клавиатуры (PA9): true — включена. */
+void keyboard_backlight_set(bool on);
 
 #ifdef __cplusplus
 extern "C" {

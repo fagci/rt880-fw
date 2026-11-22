@@ -708,6 +708,8 @@ uint32_t SI47XX_getFrequency(bool *valid) {
 }
 
 /* ─── Seek ─────────────────────────────────────────────────────── */
+static void tuneStatusRead(SI47XX_SeekStatus *st, bool ack);
+
 void SI47XX_Seek(bool up, bool wrap) {
   uint8_t seekOpt = (up ? FLG_SEEKUP : 0) | (wrap ? FLG_WRAP : 0);
   uint8_t cmd[6] = {CMD_FM_SEEK_START, seekOpt, 0, 0, 0, 0};
@@ -717,8 +719,102 @@ void SI47XX_Seek(bool up, bool wrap) {
     cmd[5] = (siCurrentFreq > 1800) ? 1 : 0;
   }
 
-  waitToSend();
+  /* STC от прошлого поиска не должен выглядеть завершением нового. */
+  tuneStatusRead(nullptr, true);
+  if (!waitToSend())
+    return;
   SI47XX_WriteBuffer(cmd, si4732mode == SI47XX_FM ? 2 : 6);
+}
+
+/* Статус настройки/поиска: STC, валидность, граница полосы, частота, RSSI.
+ * Без INTACK STC не сбрасываем: завершение seek определяем по VALID/BLTF,
+ * как SI4735 seekStationProgress (с AM-патчем STC не всегда приходит).
+ * siCurrentFreq синхронизируется с фактической частотой — seek двигает чип
+ * мимо SI47XX_SetFreq. */
+static void tuneStatusRead(SI47XX_SeekStatus *st, bool ack) {
+  if (st) {
+    st->freq = 0;
+    st->rssi = 0;
+    st->done = false;
+    st->valid = false;
+    st->limit = false;
+  }
+
+  bool fm = (si4732mode == SI47XX_FM);
+  uint8_t cmd[2] = {(uint8_t)(fm ? CMD_FM_TUNE_STATUS : CMD_AM_TUNE_STATUS),
+                    (uint8_t)(ack ? TUNE_STATUS_ARG1_CLEAR_INT : 0)};
+  uint8_t resp[8] = {0};
+
+  if (!waitToSend())
+    return;
+  SI47XX_WriteBuffer(cmd, 2);
+  if (!waitToSend())
+    return;
+  SI47XX_ReadBuffer(resp, fm ? 8 : 5);
+  if (resp[0] & STATUS_ERR)
+    return;
+
+  uint16_t raw = (uint16_t)((resp[2] << 8) | resp[3]);
+  siCurrentFreq = raw;
+  if (!st)
+    return; /* ack-only: частоту всё равно обновили */
+  st->freq = (uint32_t)raw * fDiv();
+  st->rssi = resp[4];
+  st->done = (resp[0] & STATUS_STCINT) != 0;
+  st->valid = (resp[1] & FIELD_TUNE_STATUS_RESP1_VALID) != 0;
+  st->limit = (resp[1] & FIELD_TUNE_STATUS_RESP1_SEEK_LIMIT) != 0;
+}
+
+void SI47XX_TuneStatusGet(SI47XX_SeekStatus *st) { tuneStatusRead(st, false); }
+
+static void ackStc(void) { tuneStatusRead(nullptr, true); }
+
+static bool waitTune(uint16_t timeoutMs) {
+  uint32_t started = millis();
+  SI47XX_SeekStatus st;
+  for (;;) {
+    SI47XX_TuneStatusGet(&st);
+    if (st.done)
+      return true;
+    if ((uint32_t)(millis() - started) >= timeoutMs)
+      return false;
+    delay_ms(5);
+  }
+}
+
+/* Встроенный AM-поиск по полосе: ставит приёмник на bottom и запускает
+ * seek вверх. bottom/top/spacing — ед. 10 Гц, rssiThr — дБмкВ.
+ * false — режим не AM или чип не отвечает. */
+bool SI47XX_SeekAmStart(uint32_t bottom, uint32_t top, uint32_t spacing,
+                        uint16_t rssiThr, bool up, bool wrap) {
+  if (si4732mode != SI47XX_AM)
+    return false;
+
+  /* Seek стартует от текущей частоты: с верхней границы поиск вверх
+   * сразу упёрся бы в предел, поэтому сначала встаём на bottom. */
+  uint16_t bottomK = (uint16_t)(bottom / fDiv());
+  ackStc(); /* погасить STC от прошлого поиска */
+  if (siCurrentFreq != bottomK) {
+    SI47XX_SetFreq(bottomK);
+    waitTune(150);
+    ackStc(); /* при таймауте тоже сбросить STC */
+  }
+
+  SI47XX_SetSeekAmLimits(bottom, top);
+  SI47XX_SetSeekAmSpacing(spacing);
+  SI47XX_SetSeekAmRssiThreshold(rssiThr);
+  /* SNR-порог не фильтруем (как ручной сканер BC SW): слабые станции
+   * должны попадать, а не отсекаться внутренним критерием. */
+  sendProperty(PROP_AM_SEEK_TUNE_SNR_THRESHOLD, 0);
+
+  uint8_t seekOpt = (uint8_t)((up ? FLG_SEEKUP : 0) | (wrap ? FLG_WRAP : 0));
+  uint8_t cmd[6] = {CMD_AM_SEEK_START, seekOpt, 0, 0, 0, 0};
+  cmd[5] = (uint8_t)(bottomK > 1800); /* ANTCAPL: 1 для КВ */
+  ackStc();
+  if (!waitToSend())
+    return false;
+  SI47XX_WriteBuffer(cmd, 6);
+  return true;
 }
 
 /* ─── Seek limits/spacing/thresholds ──────────────────────────── */
@@ -798,6 +894,25 @@ bool SI47XX_IsAlive(void) {
     return false;
   }
   return bbProbe();
+}
+
+/* Штатный AM без continuous-патча — для встроенного seek: AM-патч
+ * игнорирует свойства AM_SEEK_*, и поиск сразу упирается в предел.
+ * Патч не меняем: следующий SI47XX_Acquire зальёт его обратно. */
+bool SI47XX_AcquireRawAm(void) {
+  if (!isSi4732On) {
+    if (!SI47XX_IsAlive())
+      return false;
+  } else if (siResidentPatch == 0 && si4732mode == SI47XX_AM) {
+    return true;
+  } else {
+    SI47XX_PowerDown();
+  }
+  si4732mode = SI47XX_AM;
+  SI47XX_PowerUp();
+  siResidentPatch = 0;
+  s_patchOk = false; /* следующий патч проверить/докачать */
+  return true;
 }
 
 bool SI47XX_CheckCTS(void) {

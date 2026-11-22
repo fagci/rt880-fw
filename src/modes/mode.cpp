@@ -11,8 +11,6 @@ static Mode *current = nullptr;
 static Mode *next = nullptr;
 static bool s_displayOff;
 static bool s_keyLocked;
-static KEY_Code_t s_wakeKey;
-static bool s_wakeSuppress;
 
 void Mode_Switch(Mode &mode) {
   next = &mode;
@@ -64,20 +62,14 @@ uint16_t Mode_RenderInterval() {
 bool Mode_KeyLocked(void) { return s_keyLocked; }
 
 void Mode_Key(KEY_Code_t key, Key_State_t state) {
-  /* Дисплей выключен длинным EXIT: любое нажатие только включает
-   * подсветку и гасится до отпускания, чтобы не сработало действие. */
+  /* Долгий EXIT гасит дисплей и подсветку клавиатуры. Пока они погашены,
+   * остальные клавиши игнорируются; включает обратно только повторный
+   * долгий EXIT. */
   if (s_displayOff) {
-    if (state == KEY_EVT_PRESS) {
-      st7789_backlight_on();
+    if (state == KEY_LONG_PRESSED && key == KEY_EXIT) {
       s_displayOff = false;
-      s_wakeKey = key;
-      s_wakeSuppress = true;
-      return;
-    }
-    if (s_wakeSuppress && key == s_wakeKey) {
-      if (state == KEY_EVT_RELEASE)
-        s_wakeSuppress = false;
-      return;
+      st7789_backlight_on();
+      keyboard_backlight_set(true);
     }
     return;
   }
@@ -90,10 +82,11 @@ void Mode_Key(KEY_Code_t key, Key_State_t state) {
   if (s_keyLocked)
     return;
 
-  /* Долгий EXIT — выключить дисплей (подсветку). */
+  /* Долгий EXIT — выключить дисплей и подсветку клавиатуры. */
   if (state == KEY_LONG_PRESSED && key == KEY_EXIT) {
     s_displayOff = true;
     st7789_backlight_off();
+    keyboard_backlight_set(false);
     return;
   }
 
