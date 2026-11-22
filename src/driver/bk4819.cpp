@@ -703,14 +703,47 @@ uint16_t BK4819_GetFilter() {
          (FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
 }
 
+static bool s_filterOverrideOn;
+static Filter s_filterOverride;
+
+void BK4819_SelectFilter(Filter flt) {
+  const uint16_t all = FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800;
+  g_chips[0].gpioOutState &= ~all;
+  g_chips[0].gpioOutState |= flt;
+
+  BK4819_SelectChip(0);
+  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
+  if (g_bk != &g_chips[0]) {
+    BK4819_SelectChip(1);
+  }
+}
+
+void BK4819_SetFilterOverride(Filter flt, bool on) {
+  s_filterOverrideOn = on;
+  s_filterOverride = flt;
+  lastBand = BAND_UNSET; /* при возврате в AUTO авто-выбор сработает сразу */
+  if (on)
+    BK4819_SelectFilter(flt);
+}
+
+void BK4819_InvalidateFilterCache(void) { lastBand = BAND_UNSET; }
+
 void BK4819_SelectFilterByFrequency(uint32_t f) {
+  const uint16_t all = FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800;
+
+  if (s_filterOverrideOn) {
+    /* В ручном режиме частота фильтр не меняет. */
+    if ((g_chips[0].gpioOutState & all) != s_filterOverride)
+      BK4819_SelectFilter(s_filterOverride);
+    return;
+  }
+
   BandState_t band = getBand(f);
   if (band == lastBand) {
     return;
   }
   lastBand = band;
-  // Определяем маску нужного фильтра
-  uint16_t flt;
+  Filter flt;
   if (band == BAND_HF)
     flt = FILTER_HF;
   else if (band == BAND_VHF)
@@ -720,19 +753,7 @@ void BK4819_SelectFilterByFrequency(uint32_t f) {
   else
     flt = FILTER_800;
 
-  // Сбрасываем все фильтры и включаем только нужный
-  g_chips[0].gpioOutState &=
-      ~(FILTER_HF | FILTER_VHF | FILTER_UHF | FILTER_800);
-  g_chips[0].gpioOutState |= flt;
-
-  // Пишем в регистр чипа 0
-  BK4819_SelectChip(0);
-  BK4819_WriteRegister(BK4819_REG_33, g_chips[0].gpioOutState);
-
-  // Восстанавливаем активный чип, если нужно
-  if (g_bk != &g_chips[0]) {
-    BK4819_SelectChip(1);
-  }
+  BK4819_SelectFilter(flt);
 }
 
 void BK4819_ToggleFilter(Filter flt, bool on) {
@@ -851,7 +872,11 @@ void BK4819_EnableFrequencyScanEx(FreqScanTime time) {
 }
 
 void BK4819_EnableFrequencyScanEx2(FreqScanTime time, uint16_t hz) {
-  BK4819_WriteRegister(BK4819_REG_32, (time << 14) | (hz << 1) | 1);
+  /* REG_32: <15:14> время скана, <13:1> порог, <0> enable.
+   * hz — младшие 14 бит как в UV-K5/стоке: 0x244 (по умолчанию), 0x580.
+   * Раньше здесь был hz << 1, из-за чего в регистр уходило 0x489 вместо
+   * 0x245 и счётчик не срабатывал. */
+  BK4819_WriteRegister(BK4819_REG_32, (time << 14) | (hz & 0x3FFF) | 1);
 }
 
 void BK4819_DisableFrequencyScan(void) {

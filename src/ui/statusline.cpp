@@ -1,13 +1,15 @@
 /* Статуслайн — нативные LVGL-виджеты, создаются один раз и живут
  * поверх всех режимов. Обновляются только при изменении значений.
  *
- * Слева: индикатор фильтров (HF/VHF/UHF/800, активные — цветом).
- * Справа: батарея (рамка + заливка + напряжение).
+ * Слева: заголовок режима.
+ * Справа: A1/A2 — положение реле антенны (PF0/K200), напряжение
+ * и батарея (рамка + заливка).
  */
 #include "statusline.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../helper/measurements.h"
+#include "../modes/mode.h"
 #include "graphics.h"
 #include "lvgl.h"
 #include "printf.h"
@@ -26,8 +28,12 @@ static lv_obj_t *s_batFrame;
 static lv_obj_t *s_batNub;
 static lv_obj_t *s_batFill;
 static lv_obj_t *s_batText;
+static lv_obj_t *s_antText;
+static lv_obj_t *s_lockText;
 static lv_obj_t *s_title;
 static uint16_t s_prevBatDraw;
+static bool s_antShown;
+static bool s_lockShown;
 static const char *s_titleText = "";
 
 static inline lv_color_t lvc(Color c) {
@@ -85,6 +91,15 @@ static void build(void) {
   s_batFill = mkBox(s_root, BAT_X + 2, BAT_Y + 2, 0, BAT_H - 4, C_GREEN,
                     LV_OPA_COVER, 1);
   s_batText = mkText(BAT_X - 8 - 30, 30, LV_TEXT_ALIGN_RIGHT, C_GRAY);
+  /* A1 — только второй разъём (PF0 LOW), A2 — добавлена основная. */
+  s_antText = mkText(132, 14, LV_TEXT_ALIGN_LEFT, C_GRAY);
+  s_antShown = ant_is_main();
+  if (s_antText)
+    lv_label_set_text_static(s_antText, s_antShown ? "A2" : "A1");
+  s_lockText = mkText(70, 30, LV_TEXT_ALIGN_LEFT, C_YELLOW);
+  s_lockShown = Mode_KeyLocked();
+  if (s_lockText)
+    lv_label_set_text_static(s_lockText, s_lockShown ? "LOCK" : " ");
   s_title = mkText(8, 120, LV_TEXT_ALIGN_LEFT, C_GRAY);
   if (s_title)
     lv_label_set_text_static(s_title, s_titleText);
@@ -95,7 +110,8 @@ static void build(void) {
 void STATUSLINE_ApplyTheme(void) {
   if (s_root)
     lv_obj_del(s_root);
-  s_root = s_batFrame = s_batNub = s_batFill = s_batText = s_title = NULL;
+  s_root = s_batFrame = s_batNub = s_batFill = s_batText = s_antText =
+      s_lockText = s_title = NULL;
 }
 
 void STATUSLINE_SetTitle(const char *t) {
@@ -109,6 +125,20 @@ void STATUSLINE_render(void) {
     build();
   if (!s_root)
     return;
+
+  bool antMain = ant_is_main();
+  if (antMain != s_antShown) {
+    s_antShown = antMain;
+    if (s_antText)
+      lv_label_set_text_static(s_antText, antMain ? "A2" : "A1");
+  }
+
+  bool locked = Mode_KeyLocked();
+  if (locked != s_lockShown) {
+    s_lockShown = locked;
+    if (s_lockText)
+      lv_label_set_text_static(s_lockText, locked ? "LOCK" : " ");
+  }
 
   uint16_t bat = battery_voltage_cv();
   /* гистерезис 2 cV: без него ADC-шум дёргает перерисовку каждый кадр */

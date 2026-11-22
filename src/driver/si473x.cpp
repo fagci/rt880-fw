@@ -489,6 +489,21 @@ void RSQ_GET(void) {
   SI47XX_ReadBuffer(rsqStatus.raw, si4732mode == SI47XX_FM ? 8 : 6);
 }
 
+/* RSSI текущей станции (дБмкВ, 0..127). Для AM/SSB-патча — AM_RSQ_STATUS
+ * (6 байт ответа), для FM — FM_RSQ_STATUS (8 байт). INTACK не ставим:
+ * флаги прерываний не трогаем. Ждём CTS после команды, затем читаем ответ. */
+uint8_t SI47XX_GetRssi(void) {
+  bool fm = (si4732mode == SI47XX_FM);
+  uint8_t cmd[2] = {(uint8_t)(fm ? CMD_FM_RSQ_STATUS : CMD_AM_RSQ_STATUS), 0};
+  uint8_t resp[8] = {0};
+  waitToSend();
+  SI47XX_WriteBuffer(cmd, 2);
+  if (!waitToSend())
+    return 0;
+  SI47XX_ReadBuffer(resp, fm ? 8 : 6);
+  return resp[4];
+}
+
 /* ─── Power up/down ────────────────────────────────────────────── */
 void SI47XX_PowerUp(void) {
   /* If chip is not responding, skip power up to avoid busy-wait */

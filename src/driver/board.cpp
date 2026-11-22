@@ -111,6 +111,17 @@ void audio_path_set(uint8_t source) {
     gpio_pin_clr(&PIN_ANC_POWER);
 }
 
+static bool s_antMain;
+
+/* PF0/K200: HIGH — основной вход на ВЧ-тракт, LOW — на V/U. */
+void ant_sw(bool hf) {
+  s_antMain = hf;
+  gpio_pin_write(&PIN_ANT_SWITCH, hf);
+}
+
+bool ant_is_main(void) { return s_antMain; }
+
+
 // board.h — добавить пин как аналоговый (без pull):
 // PC2 = ADC1_IN12 на AT32F423 (проверь datasheet пин-маппинг)
 
@@ -197,10 +208,12 @@ void board_init(void) {
   gpio_pin_init_output(&PIN_ANC_POWER);
   gpio_pin_init_output(&PIN_RX_TS);
   gpio_pin_init_output(&PIN_FM_POWER);
+  gpio_pin_init_output(&PIN_ANT_SWITCH);
   gpio_pin_clr(&PIN_AF_MUTE);
   gpio_pin_clr(&PIN_ANC_POWER);
   gpio_pin_clr(&PIN_RX_TS);
   gpio_pin_clr(&PIN_FM_POWER);
+  ant_sw(false); /* по умолчанию V/U-тракт, как в стоке */
 
   gpio_pin_init_input(&PIN_KEY_M1, GPIO_PULL_UP);
   gpio_pin_init_input(&PIN_KEY_M2, GPIO_PULL_UP);

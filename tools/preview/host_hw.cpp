@@ -23,6 +23,10 @@ volatile uint32_t tick_ms;
 uint16_t g_bat_cv = 372;
 extern "C" uint16_t battery_voltage_cv(void) { return g_bat_cv; }
 extern "C" void audio_path_set(uint8_t) {}
+
+static bool g_ant_main;
+extern "C" void ant_sw(bool hf) { g_ant_main = hf; }
+extern "C" bool ant_is_main(void) { return g_ant_main; }
 bool g_led_rx;
 void led_rx_set(bool on) { g_led_rx = on; }
 
@@ -53,6 +57,8 @@ void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 void st7789_start_pixels(void) {}
 void st7789_write_data16(uint16_t d) { put_px(d); }
 void st7789_cs_low(void) {}
+void st7789_backlight_off(void) {}
+void st7789_backlight_on(void) {}
 void st7789_cs_high(void) {}
 void st7789_dma_start(const uint8_t *buf, uint16_t n) { /* RGB565 big-endian поток */
   for (uint16_t i = 0; i + 1 < n; i += 2)
@@ -86,6 +92,7 @@ uint16_t host_display_px(int x, int y) {
 
 /* ── имитация приёмника ── */
 static uint32_t g_tuneF = 14550000;
+static uint32_t g_siF = 958000;
 static bool g_sql;
 static uint32_t g_noiseSeed = 12345;
 static uint32_t rnd() { g_noiseSeed = g_noiseSeed * 1664525u + 1013904223u; return g_noiseSeed >> 8; }
@@ -93,7 +100,9 @@ static uint32_t rnd() { g_noiseSeed = g_noiseSeed * 1664525u + 1013904223u; retu
 uint16_t host_signal_rssi(uint32_t f) {
   static const struct { uint32_t f; int dbm; } SIG[] = {
       {14550000, -62}, {14800000, -90}, {43312500, -58}, {43350000, -85},
-      {43400000, -75}, {16309300, -70}, {16200000, -88}, {17025000, -80}};
+      {43400000, -75}, {16309300, -70}, {16200000, -88}, {17025000, -80},
+      /* вещательные КВ: 31m, 25m, 19m (ед. 10 Гц) */
+      {958000, -62}, {965000, -85}, {1173000, -68}, {1530000, -72}};
   int dbm = -108 + (int)(rnd() % 6);
   for (auto &s : SIG) {
     int d = (int)(f > s.f ? f - s.f : s.f - f);
@@ -109,6 +118,9 @@ void BK4819_SetAFC(uint8_t) {}
 void BK4819_SetAGC(bool, uint8_t) {}
 void BK4819_ToggleAFDAC(bool) {}
 void BK4819_ToggleFilter(Filter, bool) {}
+void BK4819_SelectFilter(Filter) {}
+void BK4819_SetFilterOverride(Filter, bool) {}
+void BK4819_InvalidateFilterCache(void) {}
 void BK4819_SetModulation(ModulationType) {}
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t) {}
 void BK4819_SetupSquelch(SQL, uint8_t, uint8_t) {}
@@ -125,7 +137,13 @@ bool SI47XX_Acquire(SI47XX_MODE) { return true; }
 void SI47XX_Init(void) {}
 void SI47XX_SetAutomaticGainControl(uint8_t, uint8_t) {}
 void SI47XX_SetVolume(uint8_t) {}
-void SI47XX_TuneTo(uint32_t) {}
+void SI47XX_SetBandwidth(SI47XX_FilterBW, bool) {}
+void SI47XX_TuneTo(uint32_t f) { g_siF = f; }
+uint8_t SI47XX_GetRssi(void) {
+  int dbm = (int)host_signal_rssi(g_siF) / 2 - 160;
+  int uV = dbm + 107; /* dBm → дБмкВ (50 Ом) */
+  return uV < 0 ? 0 : (uint8_t)(uV > 127 ? 127 : uV);
+}
 }
 
 /* режим «Radio» в превью не нужен — заглушка для ссылки из vfo.cpp */

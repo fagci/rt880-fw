@@ -8,7 +8,7 @@ CXXFLAGS := -std=gnu++17 -O1 -g -fpermissive -w -I stub -I $(SRC) -I $(SRC)/exte
   -DLV_CONF_INCLUDE_SIMPLE -D_sbrk=host_unused_sbrk -DHOST_PREVIEW
 CFLAGS := -std=gnu11 -O1 -g -w -I stub -I $(SRC) -I $(SRC)/external/lvgl -DLV_CONF_INCLUDE_SIMPLE -DHOST_PREVIEW
 
-APP := $(SRC)/radio.cpp $(SRC)/modes/mode.cpp $(SRC)/modes/vfo.cpp $(SRC)/modes/scanner.cpp $(SRC)/modes/analyser.cpp \
+APP := $(SRC)/radio.cpp $(SRC)/modes/mode.cpp $(SRC)/modes/vfo.cpp $(SRC)/modes/scanner.cpp $(SRC)/modes/bc_scanner.cpp $(SRC)/modes/bc_all.cpp $(SRC)/modes/analyser.cpp \
   $(SRC)/modes/fc.cpp $(SRC)/modes/loot_screen.cpp $(SRC)/ui/statusline.cpp $(SRC)/ui/graphics.cpp \
   $(SRC)/ui/numval.cpp $(SRC)/ui/spectrum.cpp $(SRC)/ui/lv_port.cpp $(SRC)/helper/lootlist.cpp \
   $(SRC)/helper/measurements.cpp $(SRC)/helper/log.cpp

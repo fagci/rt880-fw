@@ -86,8 +86,7 @@ public:
     BK4819_SquelchType(SQUELCH_RSSI_NOISE_GLITCH);
 
     onRangeChanged();
-    FillRect(0, SPECTRUM_Y + SP_H, LCD_WIDTH,
-             LCD_HEIGHT - (SPECTRUM_Y + SP_H), C_BLACK);
+    WF_Clear(SPECTRUM_Y + SP_H);
   }
 
   void update() override {

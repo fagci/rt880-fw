@@ -15,7 +15,7 @@ uint8_t currentVfo = 0;
 
 Filter filters[] = {FILTER_HF, FILTER_VHF, FILTER_UHF, FILTER_800};
 const char *FILTER_NAMES[] = {"HF", "VHF", "UHF", "800"};
-uint8_t filterIndex = 0;
+int8_t filterIndex = -1; /* -1 = AUTO, 0..3 = filters[] */
 
 const uint16_t StepFrequencyTable[STEP_COUNT] = {
     2,   5,    50,   100,  250,  500,   625,   833,
@@ -287,6 +287,11 @@ static void applyVfo(bool precise) {
  * отличном от активного (один кристалл = один частотный тракт).
  * По открывшемуся шумодаву монитор становится активным VFO. */
 static void monitorTick(void) {
+  /* На SI BK-мониторинг только мешает: перестройка BK даёт щелчки.
+   * Пока слушаем SI — RSSI/шумодав BK не трогаем. */
+  if (vfos[currentVfo].radio == RADIO_SI4732)
+    return;
+
   uint32_t now = millis();
   if (now - s_lastMon < MON_DWELL_MS)
     return;
@@ -422,6 +427,33 @@ void Radio_ScanAudio(bool on) {
   gpio_pin_write(&PIN_AF_MUTE, on);
   afMuteOn = on;
   led_rx_set(on);
+}
+
+/* Звук SI4732 для режимов, которые сами управляют прослушиванием (BC-сканер).
+ * Шумодава у SI нет: on=true — громкость 63 и AF_MUTE открыт, on=false —
+ * громкость 0. Учёт siMuted/afMuteOn общий с applyMute, иначе VFO после
+ * выхода видел бы рассинхрон и оставлял SI замьюченным. */
+void Radio_SiAudio(bool on) {
+  if (vfos[currentVfo].radio != RADIO_SI4732)
+    return;
+  SI47XX_SetVolume(on ? 63 : 0);
+  siMuted = !on;
+  gpio_pin_write(&PIN_AF_MUTE, on);
+  afMuteOn = on;
+  led_rx_set(on);
+}
+
+void Radio_ToggleSquelchForce(void) {
+  static uint8_t saved = 4;
+  static bool forced;
+  if (forced) {
+    forced = false;
+    Radio_SetSquelch(saved ? saved : 4);
+  } else {
+    saved = squelchLevel;
+    forced = true;
+    Radio_SetSquelch(0); /* 0 = всегда открыт */
+  }
 }
 
 void Radio_SetSquelch(uint8_t level) {
@@ -583,9 +615,21 @@ void Radio_PrevStep(void) {
   v->step = static_cast<Step>((v->step + STEP_COUNT - 1) % STEP_COUNT);
 }
 
-void Radio_NextFilter(void) { filterIndex = (filterIndex + 1) % 4; }
+/* AUTO → HF → VHF → UHF → 800 → AUTO. В AUTO фильтр выбирается по частоте
+ * (BK4819_SelectFilterByFrequency), в ручном — держится до следующего шага. */
+void Radio_NextFilter(void) {
+  filterIndex = (filterIndex >= 3) ? -1 : filterIndex + 1;
+  if (filterIndex < 0) {
+    BK4819_SetFilterOverride(filters[0], false);
+    BK4819_SelectFilterByFrequency(vfos[currentVfo].rxF);
+  } else {
+    BK4819_SetFilterOverride(filters[filterIndex], true);
+  }
+}
 
 void Radio_ToggleFilter(void) {
+  if (filterIndex < 0)
+    return; /* в AUTO ручное выключение не имеет смысла */
   BK4819_ToggleFilter(filters[filterIndex],
                       !(BK4819_GetFilter() & filters[filterIndex]));
 }

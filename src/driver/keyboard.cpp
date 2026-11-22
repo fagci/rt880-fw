@@ -64,7 +64,6 @@ static bool long_sent[TOTAL_KEYS];
 static bool key_debounced[TOTAL_KEYS];
 
 static uint16_t key_raw_matrix;
-static bool key_raw_direct[DIRECT_COUNT];
 
 static uint8_t col_idx;
 
@@ -186,14 +185,14 @@ void keyboard_scan_tick(void) {
       {2850, 3100, KEY_ALARM},
   };
   for (int i = 0; i < ADC_COUNT; i++) {
-    key_raw_direct[i] = ADC_KEYS[i].lo <= adc && adc <= ADC_KEYS[i].hi;
-    process_key(ADC_BASE + i, ADC_KEYS[i].key, key_raw_direct[i]);
+    bool pressed = ADC_KEYS[i].lo <= adc && adc <= ADC_KEYS[i].hi;
+    process_key(ADC_BASE + i, ADC_KEYS[i].key, pressed);
   }
 
   /* 5. Прямые кнопки — читаем и обрабатываем тут же */
   for (int i = 0; i < DIRECT_COUNT; i++) {
-    key_raw_direct[i] = !gpio_pin_read(DIRECT[i].pin); /* LOW = нажата */
-    process_key(DIRECT_BASE + i, DIRECT[i].key, key_raw_direct[i]);
+    bool pressed = !gpio_pin_read(DIRECT[i].pin); /* LOW = нажата */
+    process_key(DIRECT_BASE + i, DIRECT[i].key, pressed);
   }
 }
 

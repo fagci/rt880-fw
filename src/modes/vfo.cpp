@@ -23,6 +23,8 @@
 #include "mode.h"
 #include "radio.h"
 #include "scanner.h"
+#include "bc_all.h"
+#include "bc_scanner.h"
 #include "fc.h"
 #include "analyser.h"
 #include "lvgl.h"
@@ -73,6 +75,7 @@ static bool s_prevActive[DEVICE_VFO_COUNT];
 static uint8_t s_prevMod[DEVICE_VFO_COUNT];
 static uint8_t s_prevRadio[DEVICE_VFO_COUNT];
 static bool s_prevMon[DEVICE_VFO_COUNT];
+static int8_t s_prevFlt[DEVICE_VFO_COUNT];
 static uint8_t s_prevStep = 0xFF;
 static uint8_t s_prevRssi[DEVICE_VFO_COUNT];
 static uint8_t s_prevExtra[DEVICE_VFO_COUNT];
@@ -278,17 +281,22 @@ public:
       if (s_badgeLbl[i] &&
           (first || vfos[i].modulation != s_prevMod[i] ||
            vfos[i].monitor != s_prevMon[i] ||
-           vfos[i].radio != s_prevRadio[i])) {
-        const char *bdg = "  ";
-        if (vfos[i].monitor)
-          bdg = vfos[i].radio == RADIO_SI4732 ? "MSI" : "MBK";
+           vfos[i].radio != s_prevRadio[i] || filterIndex != s_prevFlt[i])) {
+        static const char *const BADGE[2][5] = {
+            {"BK AUTO", "BK HF", "BK VHF", "BK UHF", "BK 800"},
+            {"MBK AUTO", "MBK HF", "MBK VHF", "MBK UHF", "MBK 800"},
+        };
+        const char *bdg;
+        if (vfos[i].radio == RADIO_SI4732)
+          bdg = vfos[i].monitor ? "MSI" : "SI";
         else
-          bdg = vfos[i].radio == RADIO_SI4732 ? "SI" : "BK";
+          bdg = BADGE[vfos[i].monitor ? 1 : 0][filterIndex + 1];
         lv_label_set_text_static(s_badgeLbl[i], bdg);
         lv_label_set_text_static(s_modLbl[i], MOD_NAMES[vfos[i].modulation]);
         s_prevMod[i] = vfos[i].modulation;
         s_prevMon[i] = vfos[i].monitor;
         s_prevRadio[i] = vfos[i].radio;
+        s_prevFlt[i] = filterIndex;
       }
 
       /* название диапазона плана (40m, AIR, FM BC...) */
@@ -379,15 +387,20 @@ public:
       case KEY_5:
         Mode_Switch(MODE_ANALYSER);
         return true;
+      case KEY_6:
+        Mode_Switch(MODE_BC_SCANNER);
+        return true;
+      case KEY_3:
+        Mode_Switch(MODE_BC_ALL);
+        return true;
       case KEY_0:
         Mode_Switch(MODE_RADIO);
         return true;
       case KEY_SIDE1: /* группа диапазонов: вещание → SSB → службы */
         Radio_NextGroup();
         return true;
-      case KEY_SIDE2: /* светлая/тёмная тема (глобально) */
-        gThemeLight = !gThemeLight;
-        Mode_Switch(*Mode_Current()); /* пересбор экрана с новой темой */
+      case KEY_SIDE2: /* фильтр: AUTO → HF → VHF → UHF → 800 */
+        Radio_NextFilter();
         return true;
       case KEY_8: /* список находок */
         LOOTLIST_OpenFrom(MODE_VFO);
@@ -435,10 +448,16 @@ public:
     case KEY_DOWN:
       Radio_TuneStep(-1);
       return true;
-    case KEY_SIDE1: /* следующий диапазон */
+    case KEY_SIDE1: /* BK: принудительно открыть/закрыть шумодав; SI: диапазон */
+      if (vfos[currentVfo].radio != RADIO_SI4732) {
+        Radio_ToggleSquelchForce();
+        return true;
+      }
       Radio_NextBand(+1);
       return true;
-    case KEY_SIDE2: /* предыдущий диапазон */
+    case KEY_SIDE2: /* на BK диапазоны не листаем; SI — предыдущий */
+      if (vfos[currentVfo].radio != RADIO_SI4732)
+        return true;
       Radio_NextBand(-1);
       return true;
     case KEY_STAR: /* шаг перестройки */

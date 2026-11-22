@@ -593,6 +593,7 @@ void SI47XX_SetSsbCapacitor(uint16_t v);
 void SI47XX_TuneTo(uint32_t f);
 void SI47XX_SetVolume(uint8_t volume);
 void SI47xx_GetStatus(uint8_t intack, uint8_t cancel);
+uint8_t SI47XX_GetRssi(void); /* RSSI, дБмкВ (0..127); AM/SSB — AM_RSQ_STATUS */
 
 bool SI47XX_IsAlive(void);
 bool SI47XX_UsesHwI2C(void); /* true — шина аппаратная (I2C1), false — бит-бэнг */

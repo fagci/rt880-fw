@@ -15,17 +15,14 @@
  *
  * Находки копятся в списке loot (helper/lootlist): каждый подтверждённый
  * сигнал — запись с частотой, длительностью, пиком. Чёрный список
- * (blacklist) сканер пропускает всегда, белый (whitelist) — пока не
- * включён режим мониторинга.
+ * (blacklist) сканер пропускает всегда, белый (whitelist) — тоже.
  *
- * Клавиши: 0-9 / '*' — ввод границы (фокус — '#' короткий), MENU — захватить
- * частоту в VFO и выйти, MENU длинный — список находок, EXIT — выход,
- * '#' длинный — пауза/продолжить (в паузе UP/DOWN — ручная перестройка),
- * SIDE1 — в чёрный список последнюю находку (и дальше), SIDE1 длинный —
- * водопад вкл/выкл, SIDE2 — в белый список, SIDE2 длинный — мониторинг
- * (слушать и белые), UP/DOWN — шаг сканирования, '*' длинный — выдержка на
- * частоте (скорость сканирования). Подчёркнута та граница диапазона,
- * которую правим ('#' переключает).
+ * Клавиши: 5 — ввод границ (сначала начало, затем конец),
+ * MENU — захватить частоту в VFO и выйти, MENU длинный — список находок,
+ * EXIT — выход, SIDE1 — в чёрный список последнюю находку (и дальше),
+ * SIDE1 длинный — водопад вкл/выкл, SIDE2 — в белый список,
+ * UP/DOWN — шаг сканирования, 1/7 — выдержка на частоте (скорость
+ * сканирования), 3/9 — шаг сканирования.
  */
 #include "scanner.h"
 #include "../driver/board.h"
@@ -63,7 +60,6 @@
 static FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
 
 static NumVal_t numVal[2];
-static bool endFSel;
 static uint8_t savedVfo;
 static uint8_t scanVfo;    /* VFO, которым сканируем (BK) */
 static uint32_t savedFreq; /* частота сканирующего VFO на входе */
@@ -103,7 +99,12 @@ static uint32_t lastWfRender;
 static void onRangeChanged() {
   WF_Reset();
   /* чистим всё под статусом: мусор прошлого экрана и старый водопад */
-  FillRect(0, UI_STATUS_H, LCD_WIDTH, LCD_HEIGHT - UI_STATUS_H, C_BLACK);
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
+  if (waterfall)
+    WF_Clear(UI_WATERFALL_Y);
+  else
+    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
+             C_BLACK);
   SP_Init(&range, StepFrequencyTable[vfos[currentVfo].step],
           range.end - range.start);
   curF = range.start;
@@ -131,10 +132,24 @@ static void changeStep(int8_t d) {
 static void onStartEntered(uint32_t f) {
   range.start = f;
   onRangeChanged();
+  NumVal_StartEdit(&numVal[1]); /* сразу переходим к правой границе */
 }
 static void onEndEntered(uint32_t f) {
   range.end = f;
   onRangeChanged();
+}
+
+static NumVal_t *editingNumVal() {
+  if (NumVal_IsEditing(&numVal[0]))
+    return &numVal[0];
+  if (NumVal_IsEditing(&numVal[1]))
+    return &numVal[1];
+  return nullptr;
+}
+
+static void beginRangeEdit() {
+  NumVal_SetValue(&numVal[0], range.start);
+  NumVal_StartEdit(&numVal[0]);
 }
 
 static void initNumVals() {
@@ -328,18 +343,8 @@ public:
   void render() override {
     STATUSLINE_render();
 
-    bool editStart = NumVal_IsEditing(&numVal[0]);
-    bool editEnd = NumVal_IsEditing(&numVal[1]);
     NumVal_Render(&numVal[0]);
     NumVal_Render(&numVal[1]);
-    /* Пока правим одну границу, вторую прячем: длинный ввод не должен
-     * заходить на соседнее поле. */
-    if (editStart)
-      PrintfT(UI_RIGHT_X, UI_RANGE_BASE,
-              text_style(C_WHITE, C_BLACK, POS_R, F_M), "");
-    if (editEnd)
-      PrintfT(UI_LEFT_X, UI_RANGE_BASE,
-              text_style(C_WHITE, C_BLACK, POS_L, F_M), "");
 
     uint32_t now = millis();
     if (now - lastSpRender >= 300) {
@@ -350,30 +355,15 @@ public:
       sweepDone = false;
       if (waterfall)
         WF_Render(UI_WATERFALL_Y, true);
+      SP_Begin(); /* пересчитать автоуровни по завершённому проходу */
     }
 
-    /* Подчёркивание выбранной границы — ровно под значением. Рисуется
-     * ПРЯМОЙ заливкой, а LVGL про неё не знает: любая его перерисовка
-     * пересекающейся области закрашивает её. Поэтому каждый кадр. */
-    {
-      const int16_t uy = UI_RANGE_UNDERLINE_Y;
-      const int16_t ws = UI_FreqWidth(range.start);
-      const int16_t we = UI_FreqWidth(range.end);
-      FillRect(UI_LEFT_X, uy, ws, UI_RANGE_UNDERLINE_H,
-               endFSel ? C_BLACK : C_YELLOW);
-      FillRect(UI_RIGHT_X - we, uy, we, UI_RANGE_UNDERLINE_H,
-               endFSel ? C_YELLOW : C_BLACK);
-    }
-
-    /* шаг между полями границ; на время ввода прячем */
+    /* шаг между полями границ; при вводе не прячем — принятая граница
+     * остаётся видимой рядом с редактором */
     uint32_t stp = StepFrequencyTable[vfos[currentVfo].step];
-    TextStyle topStyle = text_style(C_YELLOW, C_BLACK, POS_C, F_S);
-    if (editStart || editEnd) {
-      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "");
-    } else {
-      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%u.%02luk",
-              (unsigned)(stp / 100), (unsigned)(stp % 100));
-    }
+    PrintfT(LCD_XCENTER, UI_RANGE_BASE,
+            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%u.%02luk",
+            (unsigned)(stp / 100), (unsigned)(stp % 100));
 
     /* Строка 1: состояние | текущая частота | скорость. */
     const char *state = !scanning ? "PAUSE" : (isListening ? "HOLD" : "SCAN");
@@ -427,16 +417,15 @@ public:
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
-    if (NumVal_Key(&numVal[endFSel ? 1 : 0], k, state))
-      return true;
+    /* пока идёт ввод — все клавиши редактору (сначала начало, затем конец) */
+    if (NumVal_t *ev = editingNumVal()) {
+      if (NumVal_Key(ev, k, state))
+        return true;
+      return false;
+    }
 
     if (state == KEY_LONG_PRESSED) {
       switch (k) {
-      case KEY_HASH: /* пауза/продолжить */
-        scanning = !scanning;
-        isListening = false;
-        setAudio(!scanning); /* в паузе слышно текущую частоту */
-        return true;
       case KEY_MENU: /* список находок */
         LOOTLIST_OpenFrom(MODE_SCANNER);
         return true;
@@ -447,12 +436,6 @@ public:
           FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
                    C_BLACK);
         }
-        return true;
-      case KEY_SIDE2: /* мониторинг: слушать и белый список */
-        monitorMode = !monitorMode;
-        return true;
-      case KEY_STAR: /* выдержка на частоте (скорость скана) */
-        dwellIdx = (dwellIdx + 1) % DWELL_N;
         return true;
       case KEY_5: /* сброс пикового удержания */
         SP_ResetPeaks();
@@ -475,10 +458,6 @@ public:
     case KEY_EXIT:
       Mode_Switch(MODE_VFO);
       return true;
-    case KEY_HASH:
-      if (!NumVal_IsEditing(&numVal[endFSel ? 1 : 0]))
-        endFSel = !endFSel;
-      return true;
     case KEY_SIDE1: /* в чёрный список и дальше */
       if (gLastActiveLoot) {
         LOOT_BlacklistLast();
@@ -491,8 +470,22 @@ public:
         releaseHold();
       }
       return true;
-    case KEY_STAR:
-      NumVal_StartEdit(&numVal[endFSel ? 1 : 0]);
+    case KEY_5: /* ввод границ: сначала начало, затем конец */
+      beginRangeEdit();
+      return true;
+    case KEY_1: /* выдержка на частоте + */
+      if (dwellIdx + 1 < (int)DWELL_N)
+        dwellIdx++;
+      return true;
+    case KEY_7: /* выдержка на частоте − */
+      if (dwellIdx > 0)
+        dwellIdx--;
+      return true;
+    case KEY_3: /* шаг сканирования + */
+      changeStep(+1);
+      return true;
+    case KEY_9: /* шаг сканирования − */
+      changeStep(-1);
       return true;
     case KEY_UP:
       if (!scanning) { /* ручная перестройка в паузе */

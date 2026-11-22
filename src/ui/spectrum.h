@@ -6,8 +6,6 @@
 #include <stdint.h>
 
 #define SP_MAX_POINTS 240
-#define WF_XN 120
-#define WF_YN 1 /* нужна только строка wf[0]: временный буфер палитры */
 
 typedef struct {
   int16_t min;
@@ -25,6 +23,7 @@ void SP_Next(void);
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh);
 void WF_Render(uint8_t y, bool wfDown);
 void WF_Reset(void);
+void WF_Clear(uint8_t y); /* залить зону водопада цветом пола, не чёрным */
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh);
 
 DBmRange SP_GetGradientRange(void);

@@ -1,7 +1,7 @@
 /* FC — частотомер BK4819 («быстрый скан»).
  *
  * Аппаратный счётчик BK4819 ловит несущую передатчика на всём диапазоне за
- * 50–200 мс — гораздо быстрее RSSI-развёртки, но находит только активные
+ * 0.2–1.6 с — гораздо быстрее RSSI-развёртки, но находит только активные
  * передатчики. Диапазонный фильтр платы (VHF/UHF/800) переключается по
  * частоте через BK4819_SelectFilterByFrequency — тот же код, что у VFO и
  * сканера (раньше стояли пины BK-K5, на RT-880 другие маски).
@@ -48,11 +48,12 @@
 struct FcBand {
   const char *name;
   uint32_t rep, lo, hi; /* ед. 10 Гц */
+  Filter filter;
 };
 static const FcBand BANDS[] = {
-    {"VHF", 14500000, 3000000, 24000000},
-    {"UHF", 43300000, 24000000, 80000000},
-    {"800", 90000000, 80000000, 130000000},
+    {"VHF", 14500000, 3000000, 24000000, FILTER_VHF},
+    {"UHF", 43300000, 24000000, 80000000, FILTER_UHF},
+    {"800", 90000000, 80000000, 130000000, FILTER_800},
 };
 #define BAND_N (sizeof(BANDS) / sizeof(BANDS[0]))
 
@@ -104,7 +105,10 @@ static void invalidateLines(void) {
 
 static void selectBand(void) {
   BK4819_SelectChip(0);
-  BK4819_SelectFilterByFrequency(BANDS[fcCtx.band].rep);
+  /* FC сам знает свой диапазон: ручной фильтр из VFO здесь не подходит. */
+  BK4819_SelectFilter(BANDS[fcCtx.band].filter);
+  /* Антенное реле в FC не трогаем: иначе оно щёлкает на каждой смене
+   * диапазона. Для 800 МГц пользователь сам ставит A2 коротким ALARM. */
 }
 
 static void enableScan() {
@@ -177,7 +181,7 @@ public:
     fcCtx.band = 0;
     fcCtx.scanSpeed = 0;
     fcCtx.hz = 0x244;
-    fcCtx.bandAutoSwitch = true;
+    fcCtx.bandAutoSwitch = false; /* без авто-переключения: реле не щёлкает */
     fcCtx.isScanning = false;
     fcCtx.currentFrequency = 0;
     fcCtx.lastDetectedFrequency = 0;
@@ -198,6 +202,7 @@ public:
   void exit() override {
     disableScan();
     LOOT_Standby();
+    BK4819_InvalidateFilterCache(); /* вернуть авто-фильтр VFO */
     /* BK остаётся настроенным на последнюю частоту/фильтр счётчика —
      * возвращаем VFO его частоту и настраиваем чип (иначе шумодав VFO читается
      * по чужой частоте). MENU/PTT/'*' на находке — забрать её в VFO. */
@@ -271,7 +276,7 @@ public:
     char buf[34];
 
     /* строка настроек */
-    snprintf(buf, sizeof(buf), "%s %ums HZ %u SQ %u%s", BANDS[fcCtx.band].name,
+    snprintf(buf, sizeof(buf), "%s %ums THR %03X SQ %u%s", BANDS[fcCtx.band].name,
              200u << fcCtx.scanSpeed, (unsigned)fcCtx.hz,
              (unsigned)squelchLevel, fcCtx.bandAutoSwitch ? " [A]" : "");
     drawLine(0, 4, FC_STATUS_H + 16, 16, POS_L, C_WHITE, F_M, buf);

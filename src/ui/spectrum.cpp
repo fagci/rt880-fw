@@ -20,6 +20,16 @@ static FRange range;
 
 static DBmRange dBmRange = {-110, -50};
 
+/* Автоуровень, как в k1-fw: низ графика привязан к шумовому полу, а не к
+ * абсолютным dBm. Поэтому на любом диапазоне/усилении пол стоит у нижней
+ * кромки, а сигналы занимают всю высоту. Единицы — сырой RSSI (0.5 дБ). */
+#define SP_MIN_SPAN 40      /* 20 дБ — минимальный размах по вертикали */
+#define SP_FLOOR_MARGIN_PX 2 /* пол на 2 px выше низа */
+static int levelMin = 100;
+static int levelMax = 220;
+static bool levelValid;
+static uint8_t levelHeight = 52;
+
 static bool ticksRendered = false;
 static bool forceRedraw = true;
 
@@ -31,8 +41,6 @@ static uint8_t peakRow[SP_MAX_POINTS];
 static uint8_t drawnTop[SP_MAX_POINTS];
 static uint8_t drawnPeak[SP_MAX_POINTS];
 
-static uint8_t wf[WF_YN][WF_XN] = {0};
-
 /* Оценка шумового пола для пикового удержания: минимум по столбцам.
  * Линии пиков ниже пола + запас не рисуем — иначе шум даёт «пунктир». */
 static uint16_t peakFloor;
@@ -41,45 +49,61 @@ static bool peakDecayInit;
 
 extern bool gThemeLight; /* graphics.cpp */
 
-/* Палитра водопада — без чёрного: в тёмной теме от тёмно-синего через
- * голубой/зелёный/жёлтый к красному и белому; в светлой — «инверсия»:
- * от белого, красный/коричневый сверху. */
-static uint16_t GRADIENT_PALETTE[15];
-static int8_t palTheme = -1;
+/* Плавный градиент водопада: уровень 0..255 интерполируется между
+ * опорными цветами прямо при отрисовке. Прежняя палитра из 15 ступеней
+ * давала заметные полосы. Таблица в RAM не нужна — 240 вызовов на строку
+ * для Cortex-M4 дёшевы. */
+typedef struct {
+  uint8_t pos; /* 0..255 */
+  uint8_t r, g, b;
+} GradStop;
+
+/* тёмная тема: пол — тёмно-синий (не чёрный), дальше синий → голубой →
+ * зелёный → жёлтый → оранжевый → красный → белый */
+static const GradStop DARK_GRADIENT[] = {
+    {0, 0, 0, 128},     {20, 0, 0, 220},    {40, 0, 32, 255},
+    {80, 0, 180, 255},  {100, 0, 255, 255}, {140, 0, 255, 80},
+    {160, 0, 255, 0},   {190, 160, 255, 0}, {210, 255, 255, 0},
+    {230, 255, 160, 0}, {245, 255, 40, 0},  {255, 255, 255, 255},
+};
+
+/* светлая тема: от белого (шум) через голубой/зелёный к тёмно-красному */
+static const GradStop LIGHT_GRADIENT[] = {
+    {0, 255, 255, 255},  {24, 220, 240, 255}, {64, 120, 220, 255},
+    {100, 0, 220, 220},  {140, 0, 180, 0},    {180, 200, 200, 0},
+    {215, 240, 120, 0},  {240, 180, 0, 0},    {255, 90, 0, 0},
+};
 
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
-static void init_palette(void) {
-  if (palTheme == (int8_t)gThemeLight)
-    return;
-  palTheme = gThemeLight;
-  for (uint8_t i = 0; i < 15; i++) {
-    /* базовая гамма: синий → голубой → зелёный → жёлтый → красный */
-    uint8_t t = (i * 255) / 14, r, g, b;
-    if (t < 85)       { r = 0;               g = t * 3;           b = 255; }
-    else if (t < 170) { r = (t - 85) * 3;    g = 255;             b = 255 - (t - 85) * 3; }
-    else              { r = 255;             g = 255 - (t - 170) * 3; b = 0; }
-    if (!gThemeLight) {
-      if (i == 0)  { GRADIENT_PALETTE[i] = rgb565(0, 0, 56); continue; }
-      if (i == 14) { GRADIENT_PALETTE[i] = 0xFFFF; continue; }
-      GRADIENT_PALETTE[i] = rgb565(r, g, b);
-    } else {
-      /* от белого (шум) постепенно в цвет, в конце — тёмно-красный */
-      uint8_t w = i < 4 ? 255 - i * 64 : 0; /* доля белого */
-      if (i == 14) { GRADIENT_PALETTE[i] = rgb565(110, 0, 0); continue; }
-      r = r + ((255 - r) * w) / 255;
-      g = g + ((255 - g) * w) / 255;
-      b = b + ((255 - b) * w) / 255;
-      GRADIENT_PALETTE[i] = rgb565(r, g, b);
-    }
-  }
+static uint16_t gradientColor(uint8_t lvl) {
+  const GradStop *st = gThemeLight ? LIGHT_GRADIENT : DARK_GRADIENT;
+  uint8_t n = gThemeLight ? (uint8_t)ARRAY_SIZE(LIGHT_GRADIENT)
+                          : (uint8_t)ARRAY_SIZE(DARK_GRADIENT);
+  uint8_t seg = 0;
+  while (seg + 1 < n && lvl > st[seg + 1].pos)
+    seg++;
+  const GradStop *a = &st[seg];
+  const GradStop *b = &st[seg + 1 < n ? seg + 1 : seg];
+  int t = b->pos > a->pos ? (int)(lvl - a->pos) * 255 / (b->pos - a->pos)
+                          : 255;
+  uint8_t r = (uint8_t)(a->r + ((int)b->r - a->r) * t / 255);
+  uint8_t g = (uint8_t)(a->g + ((int)b->g - a->g) * t / 255);
+  uint8_t bl = (uint8_t)(a->b + ((int)b->b - a->b) * t / 255);
+  return rgb565(r, g, bl);
 }
 
-/* Цвет столбца — та же палитра, что у водопада: высота столбца (уровень)
- * даёт индекс в GRADIENT_PALETTE. В светлой теме младшие индексы почти
- * белые и сливались бы с фоном, поэтому начинаем с 4-го. */
+/* Цвет водопада по уровню RSSI (автоуровни — общие со столбцами спектра). */
+static uint16_t levelColor(uint16_t rssi) {
+  uint8_t lvl = (uint8_t)ConvertDomain(rssi, levelMin, levelMax, 0, 255);
+  return gradientColor(lvl);
+}
+
+/* Цвет столбца — тот же градиент: высота столбца даёт уровень. В светлой
+ * теме низ градиента почти белый, поэтому начинаем выше — иначе низкие
+ * столбцы сливаются с фоном. */
 static uint16_t barRamp[SP_MAX_POINTS];
 static uint8_t barRampH;
 static int8_t barRampTheme = -1;
@@ -90,55 +114,17 @@ static void initBarRamp(uint8_t sh) {
     return;
   barRampH = sh;
   barRampTheme = gThemeLight;
-  const uint8_t first = gThemeLight ? 4 : 1;
-  const uint8_t span = 14 - first;
+  const uint16_t first = gThemeLight ? 64 : 0;
   for (uint8_t h = 0; h <= sh; h++) {
-    uint8_t idx = first;
+    uint16_t lvl = first;
     if (sh)
-      idx = (uint8_t)(first + (uint16_t)h * span / sh);
-    barRamp[h] = GRADIENT_PALETTE[idx];
+      lvl = (uint16_t)(first + (uint16_t)h * (255 - first) / sh);
+    barRamp[h] = gradientColor((uint8_t)lvl);
   }
 }
 
 static uint16_t peakLineColor(void) {
   return gThemeLight ? rgb565(150, 0, 0) : C_WHITE;
-}
-
-/* Адаптивные уровни водопада (единицы RSSI, 0.5 дБ): низ — медленно
- * следящий пол шума, верх — медленно спадающий максимум, минимум размаха
- * 24 дБ. Так картинка не «уходит в ноль» и не зашкаливает при смене
- * диапазона/усиления. */
-static int32_t lvlLo, lvlHi;
-static bool lvlInit;
-#define LVL_MIN_SPAN 48
-
-static void update_levels(void) {
-  int32_t mn = INT32_MAX, mx = 0;
-  for (uint16_t x = 0; x < SP_MAX_POINTS; ++x) {
-    int32_t r = rssiHistory[x];
-    if (!r) continue; /* ещё не измерено */
-    if (r < mn) mn = r;
-    if (r > mx) mx = r;
-  }
-  if (mx == 0) return;
-  if (!lvlInit) {
-    lvlLo = mn;
-    lvlHi = mx;
-    lvlInit = true;
-    return;
-  }
-  /* медленно в обе стороны: один выброс не должен менять яркость всей
-   * строки (горизонтальные полосы в водопаде) */
-  lvlLo += (mn - lvlLo) / (mn < lvlLo ? 8 : 32);
-  lvlHi += (mx - lvlHi) / (mx > lvlHi ? 8 : 64);
-}
-
-static uint8_t getPalIndex(uint16_t rssi) {
-  int32_t lo = lvlLo - 4; /* шум чуть выше нуля палитры */
-  int32_t span = lvlHi - lo;
-  if (span < LVL_MIN_SPAN) span = LVL_MIN_SPAN;
-  int32_t i = ((int32_t)rssi - lo) * 14 / span;
-  return i < 0 ? 0 : i > 14 ? 14 : (uint8_t)i;
 }
 
 static uint16_t v(uint8_t x) { return rssiHistory[x]; }
@@ -147,9 +133,44 @@ static uint8_t f2x(uint32_t f) {
   return ConvertDomain(f, range.start, range.end, 0, SP_MAX_POINTS - 1);
 }
 
+/* Пересчёт автоуровней по завершённому проходу: низ — минимум истории
+ * (шумовой пол) минус два пикселя, верх — на размах не меньше SP_MIN_SPAN.
+ * Вызывается из SP_Begin, чтобы водопад не дёргался на каждом неполном
+ * свипе. */
+static void computeAutoLevel(uint8_t sh) {
+  if (filledPoints < 2 || sh == 0)
+    return;
+
+  uint16_t mn = UINT16_MAX, mx = 0;
+  bool any = false;
+  for (uint8_t i = 0; i < filledPoints; i++) {
+    uint16_t r = rssiHistory[i];
+    if (!r) /* столбец ещё не измерен */
+      continue;
+    any = true;
+    if (r < mn)
+      mn = r;
+    if (r > mx)
+      mx = r;
+  }
+  if (!any)
+    return;
+
+  int span = (int)mx - (int)mn;
+  if (span < SP_MIN_SPAN)
+    span = SP_MIN_SPAN;
+  int lo = (int)mn - SP_FLOOR_MARGIN_PX * span / sh;
+  if (lo < 0)
+    lo = 0;
+
+  levelMin = lo;
+  levelMax = lo + span;
+  levelValid = true;
+  dBmRange.min = Rssi2DBm((uint16_t)levelMin);
+  dBmRange.max = Rssi2DBm((uint16_t)levelMax);
+}
+
 void SP_ResetHistory(void) {
-  for (uint8_t y = 0; y < ARRAY_SIZE(wf); ++y)
-    memset(wf[y], 0, ARRAY_SIZE(wf[0]));
   for (uint8_t i = 0; i < SP_MAX_POINTS; ++i) {
     rssiHistory[i] = peakHistory[i] = 0;
     noiseHistory[i] = UINT16_MAX;
@@ -160,7 +181,7 @@ void SP_ResetHistory(void) {
   lastX = 255;
   filledPoints = 0;
   currentStep = 0;
-  lvlInit = false;
+  levelValid = false;
   peakFloorInit = false;
   peakDecayInit = false;
   forceRedraw = true;
@@ -178,7 +199,10 @@ void SP_ResetRender(void) {
   forceRedraw = true;
 }
 
-void SP_Begin(void) { currentStep = 0; }
+void SP_Begin(void) {
+  computeAutoLevel(levelHeight);
+  currentStep = 0;
+}
 
 void SP_Next(void) {
   if (currentStep < stepsCount - 1)
@@ -186,7 +210,6 @@ void SP_Next(void) {
 }
 
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
-  init_palette();
   filledPoints = 0;
   step = stepSize;
   bw = _bw;
@@ -247,22 +270,6 @@ static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
       drawTicks(y, fs, fe, p, h, C_GRAY);
       return;
     }
-  }
-}
-
-/* Столбцы уже содержат максимум по всем точкам скана (SP_AddPoint), так что
- * кадр строится за 240 шагов независимо от числа точек в диапазоне. */
-static void renderWfColumn(uint8_t x, uint16_t val) {
-  uint8_t pal = getPalIndex(val);
-  uint8_t bx = x >> 1;
-  if (bx >= WF_XN)
-    return;
-  if ((x & 1) == 0) {
-    wf[0][bx] &= 0xF0;
-    wf[0][bx] |= pal;
-  } else {
-    wf[0][bx] &= 0x0F;
-    wf[0][bx] |= pal << 4;
   }
 }
 
@@ -343,25 +350,24 @@ static void updatePeakFloor(void) {
 }
 
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
-  init_palette();
   initBarRamp(sh);
-  const uint16_t vMin = (dBmRange.min + 160) * 2;
-  const uint16_t vMax = (dBmRange.max + 160) * 2;
-  dBmRange.min = Rssi2DBm(vMin);
-  dBmRange.max = Rssi2DBm(vMax);
+  levelHeight = sh;
+  /* До первого завершённого прохода уровней ещё нет — оценим по тому, что
+   * успели измерить; дальше их пересчитывает SP_Begin. */
+  if (!levelValid)
+    computeAutoLevel(sh);
 
   decayPeaks();
   updatePeakFloor();
 
   for (uint8_t x = 0; x < SP_MAX_POINTS; x++) {
-    uint16_t hv = ConvertDomain(v(x) * 2, vMin * 2, vMax * 2, 0, sh);
-    uint8_t h = hv > sh ? sh : hv;
+    int hv = ConvertDomain(v(x), levelMin, levelMax, 0, sh);
+    uint8_t h = (uint8_t)(hv > sh ? sh : hv);
     topRow[x] = (uint8_t)(sh - h);
     colColor[x] = barRamp[h];
 
-    uint16_t pv =
-        ConvertDomain(peakHistory[x] * 2, vMin * 2, vMax * 2, 0, sh);
-    uint8_t ph = pv > sh ? sh : pv;
+    int pv = ConvertDomain(peakHistory[x], levelMin, levelMax, 0, sh);
+    uint8_t ph = (uint8_t)(pv > sh ? sh : pv);
     /* Держим только заметно ушедший пик (≥4 дБ и ≥3 px над столбцом):
      * иначе шумовые выбросы рисуют «пунктир» по всему низу спектра. */
     uint16_t d = peakHistory[x] > rssiHistory[x]
@@ -464,6 +470,10 @@ static bool wfScrollInited = false;
 static void WF_InitScroll(uint8_t wy, uint8_t wh) {
   st7789_set_vscroll_area(wy, wh, ST7789_HEIGHT - wy - wh);
   st7789_set_vscroll_start(wy);
+  /* Подложка зоны скролла — цвет шумового пола, а не чёрный. Строки
+   * приходят по одной за проход, и незаполненная чёрная область долго
+   * контрастировала с синим шумом. */
+  st7789_fill_rect_dma(0, wy, ST7789_WIDTH, wh, gradientColor(0));
   wfScroll = 0;
   wfScrollInited = true;
 }
@@ -474,17 +484,10 @@ void WF_Render(uint8_t wy, bool wfDown) {
   if (!wfScrollInited)
     WF_InitScroll(wy, wh);
 
-  init_palette();
-  update_levels();
-  memset(wf[0], 0, WF_XN);
+  /* Полная горизонтальная детализация: каждый из 240 столбцов получает
+   * свой цвет (раньше 120 значений растягивались на пары пикселей). */
   for (uint8_t x = 0; x < SP_MAX_POINTS; ++x)
-    renderWfColumn(x, rssiHistory[x]);
-
-  for (uint8_t bx = 0; bx < WF_XN; ++bx) {
-    uint8_t v = wf[0][bx];
-    wfLine[bx * 2 + 0] = GRADIENT_PALETTE[v & 0x0F];
-    wfLine[bx * 2 + 1] = GRADIENT_PALETTE[(v >> 4) & 0x0F];
-  }
+    wfLine[x] = levelColor(rssiHistory[x]);
 
   if (wfDown) {
     wfScroll = (wfScroll == 0) ? (wh - 1) : (wfScroll - 1);
@@ -510,6 +513,16 @@ void WF_Reset(void) {
   wfScroll = 0;
   // Выключить scroll до следующего WF_InitScroll
   st7789_scroll_reset();
+}
+
+/* Залить зону водопада цветом шумового пола. Вызывается вместо чёрной
+ * заливки, чтобы пустой водопад не давал резкую чёрную область рядом с
+ * синим шумом. */
+void WF_Clear(uint8_t wy) {
+  if (wy >= ST7789_HEIGHT)
+    return;
+  st7789_fill_rect_dma(0, wy, ST7789_WIDTH, ST7789_HEIGHT - wy,
+                       gradientColor(0));
 }
 
 void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh) {

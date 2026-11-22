@@ -3,6 +3,7 @@
 #include "helper/lootlist.h"
 #include "lvgl.h"
 #include "modes/analyser.h"
+#include "modes/bc_scanner.h"
 #include "modes/fc.h"
 #include "modes/loot_screen.h"
 #include "modes/mode.h"
@@ -53,6 +54,8 @@ static void screens(const char *tag) {
   snprintf(n, sizeof(n), "%s_vfo", tag); dump(n);
   Mode_Switch(MODE_SCANNER); step(500);
   snprintf(n, sizeof(n), "%s_scanner", tag); dump(n);
+  Mode_Switch(MODE_BC_SCANNER); step(4500);
+  snprintf(n, sizeof(n), "%s_bc", tag); dump(n);
   Mode_Switch(MODE_ANALYSER); step(500);
   snprintf(n, sizeof(n), "%s_analyser", tag); dump(n);
   Mode_Switch(MODE_FC); step(80);
@@ -76,13 +79,24 @@ int main(int argc, char **argv) {
   }
   LOOT_ToggleBlacklist(LOOT_Item(2));
   LOOT_ToggleWhitelist(LOOT_Item(4));
+  if (getenv("BC_TEST")) {
+    Mode_Switch(MODE_BC_SCANNER); step(4500);
+    dump("bc_hold");
+    key(KEY_UP, KEY_PRESSED); step(40);
+    dump("bc_manual");
+    key(KEY_SIDE1); step(600);
+    dump("bc_band");
+    key(KEY_HASH, KEY_LONG_PRESSED); step(100);
+    dump("bc_pause");
+    return 0;
+  }
   if (getenv("EDIT_TEST")) {
     Mode_Switch(MODE_ANALYSER); step(100);
-    /* начало = 16 */
-    key(KEY_STAR); key(KEY_1); key(KEY_6); key(KEY_MENU); step(50);
+    /* 5 — ввод границ: начало = 100 МГц, подтверждение открывает конец */
+    key(KEY_5); key(KEY_1); key(KEY_0); key(KEY_0); key(KEY_MENU); step(50);
     dump("t_start");
-    /* конец = 1100 */
-    key(KEY_HASH); key(KEY_STAR); key(KEY_1); key(KEY_1); key(KEY_0); key(KEY_0); step(10);
+    /* конец = 110 МГц */
+    key(KEY_1); key(KEY_1); key(KEY_0); step(10);
     dump("t_typed");
     key(KEY_MENU); step(100);
     dump("t_end");

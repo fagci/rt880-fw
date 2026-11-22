@@ -131,6 +131,16 @@ void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c) {
   lv_invalidate(x, y, w, h);
 }
 
+void FillRectNoInv(int16_t x, int16_t y, int16_t w, int16_t h, Color c) {
+  c = TC(c);
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > FB_W) w = FB_W - x;
+  if (y + h > FB_H) h = FB_H - y;
+  if (w <= 0 || h <= 0) return;
+  st7789_fill_rect_dma((uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h, c);
+}
+
 static void draw_aline(int16_t x0, int16_t y0, int16_t x1, int16_t y1, Color c) {
   int16_t s = abs(y1 - y0) > abs(x1 - x0);
   if (s) {

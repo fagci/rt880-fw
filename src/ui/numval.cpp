@@ -154,14 +154,18 @@ void NumVal_Render(NumVal_t *nv) {
   PrintfEx(nv->x, nv->y, nv->pos, C_WHITE, C_BLACK, nv->font, "%s",
            len ? str : " ");
 
-  /* Курсор — вертикальная черта сразу после последнего введённого знака. */
+  /* Курсор — вертикальная черта сразу после последнего введённого знака.
+   * Пока буфер пуст, под курсором стоит пробел-заглушка: сначала отдаём
+   * лейбл LVGL (иначе его фон затрёт курсор при отложенном flush), затем
+   * рисуем курсор напрямую без инвалидации этого пробела. */
   if (nv->editing) {
+    lv_refr_now(NULL);
     int16_t tw = (int16_t)nv->cursor * nv->charW;
     int16_t cx = nv->pos == POS_R   ? (int16_t)nv->x
                  : nv->pos == POS_C ? (int16_t)nv->x + tw / 2
                                     : (int16_t)nv->x + tw;
-    FillRect(cx, nv->y - nv->charH + 1, 1, nv->charH,
-             nv->blinkState ? C_YELLOW : C_BLACK);
+    FillRectNoInv(cx, nv->y - nv->charH + 1, 2, nv->charH,
+                  nv->blinkState ? C_YELLOW : C_BLACK);
   }
 
   nv->prevLen = len;

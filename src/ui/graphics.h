@@ -66,6 +66,9 @@ void DrawHLine(int16_t x, int16_t y, int16_t w, Color c);
 void DrawLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1, Color c);
 void DrawRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillRect(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
+/* Заливка без инвалидации перекрытых лейблов: для курсора ввода, который
+ * лежит поверх «пустого» пробела поля и не должен затираться его фоном. */
+void FillRectNoInv(int16_t x, int16_t y, int16_t w, int16_t h, Color c);
 void FillCircle(int16_t x, int16_t y, int16_t r, Color c);
 
 /* Ширина текста в пикселях */

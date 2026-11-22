@@ -80,7 +80,7 @@ extern uint8_t currentVfo;
 
 extern Filter filters[];
 extern const char *FILTER_NAMES[];
-extern uint8_t filterIndex;
+extern int8_t filterIndex; /* -1 = AUTO, 0..3 = filters[] */
 
 extern const uint16_t StepFrequencyTable[15];
 extern const char *const STEP_NAMES[STEP_COUNT];
@@ -105,7 +105,11 @@ void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
 void Radio_Update(void);
 void Radio_ScanAudio(bool on); /* открыть/закрыть звук активного BK */
+/* Звук SI4732 (вещательный КВ-сканер): ведёт учёт siMuted/AF_MUTE, чтобы
+ * после выхода VFO снова открыл звук по своим правилам. */
+void Radio_SiAudio(bool on);
 void Radio_SetSquelch(uint8_t level);
+void Radio_ToggleSquelchForce(void);
 void Radio_NextStep(void);
 void Radio_PrevStep(void);
 void Radio_NextFilter(void);

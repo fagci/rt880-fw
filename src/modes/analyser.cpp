@@ -53,9 +53,8 @@ struct {
   bool prevCursorActive;
   bool prevListen; /* прошлый кадр рисовал стрелку прослушивания */
   NumVal_t freqVal;  /* центр: ввод частоты (клавиша 0) */
-  NumVal_t startVal; /* границы диапазона: произвольный ввод (клавиша *) */
+  NumVal_t startVal; /* границы диапазона: 5 — начало, затем конец */
   NumVal_t endVal;
-  bool borderSel;    /* false — начало, true — конец ('#' переключает) */
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
   bool spectrumDirty; /* перерисовать спектр вне очереди (сброс пиков) */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
@@ -65,7 +64,7 @@ struct {
  * максимально быстрый обзор: 200 кГц / 2.5 кГц = 80 точек, проход
  * укладывается в несколько кадров. 600 мкс — прежний режим с более
  * плотными пиками (ПЛЛ/АРУ успевают установиться).
- * Меняется боковыми клавишами, текущее значение видно в верхней строке. */
+ * Меняется 1/7, текущее значение видно в верхней строке. */
 static const uint16_t ANA_DWELL_US[] = {0,   25,  50,  100, 200,
                                         400, 600, 1000, 2000};
 #define ANA_DWELL_N (sizeof(ANA_DWELL_US) / sizeof(ANA_DWELL_US[0]))
@@ -174,7 +173,8 @@ static void onRangeChanged() {
    * всё под статусом, иначе старый водопад продолжает «ездить» и его
    * строки выглядывают поверх нового спектра. */
   WF_Reset();
-  FillRect(0, UI_STATUS_H, LCD_WIDTH, LCD_HEIGHT - UI_STATUS_H, C_BLACK);
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
+  WF_Clear(UI_WATERFALL_Y);
 }
 
 static void shiftRange(int32_t deltaStep) {
@@ -328,17 +328,6 @@ static void zoomKeepListen(bool in) {
   }
 }
 
-static void resizeCursor(int8_t dir) {
-  int16_t newHalf = (int16_t)anaCtx.cursorHalfW + dir * 3;
-  if (newHalf < 3)
-    newHalf = 3;
-  if (newHalf > SP_MAX_POINTS / 2)
-    newHalf = SP_MAX_POINTS / 2;
-  anaCtx.cursorHalfW = (uint8_t)newHalf;
-  anaCtx.cursorActive = true;
-  anaCtx.cursorTimeout = millis() + CURSOR_TIMEOUT_MS;
-}
-
 static uint32_t xToFreq(uint8_t x) {
   uint32_t step = scanStep();
   uint32_t base = anaCtx.range.start;
@@ -437,8 +426,9 @@ static void onFreqInput(uint32_t val) {
   onRangeChanged();
 }
 
-/* Произвольные границы: начало/конец задаются независимо. Шаг остаётся
- * текущим (чем шире диапазон при малом шаге — тем дольше проход). */
+/* Произвольные границы: ввод идёт последовательно — сначала начало, после
+ * подтверждения сразу открывается редактор конца. Шаг остаётся текущим (чем
+ * шире диапазон при малом шаге — тем дольше проход). */
 static void onStartEntered(uint32_t f) {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
   anaCtx.range.start = f;
@@ -447,6 +437,7 @@ static void onStartEntered(uint32_t f) {
     anaCtx.range.end = e > BK4819_F_MAX ? BK4819_F_MAX : e;
   }
   onRangeChanged();
+  NumVal_StartEdit(&anaCtx.endVal);
 }
 
 static void onEndEntered(uint32_t f) {
@@ -457,6 +448,11 @@ static void onEndEntered(uint32_t f) {
   }
   anaCtx.range.end = f;
   onRangeChanged();
+}
+
+static void beginRangeEdit() {
+  NumVal_SetValue(&anaCtx.startVal, anaCtx.range.start);
+  NumVal_StartEdit(&anaCtx.startVal);
 }
 
 static NumVal_t *editingVal(void) {
@@ -511,11 +507,8 @@ public:
     initRange();
     onRangeChanged();
 
-    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
-             C_BLACK);
-
     /* Скан идёт молча: при входе из VFO звук мог остаться открытым по
-     * шумодаву, и тогда весь проход шипел бы. Прослушивание (5) откроет
+     * шумодаву, и тогда весь проход шипел бы. Прослушивание (SIDE1) откроет
      * звук принудительно. */
     Radio_ScanAudio(false);
   }
@@ -541,12 +534,14 @@ public:
         BK4819_SelectFilterByFrequency(anaCtx.scanF);
         BK4819_SelectChip(0);
         BK4819_TuneTo(anaCtx.scanF, false);
-        /* без паузы RSSI читается до установления ПЛЛ/АРУ и «размазывает»
-         * пики вдоль прохода (кривая горка); выдержка настраивается */
-        const uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
-        if (dwell)
-          delay_us(dwell);
       }
+      /* Выдержка на каждой точке, в том числе вне диапазона BK: иначе
+       * проход вне приёма шёл бы заметно быстрее показанного времени.
+       * Без паузы RSSI читается до установления ПЛЛ/АРУ и «размазывает»
+       * пики вдоль прохода (кривая горка); выдержка настраивается 1/7. */
+      const uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
+      if (dwell)
+        delay_us(dwell);
       Measurement m = {
           .f = anaCtx.scanF,
           .rssi = covered ? BK4819_GetRSSI() : (uint16_t)0, /* 0 = нет данных */
@@ -577,8 +572,6 @@ public:
   void render() override {
     STATUSLINE_render();
 
-    bool editStart = NumVal_IsEditing(&anaCtx.startVal);
-    bool editEnd = NumVal_IsEditing(&anaCtx.endVal);
     bool editFreq = NumVal_IsEditing(&anaCtx.freqVal);
     NumVal_Render(&anaCtx.startVal);
     NumVal_Render(&anaCtx.endVal);
@@ -588,36 +581,12 @@ public:
       anaCtx.freqVal.value = xToFreq(anaCtx.cursorCenter);
     NumVal_Render(&anaCtx.freqVal);
 
-    /* Пока правим одну границу, вторую прячем: длинный ввод не должен
-     * заходить на соседнее поле. */
-    if (editStart)
-      PrintfT(UI_RIGHT_X, UI_RANGE_BASE,
-              text_style(C_WHITE, C_BLACK, POS_R, F_M), "");
-    if (editEnd)
-      PrintfT(UI_LEFT_X, UI_RANGE_BASE,
-              text_style(C_WHITE, C_BLACK, POS_L, F_M), "");
-
-    /* Подчёркивание выбранной границы — ровно под значением; прямая
-     * заливка, поэтому каждый кадр (как в сканере). */
-    {
-      const int16_t uy = UI_RANGE_UNDERLINE_Y;
-      const int16_t ws = UI_FreqWidth(anaCtx.range.start);
-      const int16_t we = UI_FreqWidth(anaCtx.range.end);
-      FillRect(UI_LEFT_X, uy, ws, UI_RANGE_UNDERLINE_H,
-               anaCtx.borderSel ? C_BLACK : C_YELLOW);
-      FillRect(UI_RIGHT_X - we, uy, we, UI_RANGE_UNDERLINE_H,
-               anaCtx.borderSel ? C_YELLOW : C_BLACK);
-    }
-
-    /* шаг и выдержка между полями границ; на время ввода прячем */
-    TextStyle topStyle = text_style(C_YELLOW, C_BLACK, POS_C, F_S);
-    if (editStart || editEnd) {
-      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "");
-    } else {
-      PrintfT(LCD_XCENTER, UI_RANGE_BASE, topStyle, "%s %uus",
-              STEP_NAMES[vfos[currentVfo].step],
-              (unsigned)ANA_DWELL_US[s_dwellIdx]);
-    }
+    /* Шаг и выдержка между полями границ. При вводе поля не прячем:
+     * принятая граница должна оставаться видимой рядом с редактором. */
+    PrintfT(LCD_XCENTER, UI_RANGE_BASE,
+            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%s %uus",
+            STEP_NAMES[vfos[currentVfo].step],
+            (unsigned)ANA_DWELL_US[s_dwellIdx]);
 
     /* Рамка курсора рисуется ПОВЕРХ спектра, а SP_Render перерисовывает
      * только изменившиеся строки. Поэтому стираем старую рамку и просим
@@ -689,8 +658,8 @@ public:
     }
 
     if (state == KEY_LONG_PRESSED) {
-      /* длинная 5 — сброс пикового удержания; короткая 5 остаётся
-       * входом/выходом из прослушивания (release после long не приходит) */
+      /* длинная 5 — сброс пикового удержания; короткая 5 открывает ввод
+       * границ (release после long не приходит) */
       if (k == KEY_5) {
         SP_ResetPeaks();
         anaCtx.spectrumDirty = true; /* в still спектр сам не перерисуется */
@@ -733,19 +702,24 @@ public:
     case KEY_6: /* ... и вправо */
       moveCursorCols(+8);
       return true;
-    case KEY_5: /* still: стоп скана и прослушивание частоты курсора */
-      if (anaCtx.listen)
-        exitListen();
-      else
-        enterListen();
+    case KEY_5: /* ввод границ: сначала начало, затем конец */
+      beginRangeEdit();
       return true;
-    case KEY_1:
-      if (!anaCtx.listen)
-        resizeCursor(-1);
+    case KEY_1: /* выдержка на точке + */
+      if (s_dwellIdx + 1 < (int)ANA_DWELL_N)
+        s_dwellIdx++;
       return true;
-    case KEY_7:
-      if (!anaCtx.listen)
-        resizeCursor(+1);
+    case KEY_7: /* выдержка на точке − */
+      if (s_dwellIdx > 0)
+        s_dwellIdx--;
+      return true;
+    case KEY_3:
+    case KEY_9: /* шаг сканирования +/− (сетка перестраивается) */
+      vfos[currentVfo].step =
+          (Step)((k == KEY_3) ? (vfos[currentVfo].step + 1) % STEP_COUNT
+                              : (vfos[currentVfo].step + STEP_COUNT - 1) %
+                                    STEP_COUNT);
+      onRangeChanged();
       return true;
     case KEY_2:
       zoomKeepListen(true);
@@ -753,30 +727,15 @@ public:
     case KEY_8:
       zoomKeepListen(false);
       return true;
-    case KEY_3:
-    case KEY_9:
-      vfos[currentVfo].step = (Step)((k == KEY_3)
-          ? (vfos[currentVfo].step + 1) % STEP_COUNT
-          : (vfos[currentVfo].step + STEP_COUNT - 1) % STEP_COUNT);
-      onRangeChanged();
-      return true;
-    case KEY_HASH: /* выбор границы: начало/конец */
-      anaCtx.borderSel = !anaCtx.borderSel;
-      return true;
-    case KEY_STAR: /* ввод выбранной границы (подчёркнута) */
-      NumVal_StartEdit(anaCtx.borderSel ? &anaCtx.endVal : &anaCtx.startVal);
-      return true;
     case KEY_0: /* ввод центральной частоты */
       NumVal_SetValue(&anaCtx.freqVal, xToFreq(anaCtx.cursorCenter));
       NumVal_StartEdit(&anaCtx.freqVal);
       return true;
-    case KEY_SIDE1: /* выдержка на точке + */
-      if (s_dwellIdx + 1 < (int)ANA_DWELL_N)
-        s_dwellIdx++;
-      return true;
-    case KEY_SIDE2: /* выдержка на точке − */
-      if (s_dwellIdx > 0)
-        s_dwellIdx--;
+    case KEY_SIDE1: /* still: стоп скана и прослушивание частоты курсора */
+      if (anaCtx.listen)
+        exitListen();
+      else
+        enterListen();
       return true;
     case KEY_EXIT: /* как везде: выход в VFO на прежнюю частоту */
       anaCtx.captureF = 0;

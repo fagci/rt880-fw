@@ -111,13 +111,26 @@ void BK4819_EnterSubAu(void);
 void BK4819_ExitSubAu(void);
 void BK4819_TurnsOffTones_TurnsOnRX(void);
 void BK4819_EnableFrequencyScan(void);
-typedef enum { FREQ_SCAN_50MS, FREQ_SCAN_100MS, FREQ_SCAN_200MS, F_SC_T_COUNT } FreqScanTime;
+/* REG_32 <15:14>: 0 = 0.2 с, 1 = 0.4 с, 2 = 0.8 с, 3 = 1.6 с. */
+typedef enum {
+  FREQ_SCAN_200MS,
+  FREQ_SCAN_400MS,
+  FREQ_SCAN_800MS,
+  FREQ_SCAN_1600MS,
+  F_SC_T_COUNT
+} FreqScanTime;
 void BK4819_EnableFrequencyScanEx(FreqScanTime time);
 void BK4819_EnableFrequencyScanEx2(FreqScanTime time, uint16_t hz);
 void BK4819_DisableFrequencyScan(void);
 void BK4819_SelectChip(uint8_t chip);
 void BK4819_SelectB(bool on);
 void BK4819_SelectFilterByFrequency(uint32_t f);
+/* Ровно один фильтр (HF/VHF/UHF/800), без выбора по частоте. */
+void BK4819_SelectFilter(Filter flt);
+/* Ручной фильтр: on=true — держать flt независимо от частоты,
+ * on=false — вернуть автоматический выбор по частоте. */
+void BK4819_SetFilterOverride(Filter flt, bool on);
+void BK4819_InvalidateFilterCache(void);
 void BK4819_ToggleFilter(Filter flt, bool on);
 void BK4819_SelectFilterEx(Filter filter);
 uint16_t BK4819_GetFilter(void);

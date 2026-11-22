@@ -31,11 +31,11 @@ typedef enum {
   KEY_EXIT,
   KEY_STAR,
   KEY_HASH,
-  /* прямые GPIO */
-  KEY_PTT,   /* PB6  */
-  KEY_SIDE1, /* PC0  */
-  KEY_SIDE2, /* PC1  */
-  KEY_ALARM, /* PC2  */
+  /* PTT — прямой GPIO, SIDE1/SIDE2/ALARM — ADC KEYIN (PC2) */
+  KEY_PTT,   /* PB6 */
+  KEY_SIDE1, /* ADC KEYIN */
+  KEY_SIDE2, /* ADC KEYIN */
+  KEY_ALARM, /* ADC KEYIN */
   KEY_COUNT
 } key_id_t;
 

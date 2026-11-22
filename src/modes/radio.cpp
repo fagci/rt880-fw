@@ -163,7 +163,7 @@ bool RadioMode::key(KEY_Code_t k, Key_State_t state) {
 
   if (state == KEY_LONG_PRESSED) {
     switch (k) {
-    case KEY_STAR:
+    case KEY_1:
       scanBands();
       return true;
     default:
