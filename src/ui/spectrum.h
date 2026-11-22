@@ -14,6 +14,7 @@ typedef struct {
 
 void SP_AddPoint(Measurement *msm);
 void SP_ResetHistory(void);
+void SP_ResetLevel(void); /* забыть опору уровня (вход в режим/другой тракт) */
 void SP_ResetPeaks(void); /* сбросить peak hold (оставить текущий кадр) */
 void SP_ResetRender(void);
 void SP_Invalidate(uint8_t sh); /* следующий SP_Render перерисует всю область */

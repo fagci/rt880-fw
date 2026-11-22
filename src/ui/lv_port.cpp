@@ -60,9 +60,11 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
   if (area->y1 <= y2)
     flush_rows(area, color_p, area->y1, y2);
 
-  int32_t y1 = area->y1 > UI_SPECTRUM_Y + UI_SPECTRUM_H
+  /* Пропускаем спектр и полосу рисок под ним: риски рисуются прямым DMA и
+   * не должны затираться чанками LVGL (буфер 14 строк задевает 100..102). */
+  int32_t y1 = area->y1 > UI_TICKS_Y + UI_TICKS_H
                    ? area->y1
-                   : UI_SPECTRUM_Y + UI_SPECTRUM_H;
+                   : UI_TICKS_Y + UI_TICKS_H;
   /* 2 px запаса до зоны аппаратного скролла: граница TFA не должна
    * попадать в LVGL-flush. */
   const int32_t clip_bottom = UI_WATERFALL_Y - 3;

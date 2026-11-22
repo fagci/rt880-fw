@@ -11,6 +11,9 @@ static Mode *current = nullptr;
 static Mode *next = nullptr;
 static bool s_displayOff;
 static bool s_keyLocked;
+/* Цифра, у которой длинное нажатие уже сработало как команда (VFO 1/2/3,
+ * скан, BFO): её отпускание не должно открывать ввод частоты. */
+static KEY_Code_t s_longDigit = KEY_NONE;
 
 void Mode_Switch(Mode &mode) {
   next = &mode;
@@ -79,6 +82,17 @@ void Mode_Key(KEY_Code_t key, Key_State_t state) {
     s_keyLocked = !s_keyLocked;
     return;
   }
+
+  /* Отпускание цифры после длинного нажатия — не короткое нажатие:
+   * иначе, например, после long 1 (multiwatch/скан) открывался бы
+   * редактор частоты с этой цифрой. */
+  if (state == KEY_LONG_PRESSED && key >= KEY_0 && key <= KEY_9)
+    s_longDigit = key;
+  if (state == KEY_RELEASED && key == s_longDigit) {
+    s_longDigit = KEY_NONE;
+    return;
+  }
+
   if (s_keyLocked)
     return;
 

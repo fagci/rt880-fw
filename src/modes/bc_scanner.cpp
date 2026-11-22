@@ -362,6 +362,7 @@ public:
     Radio_SiAudio(false);
     Radio_ScanAudio(false);
     s_audio = false;
+    SP_ResetLevel(); /* у SI другая шкала RSSI — не наследуем уровень BK */
     startBand();
   }
 

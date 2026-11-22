@@ -315,6 +315,13 @@ void NumVal_StartEdit(NumVal_t *nv) {
 
 void NumVal_Invalidate(NumVal_t *nv) { nv->dirty = true; }
 
+void NumVal_Cancel(NumVal_t *nv) {
+  if (!nv->editing)
+    return;
+  stopEdit(nv, false);
+  nv->dirty = true;
+}
+
 uint32_t NumVal_GetValue(NumVal_t *nv) { return nv->value; }
 
 void NumVal_SetValue(NumVal_t *nv, uint32_t val) {

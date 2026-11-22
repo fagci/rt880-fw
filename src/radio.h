@@ -59,6 +59,7 @@ typedef struct {
   uint8_t modulation : 4;
   uint8_t bw : 4;
   Radio radio : 2;
+  bool radioManual : 1; /* приёмник выбран вручную, не по частоте */
   TXOutputPower power : 2;
   uint8_t mic : 4;
   uint8_t scrambler : 4;
@@ -88,11 +89,15 @@ extern const char *const STEP_NAMES[STEP_COUNT];
 void Radio_Init(void);
 /* Автовыбор приёмника по частоте (10 Гц) и модуляции */
 Radio Radio_PickDevice(uint32_t f, uint8_t mod);
+/* AUTO ↔ другой приёмник, если он поддерживает текущую частоту */
+void Radio_NextReceiver(void);
 void Radio_TuneTo(uint32_t f, bool precise);
 void Radio_TuneToAuto(uint32_t f);
 /* модуляция и шаг активного VFO по плану диапазонов; false — вне плана */
 bool Radio_ApplyBandPlan(uint32_t f);
 const char *Radio_BandName(uint32_t f); /* "40m", "AIR"...; "" вне плана */
+/* Границы диапазона PLAN, в который попадает f (ед. 10 Гц). */
+bool Radio_BandRange(uint32_t f, uint32_t *start, uint32_t *end);
 void Radio_NextBand(int8_t dir);        /* +1/-1: следующий/пред. диапазон группы */
 void Radio_NextGroup(void);
 void Radio_TuneStep(int8_t dir);
@@ -103,6 +108,8 @@ void Radio_ApplyPending(void);
 void Radio_ToggleMonitor(uint8_t idx);
 void Radio_NextFilter(void);
 void Radio_ToggleFilter(void);
+/* Вернуть AUTO-фильтр по частоте (режимы сканирования не наследуют ручной) */
+void Radio_FilterAuto(void);
 void Radio_Update(void);
 void Radio_ScanAudio(bool on); /* открыть/закрыть звук активного BK */
 /* Звук SI4732 (вещательный КВ-сканер): ведёт учёт siMuted/AF_MUTE, чтобы

@@ -504,6 +504,27 @@ uint8_t SI47XX_GetRssi(void) {
   return resp[4];
 }
 
+/* RSSI и SNR одним RSQ_STATUS: для сканера уровень станции — SNR (RESP5).
+ * Как и в GetRssi, INTACK не ставим, чтобы не терять прерывания. */
+void SI47XX_GetRssiSnr(uint8_t *rssi, uint8_t *snr) {
+  bool fm = (si4732mode == SI47XX_FM);
+  uint8_t cmd[2] = {(uint8_t)(fm ? CMD_FM_RSQ_STATUS : CMD_AM_RSQ_STATUS), 0};
+  uint8_t resp[8] = {0};
+  if (rssi)
+    *rssi = 0;
+  if (snr)
+    *snr = 0;
+  waitToSend();
+  SI47XX_WriteBuffer(cmd, 2);
+  if (!waitToSend())
+    return;
+  SI47XX_ReadBuffer(resp, fm ? 8 : 6);
+  if (rssi)
+    *rssi = resp[4];
+  if (snr)
+    *snr = resp[5];
+}
+
 /* ─── Power up/down ────────────────────────────────────────────── */
 void SI47XX_PowerUp(void) {
   /* If chip is not responding, skip power up to avoid busy-wait */

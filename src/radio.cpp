@@ -6,6 +6,7 @@
 #include "driver/si473x.h"
 #include "helper/log.h"
 #include "helper/measurements.h"
+#include "misc.h"
 #include "ui/graphics.h"
 #include <string.h>
 
@@ -39,7 +40,13 @@ static bool s_bootMute;     /* старт: не открывать звук до
 /* Как часто BK «бегает» по закреплённым VFO и сколько сидит на каждом */
 #define MON_DWELL_MS 120
 #define MON_SETTLE_MS 8
+#define MON_RETURN_MS 1500 /* BK молчит столько — вернуться на прежний VFO */
 static uint32_t s_lastMon;
+/* Возврат после перехвата: на каком VFO поймали и куда вернуться. */
+static int8_t s_monReturn = -1;
+static uint8_t s_monCaught;
+static uint32_t s_monClosedAt;
+static uint32_t s_monCheckAt;
 
 /* ── План диапазонов: автонастройка модуляции и шага ───────────
  * При вводе частоты и при переходе через границу диапазона шагами
@@ -133,6 +140,17 @@ const char *Radio_BandName(uint32_t f) {
   return b ? b->name : "";
 }
 
+bool Radio_BandRange(uint32_t f, uint32_t *start, uint32_t *end) {
+  const BandPlan *b = findPlan(f);
+  if (!b)
+    return false;
+  if (start)
+    *start = (uint32_t)b->startKhz * KHZ;
+  if (end)
+    *end = (uint32_t)b->endKhz * KHZ;
+  return true;
+}
+
 /* Выставить модуляцию и шаг активного VFO по плану. false — вне плана. */
 bool Radio_ApplyBandPlan(uint32_t f) {
   const BandPlan *b = findPlan(f);
@@ -176,7 +194,38 @@ Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
     return RADIO_SI4732;
   if (f < 3000000 && (mod == MOD_AM || mod == MOD_LSB || mod == MOD_USB))
     return RADIO_SI4732;
-  return RADIO_BK4819A; /* 18–30 МГц FM/прочее (CB 27 МГц) — тоже BK A */
+  return RADIO_BK4819A; /* 18–30 МГц FM/прочее; CB AM по умолчанию SI */
+
+}
+
+/* Частотные окна приёмников для ручного переключения: там, где чип
+ * физически работает, даже если авторежим выбрал бы другой. */
+static bool deviceCovers(Radio r, uint32_t f) {
+  if (r == RADIO_BK4819A)
+    return f >= 1800000 && f <= BK4819_F_MAX;
+  if (r == RADIO_SI4732)
+    return (f >= 15300 && f <= 3000000) || /* 153 кГц–30 МГц (AM/SSB) */
+           (f >= 6400000 && f <= 10800000); /* 64–108 МГц (FM) */
+  return false;
+}
+
+/* Ручное переключение: AUTO → другой приёмник → AUTO. Если текущую
+ * частоту поддерживает только один чип, переключения нет. */
+void Radio_NextReceiver(void) {
+  VFO *v = &vfos[currentVfo];
+  Radio autoR = Radio_PickDevice(v->rxF, v->modulation);
+
+  if (v->radioManual) {
+    v->radioManual = false;
+    v->radio = autoR;
+  } else {
+    Radio other = (autoR == RADIO_SI4732) ? RADIO_BK4819A : RADIO_SI4732;
+    if (!deviceCovers(other, v->rxF))
+      return;
+    v->radioManual = true;
+    v->radio = other;
+  }
+  Radio_TuneTo(v->rxF, true);
 }
 
 static SI47XX_MODE modToSi(uint8_t mod) {
@@ -205,6 +254,7 @@ static void siEnsure(VFO *v) {
   if (!SI47XX_Acquire(want)) {
     Log("SI4732: not responding, fallback to BK A");
     v->radio = RADIO_BK4819A; /* B без антенны — не вариант */
+    v->radioManual = false;
   }
 }
 
@@ -251,7 +301,12 @@ static uint8_t vfoChip(uint8_t idx) {
    precise=false: только частота (сканирование, мониторинг). */
 static void applyVfo(bool precise) {
   VFO *v = &vfos[currentVfo];
-  v->radio = Radio_PickDevice(v->rxF, v->modulation);
+  /* Ручной выбор приёмника живёт, пока чип поддерживает частоту; при
+   * выходе за его окно возвращаемся к автовыбору. */
+  if (v->radioManual && !deviceCovers(v->radio, v->rxF))
+    v->radioManual = false;
+  if (!v->radioManual)
+    v->radio = Radio_PickDevice(v->rxF, v->modulation);
 
   if (v->radio == RADIO_SI4732) {
     siEnsure(v); /* может откатить v->radio на BK */
@@ -267,12 +322,15 @@ static void applyVfo(bool precise) {
     BK4819_SelectFilterByFrequency(v->rxF);
     BK4819_TuneTo(v->rxF, precise);
     if (precise) {
-      /* WFM на BK — широкополосный FM (BW до 18k вместо 12k) */
-      ModulationType m = (v->modulation == MOD_WFM) ? MOD_FM
-                         : static_cast<ModulationType>(v->modulation);
-      BK4819_SetModulation(m);
-      BK4819_SetFilterBandwidth(
-          static_cast<BK4819_FilterBandwidth_t>(v->bw));
+      /* WFM на BK — свой широкий REG_43; в FM не подменяем */
+      BK4819_SetModulation(
+          static_cast<ModulationType>(v->modulation));
+      /* как k1-fw: для AM отдельная (не FM) настройка AGC */
+      BK4819_SetAGC(v->modulation != MOD_AM, v->gainIndex);
+      /* WFM пишет REG_43 сама; обычная полоса её бы затёрла */
+      if (v->modulation != MOD_WFM)
+        BK4819_SetFilterBandwidth(
+            static_cast<BK4819_FilterBandwidth_t>(v->bw));
       BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
       audio_path_set(chip);
     }
@@ -282,16 +340,51 @@ static void applyVfo(bool precise) {
     applyMute(!s_bootMute);
 }
 
-/* ── Мониторинг: один BK крутится по закреплённым VFO ──────────
- * Кандидаты — VFO с флагом monitor, НЕ активные, на BK и на кристалле,
- * отличном от активного (один кристалл = один частотный тракт).
- * По открывшемуся шумодаву монитор становится активным VFO. */
-static void monitorTick(void) {
-  /* На SI BK-мониторинг только мешает: перестройка BK даёт щелчки.
-   * Пока слушаем SI — RSSI/шумодав BK не трогаем. */
-  if (vfos[currentVfo].radio == RADIO_SI4732)
+/* Перехваченный BK слушаем, пока открыт шумодав; после MON_RETURN_MS
+ * тишины возвращаемся на VFO, который был активен до перехвата. */
+static void monitorReturnTick(void) {
+  if (s_monReturn < 0)
+    return;
+  /* Пользователь сам сменил VFO — возврат больше не нужен. */
+  if (currentVfo != s_monCaught) {
+    s_monReturn = -1;
+    return;
+  }
+  if (vfos[currentVfo].radio == RADIO_SI4732) {
+    s_monReturn = -1;
+    return;
+  }
+
+  uint32_t now = millis();
+  if (now - s_monCheckAt < 100)
+    return; /* шумодав активного BK и так читается в Radio_Update */
+  s_monCheckAt = now;
+
+  BK4819_SelectChip(vfoChip(currentVfo));
+  bool open = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+  if (open) {
+    s_monClosedAt = 0;
+    return;
+  }
+  if (!s_monClosedAt) {
+    s_monClosedAt = now;
+    return;
+  }
+  if (now - s_monClosedAt < MON_RETURN_MS)
     return;
 
+  uint8_t back = (uint8_t)s_monReturn;
+  s_monReturn = -1;
+  currentVfo = back;
+  applyVfo(true);
+}
+
+/* ── Мониторинг: закреплённые VFO проверяются в фоне ──────────
+ * Слушаем SI — всё равно проверяем BK: открылся шумодав → переходим на BK
+ * (BK приоритетнее). Кандидаты — VFO с флагом monitor, НЕ активные и на
+ * другом кристалле/приёмнике (один тракт не слушает два места).
+ * SI-кандидаты не мониторим: у SI нет шумодава, а I2C-опрос щёлкает. */
+static void monitorTick(void) {
   uint32_t now = millis();
   if (now - s_lastMon < MON_DWELL_MS)
     return;
@@ -303,7 +396,10 @@ static void monitorTick(void) {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
     if (i == currentVfo || !vfos[i].monitor)
       continue;
-    vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
+    if (vfos[i].radioManual && !deviceCovers(vfos[i].radio, vfos[i].rxF))
+      vfos[i].radioManual = false;
+    if (!vfos[i].radioManual)
+      vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
     if (vfos[i].radio == RADIO_SI4732 || vfos[i].radio == ar)
       continue;
     cand[n++] = i;
@@ -328,6 +424,11 @@ static void monitorTick(void) {
   }
 
   if (open) {
+    if (s_monReturn < 0) {
+      s_monReturn = (int8_t)currentVfo; /* куда вернуться после перехвата */
+      s_monClosedAt = 0;
+    }
+    s_monCaught = i;
     currentVfo = i;
     applyVfo(true);
   }
@@ -391,6 +492,8 @@ void Radio_Init(void) {
 
 /* Каждый update-цикл: шумодав активного VFO + мониторинг. */
 void Radio_Update(void) {
+  monitorReturnTick();
+
   Radio ar = vfos[currentVfo].radio;
   bool sqOpen = true;
   if (ar != RADIO_SI4732) {
@@ -625,6 +728,14 @@ void Radio_NextFilter(void) {
   } else {
     BK4819_SetFilterOverride(filters[filterIndex], true);
   }
+}
+
+/* Сканирующие режимы работают в AUTO: ручной фильтр из VFO мог остаться от
+ * другого диапазона и «погасить» весь спектр. */
+void Radio_FilterAuto(void) {
+  filterIndex = -1;
+  BK4819_SetFilterOverride(filters[0], false);
+  BK4819_SelectFilterByFrequency(vfos[currentVfo].rxF);
 }
 
 void Radio_ToggleFilter(void) {

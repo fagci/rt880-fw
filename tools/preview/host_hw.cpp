@@ -5,7 +5,6 @@
 #include "driver/si473x.h"
 #include "driver/st7789.h"
 #include "radio.h"
-#include "modes/mode.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -151,6 +150,18 @@ static uint16_t s_seekThr;
 
 void SI47XX_TuneTo(uint32_t f) { g_siF = f; }
 uint8_t SI47XX_GetRssi(void) { return host_si_rssi_at(g_siF); }
+void SI47XX_GetRssiSnr(uint8_t *rssi, uint8_t *snr) {
+  if (rssi)
+    *rssi = host_si_rssi_at(g_siF);
+  if (snr) {
+    /* SNR: 0 на шумовом полу (−108 дБм), до 30 у сильных станций */
+    int dbm = (int)host_signal_rssi(g_siF) / 2 - 160;
+    int v = dbm + 108;
+    *snr = v < 0 ? 0 : (uint8_t)(v > 30 ? 30 : v);
+  }
+}
+void SI47XX_SetBFO(int16_t) {}
+bool SI47XX_IsSSB(void) { return true; }
 void SI47XX_Seek(bool up, bool) {
   if (up)
     g_siF += s_seekStep;
@@ -190,7 +201,3 @@ void SI47XX_TuneStatusGet(SI47XX_SeekStatus *st) {
   st->limit = true;
 }
 }
-
-/* режим «Radio» в превью не нужен — заглушка для ссылки из vfo.cpp */
-static Mode s_dummyRadio;
-Mode &MODE_RADIO = s_dummyRadio;

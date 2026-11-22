@@ -23,7 +23,6 @@
 #include "mode.h"
 #include "radio.h"
 #include "scanner.h"
-#include "bc_all.h"
 #include "bc_scanner.h"
 #include "fc.h"
 #include "analyser.h"
@@ -390,9 +389,6 @@ public:
       case KEY_6:
         Mode_Switch(MODE_BC_SCANNER);
         return true;
-      case KEY_3:
-        Mode_Switch(MODE_BC_ALL);
-        return true;
       case KEY_0:
         Mode_Switch(MODE_RADIO);
         return true;
@@ -417,13 +413,16 @@ public:
         }
         return true;
       }
-      case KEY_1:
+      case KEY_HASH: /* приёмник: AUTO ↔ BK/SI, если чип поддерживает */
+        Radio_NextReceiver();
+        return true;
+      case KEY_1: /* multiwatch: закрепить/снять VFO 1 */
         Radio_ToggleMonitor(0);
         return true;
-      case KEY_2:
+      case KEY_2: /* multiwatch: закрепить/снять VFO 2 */
         Radio_ToggleMonitor(1);
         return true;
-      case KEY_7:
+      case KEY_3: /* multiwatch: закрепить/снять VFO 3 */
         Radio_ToggleMonitor(2);
         return true;
       default:

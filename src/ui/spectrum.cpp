@@ -2,6 +2,7 @@
 #include "driver/board.h"
 #include "driver/st7789.h"
 #include "helper/measurements.h"
+#include "screen_layout.h"
 #include <string.h>
 
 static uint16_t rssiHistory[SP_MAX_POINTS] = {0};
@@ -10,6 +11,14 @@ static uint16_t noiseHistory[SP_MAX_POINTS] = {0};
 static bool markers[SP_MAX_POINTS] = {0};
 static uint8_t lastX = 255;
 static uint8_t filledPoints;
+
+/* Накопитель текущего пикселя: пока скан идёт по его частотам, в историю
+ * ничего не пишем. Иначе на первом замере столбец обнуляется, и если сильный
+ * замер в этом пикселе не первый, пик «проваливается» и возвращается. */
+static uint16_t curRssi;
+static uint16_t curNoise;
+static bool curOpen;
+static void flushPixel(void);
 
 static uint32_t stepsCount;
 static uint32_t currentStep;
@@ -20,15 +29,25 @@ static FRange range;
 
 static DBmRange dBmRange = {-110, -50};
 
-/* Автоуровень, как в k1-fw: низ графика привязан к шумовому полу, а не к
- * абсолютным dBm. Поэтому на любом диапазоне/усилении пол стоит у нижней
- * кромки, а сигналы занимают всю высоту. Единицы — сырой RSSI (0.5 дБ). */
-#define SP_MIN_SPAN 40      /* 20 дБ — минимальный размах по вертикали */
-#define SP_FLOOR_MARGIN_PX 2 /* пол на 2 px выше низа */
+/* Стабильный уровень: низ шкалы — опора по шумовому полу, верх — на
+ * фиксированном размахе. Максимум прохода больше не задаёт размах, а опора
+ * пересчитывается только при заметном уходе пола. Иначе региональный подъём
+ * шума на общем виде выглядит «сигналом», а после зума (когда опора уезжает
+ * на локальный минимум) — пропадает. Единицы — сырой RSSI (0.5 дБ). */
+#define SP_LEVEL_SPAN 80     /* 40 дБ — фиксированный размах по вертикали */
+#define SP_LEVEL_SNAP_UP 40  /* пол выше опоры >20 дБ — новый диапазон/усиление */
+#define SP_LEVEL_SNAP_DOWN 4 /* пол ниже опоры >2 дБ — сразу вниз */
+#define SP_FLOOR_OFFSET 4    /* запас под шумовым полом (~2 дБ) */
 static int levelMin = 100;
-static int levelMax = 220;
+static int levelMax = 100 + SP_LEVEL_SPAN;
 static bool levelValid;
 static uint8_t levelHeight = 52;
+
+/* Минимум сырых RSSI за проход. Пиксельная история хранит максимум по
+ * нескольким замерам, и её минимум зависит от того, сколько замеров попало в
+ * столбец: на широком диапазоне он выше, чем на узком. Уровень же должен
+ * опираться на реальный шумовой пол и не зависеть от зума. */
+static uint16_t sweepMin = UINT16_MAX;
 
 static bool ticksRendered = false;
 static bool forceRedraw = true;
@@ -133,41 +152,34 @@ static uint8_t f2x(uint32_t f) {
   return ConvertDomain(f, range.start, range.end, 0, SP_MAX_POINTS - 1);
 }
 
-/* Пересчёт автоуровней по завершённому проходу: низ — минимум истории
- * (шумовой пол) минус два пикселя, верх — на размах не меньше SP_MIN_SPAN.
- * Вызывается из SP_Begin, чтобы водопад не дёргался на каждом неполном
- * свипе. */
+/* Пересчёт уровня: опора — минимум сырых замеров (sweepMin), верх —
+ * levelMin + SP_LEVEL_SPAN. Вниз опора опускается сразу (иначе после зума
+ * шкала останется выше всего диапазона и экран будет пустым), вверх — только
+ * при заметном уходе (другой диапазон/усиление). */
 static void computeAutoLevel(uint8_t sh) {
-  if (filledPoints < 2 || sh == 0)
+  (void)sh;
+  if (sweepMin == UINT16_MAX)
     return;
 
-  uint16_t mn = UINT16_MAX, mx = 0;
-  bool any = false;
-  for (uint8_t i = 0; i < filledPoints; i++) {
-    uint16_t r = rssiHistory[i];
-    if (!r) /* столбец ещё не измерен */
-      continue;
-    any = true;
-    if (r < mn)
-      mn = r;
-    if (r > mx)
-      mx = r;
-  }
-  if (!any)
-    return;
+  int target = (int)sweepMin - SP_FLOOR_OFFSET;
+  if (target < 0)
+    target = 0;
+  int diff = target - levelMin;
+  if (!levelValid || diff > SP_LEVEL_SNAP_UP || diff < -SP_LEVEL_SNAP_DOWN)
+    levelMin = target;
 
-  int span = (int)mx - (int)mn;
-  if (span < SP_MIN_SPAN)
-    span = SP_MIN_SPAN;
-  int lo = (int)mn - SP_FLOOR_MARGIN_PX * span / sh;
-  if (lo < 0)
-    lo = 0;
-
-  levelMin = lo;
-  levelMax = lo + span;
+  levelMax = levelMin + SP_LEVEL_SPAN;
   levelValid = true;
   dBmRange.min = Rssi2DBm((uint16_t)levelMin);
   dBmRange.max = Rssi2DBm((uint16_t)levelMax);
+}
+
+/* Сбросить опору уровня. Нужно при входе в режим: у BK и SI разные шкалы
+ * RSSI, и унаследованная опора сделала бы спектр пустым. Зум/смена шага
+ * внутри режима опору не сбрасывают. */
+void SP_ResetLevel(void) {
+  levelValid = false;
+  sweepMin = UINT16_MAX;
 }
 
 void SP_ResetHistory(void) {
@@ -179,9 +191,15 @@ void SP_ResetHistory(void) {
     peakRow[i] = drawnPeak[i] = 0xFF;
   }
   lastX = 255;
+  curRssi = 0;
+  curNoise = UINT16_MAX;
+  curOpen = false;
+  sweepMin = UINT16_MAX;
   filledPoints = 0;
   currentStep = 0;
-  levelValid = false;
+  /* levelValid не сбрасываем: зум/смена шага не должны пересчитывать шкалу
+   * с нуля — иначе уровень «прыгает» и пики меняют высоту. Вниз опора
+   * опускается сразу, вверх — только при заметном уходе. */
   peakFloorInit = false;
   peakDecayInit = false;
   forceRedraw = true;
@@ -200,7 +218,11 @@ void SP_ResetRender(void) {
 }
 
 void SP_Begin(void) {
+  /* Проход мог закончиться не на range.end (каналы/сетка): дописываем
+   * накопленный пиксель до пересчёта уровня. */
+  flushPixel();
   computeAutoLevel(levelHeight);
+  sweepMin = UINT16_MAX; /* следующий проход считает свой пол */
   currentStep = 0;
 }
 
@@ -220,54 +242,87 @@ void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
   ticksRendered = false;
 }
 
+/* Завершить накопленный пиксель и записать его в историю. */
+static void flushPixel(void) {
+  if (lastX >= SP_MAX_POINTS)
+    return;
+  rssiHistory[lastX] = curRssi;
+  noiseHistory[lastX] = curNoise;
+  markers[lastX] = curOpen;
+  if (curRssi > peakHistory[lastX])
+    peakHistory[lastX] = curRssi;
+  lastX = 255;
+}
+
+/* Залить пустые столбцы [from, to) уровнем from-1 (шаг больше ширины
+ * пикселя — измерений на них нет). */
+static void fillGap(uint8_t from, uint8_t to) {
+  if (from == 0 || from >= SP_MAX_POINTS)
+    return;
+  uint16_t r = rssiHistory[from - 1];
+  for (uint8_t nx = from; nx < to; ++nx) {
+    rssiHistory[nx] = r;
+    noiseHistory[nx] = noiseHistory[from - 1];
+    markers[nx] = markers[from - 1];
+    if (peakHistory[nx] < r)
+      peakHistory[nx] = r;
+  }
+}
+
 void SP_AddPoint(Measurement *msm) {
   uint8_t x = f2x(msm->f);
+  if (msm->rssi && msm->rssi < sweepMin)
+    sweepMin = msm->rssi;
   if (lastX != x) {
+    uint8_t prev = lastX;
+    flushPixel();
+    if (prev < x)
+      fillGap(prev + 1, x);
     lastX = x;
-    rssiHistory[x] = markers[x] = 0;
-    noiseHistory[x] = UINT16_MAX;
+    curRssi = 0;
+    curNoise = UINT16_MAX;
+    curOpen = false;
   }
-  if (msm->rssi > rssiHistory[x])
-    rssiHistory[x] = msm->rssi;
-  if (msm->rssi > peakHistory[x])
-    peakHistory[x] = msm->rssi;
-  if (msm->noise < noiseHistory[x])
-    noiseHistory[x] = msm->noise;
-  if (markers[x] == false && msm->open)
-    markers[x] = msm->open;
-  /* последняя точка диапазона закрашивает хвост до края (иначе правый
-   * столбец никогда не заполнялся — чёрная полоска в водопаде) */
-  uint8_t XL = (msm->f + step >= range.end) ? SP_MAX_POINTS
-                                            : f2x(msm->f + step);
-  for (uint8_t nx = x + 1; nx < XL; ++nx) {
-    rssiHistory[nx] = rssiHistory[x];
-    noiseHistory[nx] = noiseHistory[x];
-    markers[nx] = markers[x];
-    if (peakHistory[nx] < rssiHistory[x])
-      peakHistory[nx] = rssiHistory[x];
-  }
-  if (x > filledPoints && x < SP_MAX_POINTS)
+  if (msm->rssi > curRssi)
+    curRssi = msm->rssi;
+  if (msm->noise < curNoise)
+    curNoise = msm->noise;
+  if (msm->open)
+    curOpen = true;
+  /* последняя точка диапазона: завершаем пиксель и закрашиваем хвост до
+   * края (иначе правый столбец никогда не заполнялся — чёрная полоска) */
+  if (msm->f + step >= range.end) {
+    uint8_t last = lastX;
+    flushPixel();
+    fillGap(last + 1, SP_MAX_POINTS);
+    filledPoints = SP_MAX_POINTS;
+  } else if (x > filledPoints && x < SP_MAX_POINTS) {
     filledPoints = x + 1;
+  }
 }
 
 static void drawTicks(uint8_t y, uint32_t fs, uint32_t fe, uint32_t div,
                       uint8_t h, uint16_t c) {
-  const uint8_t th = 4;
-
   for (uint32_t f = fs - (fs % div) + div; f < fe; f += div) {
     uint8_t tx = f2x(f);
-    st7789_fill_rect_dma(tx, y + h - th, 1, th, c);
+    st7789_fill_rect_dma(tx, y, 1, h, c);
   }
 }
 
+/* Риски под спектром: базовая линия, минорные и мажорные штрихи. */
 static void SP_DrawTicks(uint8_t y, uint8_t h, FRange *p) {
   uint32_t fs = p->start;
   uint32_t fe = p->end;
   uint32_t bw = fe - fs;
+  const uint8_t ty = (uint8_t)(y + h);
+  const uint16_t major = gThemeLight ? C_BLACK : C_WHITE;
 
-  for (uint32_t p = 100000000; p >= 10; p /= 10) {
-    if (p < bw) {
-      drawTicks(y, fs, fe, p, h, C_GRAY);
+  st7789_fill_rect_dma(0, ty, SP_MAX_POINTS, 1, C_GRAY);
+
+  for (uint32_t d = 100000000; d >= 10; d /= 10) {
+    if (d < bw) {
+      drawTicks(ty, fs, fe, d / 2, UI_TICKS_H - 1, C_GRAY);
+      drawTicks(ty, fs, fe, d, UI_TICKS_H, major);
       return;
     }
   }
@@ -352,10 +407,10 @@ static void updatePeakFloor(void) {
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   initBarRamp(sh);
   levelHeight = sh;
-  /* До первого завершённого прохода уровней ещё нет — оценим по тому, что
-   * успели измерить; дальше их пересчитывает SP_Begin. */
-  if (!levelValid)
-    computeAutoLevel(sh);
+  /* Опускаем опору сразу, как только в текущем проходе встретился более
+   * низкий пол (после зума иначе можно получить пустой экран). Вверх она
+   * поднимается только при заметном уходе — см. computeAutoLevel. */
+  computeAutoLevel(sh);
 
   decayPeaks();
   updatePeakFloor();
@@ -456,8 +511,9 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
   memcpy(drawnTop, topRow, sizeof(topRow));
   memcpy(drawnPeak, peakRow, sizeof(peakRow));
 
-  /* Тики лежат в нижних 4 строках: если их не перерисовали — они целы. */
-  if (full || last + 4 >= sh) {
+  /* Риски под спектром столбцы не перекрывают; перерисовываем их только
+   * при полном кадре или смене диапазона/сетки. */
+  if (full || !ticksRendered) {
     SP_DrawTicks(sy, sh, p);
     ticksRendered = true;
   }

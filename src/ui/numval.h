@@ -79,6 +79,9 @@ bool NumVal_IsEditing(const NumVal_t *nv);
 /* Программный вход в режим редактирования (например, по клавише) */
 void NumVal_StartEdit(NumVal_t *nv);
 
+/* Отменить ввод, не применяя значение (возврат к сохранённому value) */
+void NumVal_Cancel(NumVal_t *nv);
+
 void NumVal_Invalidate(NumVal_t *nv);
 
 uint32_t NumVal_GetValue(NumVal_t *nv);

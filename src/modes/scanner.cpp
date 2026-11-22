@@ -308,6 +308,8 @@ public:
     if (savedMod == MOD_WFM) /* WFM 64–108 = SI4732, а скан идёт по BK */
       vfos[scanVfo].modulation = MOD_FM;
     savedFreq = vfos[scanVfo].rxF; /* после Radio_Init */
+    Radio_FilterAuto(); /* скан сам выбирает фильтр по частоте */
+    SP_ResetLevel();
 
     initNumVals();
     onRangeChanged();

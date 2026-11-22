@@ -545,6 +545,9 @@ void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
   static const uint8_t af[] = {1, 2, 0, 3, 0, 0, 7, 6, 5, 4};
   static const uint8_t bs[] = {1, 1, 0, 0, 2, 2, 2, 2, 2, 2};
 
+  /* как k1-fw: узкие полосы (<12 кГц) включают boost */
+  const bool boost = bw < BK4819_FILTER_BW_12k;
+
   const uint16_t value = //
       (0u << 15)         //
       | (rf[bw] << 12)   //
@@ -552,7 +555,7 @@ void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
       | (af[bw] << 6)    //
       | (bs[bw] << 4)    //
       | (1u << 3)        //
-      | (0u << 2)        //
+      | ((boost ? 1u : 0u) << 2) //
       | (0u << 0);       //
 
   BK4819_WriteRegister(BK4819_REG_43, value);
@@ -574,16 +577,16 @@ void BK4819_SetRegValue(RegisterSpec spec, uint16_t value) {
 
 void BK4819_SetModulation(ModulationType type) {
   bool isSsb = type == MOD_LSB || type == MOD_USB;
-  bool isFm = type == MOD_FM || type == MOD_WFM;
   BK4819_SetAF(MOD_TYPE_REG47_VALUES[type]);
   BK4819_SetRegValue(RS_AF_DAC_GAIN, 0x8);
-  BK4819_SetRegValue(RS_AFC_DIS, !isFm);
+  /* AFC выключаем только для SSB; на AM он нужен, как в стоке и k1-fw */
+  BK4819_SetRegValue(RS_AFC_DIS, isSsb);
   if (type == MOD_WFM) {
-    BK4819_SetRegValue(RS_RF_FILT_BW, 7);
-    BK4819_SetRegValue(RS_RF_FILT_BW_WEAK, 7);
-    BK4819_SetRegValue(RS_BW_MODE, 3);
-
-    BK4819_SetRegValue(RS_XTAL_MODE, 0);
+    /* как k1-fw: WFM сама пишет полный REG_43 (широкая полоса) и
+     * кварц 13 МГц; обычный SetFilterBandwidth её не трогает */
+    BK4819_WriteRegister(BK4819_REG_43,
+                         (7u << 12) | (7u << 9) | (3u << 4) | (1u << 3));
+    BK4819_WriteRegister(0x3C, 20232); /* XTAL_0_13M */
     BK4819_SetRegValue(RS_IF_F, 14223);
   } else if (isSsb) {
     BK4819_SetRegValue(RS_XTAL_MODE, 3);
@@ -592,6 +595,9 @@ void BK4819_SetModulation(ModulationType type) {
     BK4819_SetRegValue(RS_XTAL_MODE, 2);
     BK4819_SetRegValue(RS_IF_F, 10923);
   }
+
+  /* RX-фильтр 3 кГц (стоковое слово), иначе AM остаётся без аудиофильтра */
+  BK4819_WriteRegister(0x75, isSsb ? 0xFC13 : 0xF50B);
 
   uint16_t reg4A = 0x5430; // default
 
@@ -616,6 +622,15 @@ void BK4819_SetModulation(ModulationType type) {
     BK4819_WriteRegister(0x2B, 0x0000);
     BK4819_WriteRegister(0x2F, 0x9890);
   }
+
+  if (type == MOD_FM) {
+    BK4819_WriteRegister(0x28, 0x0600); // noise gate FM
+    BK4819_WriteRegister(0x2C, 0x6662); // emph/tx gain FM
+  } else {
+    BK4819_WriteRegister(0x28, 0x0B40);
+    BK4819_WriteRegister(0x2C, 0x1822);
+  }
+  g_bk->lastModulation = type;
 }
 
 void BK4819_SquelchType(SquelchType t) {
