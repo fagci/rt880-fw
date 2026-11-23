@@ -268,6 +268,8 @@ uint16_t BK4819_ReadRegister(uint8_t reg) {
   return read_raw(reg);
 }
 
+uint16_t BK4819_ReadRegisterRaw(uint8_t reg) { return read_raw(reg); }
+
 static uint16_t read_raw(uint8_t reg) {
   uint32_t primask = __get_PRIMASK();
   __disable_irq();

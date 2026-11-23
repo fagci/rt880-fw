@@ -11,6 +11,7 @@
 #include "../helper/measurements.h"
 #include "../modes/mode.h"
 #include "graphics.h"
+#include "lv_helpers.h"
 #include "lvgl.h"
 #include "printf.h"
 #include "screen_layout.h"
@@ -36,59 +37,26 @@ static bool s_antShown;
 static bool s_lockShown;
 static const char *s_titleText = "";
 
-static inline lv_color_t lvc(Color c) {
-  c = TC(c);
-  return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),
-                       (uint8_t)(c << 3));
-}
-
-static lv_obj_t *mkBox(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
-                       lv_coord_t w, lv_coord_t h, Color bg, lv_opa_t opa,
-                       lv_coord_t radius) {
-  lv_obj_t *o = lv_obj_create(parent);
-  if (!o)
-    return NULL;
-  lv_obj_set_pos(o, x, y);
-  lv_obj_set_size(o, w, h);
-  lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
-  lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
-  lv_obj_set_style_radius(o, radius, LV_PART_MAIN);
-  lv_obj_set_style_bg_color(o, lvc(bg), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(o, opa, LV_PART_MAIN);
-  return o;
-}
-
 static lv_obj_t *mkText(lv_coord_t x, lv_coord_t w, lv_text_align_t al,
                         Color c) {
-  lv_obj_t *l = lv_label_create(s_root);
-  if (!l)
-    return NULL;
-  lv_obj_set_pos(l, x, (UI_STATUS_H - FontH(F_S)) / 2);
-  lv_obj_set_width(l, w);
-  lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
-  lv_obj_set_style_text_align(l, al, LV_PART_MAIN);
-  lv_obj_set_style_text_font(l, F_S, LV_PART_MAIN);
-  lv_obj_set_style_text_color(l, lvc(c), LV_PART_MAIN);
-  lv_obj_set_style_bg_opa(l, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_pad_all(l, 0, LV_PART_MAIN);
-  return l;
+  return lvLabel(s_root, F_S, c, x, (UI_STATUS_H - FontH(F_S)) / 2, w, al);
 }
 
 static void build(void) {
   s_root =
-      mkBox(lv_scr_act(), 0, 0, LCD_WIDTH, UI_STATUS_H, C_BLACK, LV_OPA_TRANSP, 0);
+      lvBox(lv_scr_act(), 0, 0, LCD_WIDTH, UI_STATUS_H, C_BLACK, LV_OPA_TRANSP, 0);
   if (!s_root)
     return;
   /* батарея: контур с носиком, заливка внутри */
-  s_batFrame = mkBox(s_root, BAT_X, BAT_Y, BAT_W, BAT_H, C_BLACK,
+  s_batFrame = lvBox(s_root, BAT_X, BAT_Y, BAT_W, BAT_H, C_BLACK,
                      LV_OPA_TRANSP, 3);
   if (s_batFrame) {
     lv_obj_set_style_border_width(s_batFrame, 1, LV_PART_MAIN);
-    lv_obj_set_style_border_color(s_batFrame, lvc(C_GRAY), LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_batFrame, lvColor(C_GRAY), LV_PART_MAIN);
   }
-  s_batNub = mkBox(s_root, BAT_X + BAT_W, BAT_Y + 3, 2, 5, C_GRAY,
+  s_batNub = lvBox(s_root, BAT_X + BAT_W, BAT_Y + 3, 2, 5, C_GRAY,
                    LV_OPA_COVER, 1);
-  s_batFill = mkBox(s_root, BAT_X + 2, BAT_Y + 2, 0, BAT_H - 4, C_GREEN,
+  s_batFill = lvBox(s_root, BAT_X + 2, BAT_Y + 2, 0, BAT_H - 4, C_GREEN,
                     LV_OPA_COVER, 1);
   s_batText = mkText(BAT_X - 8 - 30, 30, LV_TEXT_ALIGN_RIGHT, C_GRAY);
   /* A1 — только второй разъём (PF0 LOW), A2 — добавлена основная. */
@@ -154,15 +122,11 @@ void STATUSLINE_render(void) {
 
   if (s_batFill) {
     lv_obj_set_size(s_batFill, fill, BAT_H - 4);
-    lv_obj_set_style_bg_color(s_batFill, lvc(fcol), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_batFill, lvColor(fcol), LV_PART_MAIN);
   }
   if (s_batText) {
     static char t[8];
     snprintf(t, sizeof(t), "%u.%02uV", bat / 100, bat % 100);
     lv_label_set_text_static(s_batText, t);
   }
-}
-
-void STATUSLINE_SetText(const char *pattern, ...) {
-  (void)pattern;
 }

@@ -134,7 +134,6 @@ void BK4819_DisableFrequencyScan(void) {}
 bool BK4819_GetFrequencyScanResult(uint32_t *f) { *f = 43312500; return true; }
 uint16_t BK4819_GetFilter(void) { return 0; }
 bool SI47XX_Acquire(SI47XX_MODE) { return true; }
-bool SI47XX_AcquireRawAm(void) { return true; }
 void SI47XX_Init(void) {}
 void SI47XX_SetAutomaticGainControl(uint8_t, uint8_t) {}
 void SI47XX_SetVolume(uint8_t) {}
@@ -144,9 +143,6 @@ static uint8_t host_si_rssi_at(uint32_t f) {
   int uV = dbm + 107; /* dBm → дБмкВ (50 Ом) */
   return uV < 0 ? 0 : (uint8_t)(uV > 127 ? 127 : uV);
 }
-
-static uint32_t s_seekBottom, s_seekTop, s_seekStep = 500;
-static uint16_t s_seekThr;
 
 void SI47XX_TuneTo(uint32_t f) { g_siF = f; }
 uint8_t SI47XX_GetRssi(void) { return host_si_rssi_at(g_siF); }
@@ -162,42 +158,8 @@ void SI47XX_GetRssiSnr(uint8_t *rssi, uint8_t *snr) {
 }
 void SI47XX_SetBFO(int16_t) {}
 bool SI47XX_IsSSB(void) { return true; }
-void SI47XX_Seek(bool up, bool) {
-  if (up)
-    g_siF += s_seekStep;
-  else
-    g_siF = g_siF > s_seekStep ? g_siF - s_seekStep : 0;
 }
-bool SI47XX_SeekAmStart(uint32_t bottom, uint32_t top, uint32_t spacing,
-                        uint16_t rssiThr, bool up, bool) {
-  s_seekBottom = bottom;
-  s_seekTop = top;
-  s_seekStep = spacing ? spacing : 500;
-  s_seekThr = rssiThr;
-  if (g_siF < bottom || g_siF > top)
-    g_siF = up ? bottom : top;
-  return true;
-}
-void SI47XX_SetSeekAmRssiThreshold(uint16_t thr) { s_seekThr = thr; }
-void SI47XX_TuneStatusGet(SI47XX_SeekStatus *st) {
-  if (!st)
-    return;
-  memset(st, 0, sizeof(*st));
-  st->done = true;
-  uint32_t f = g_siF < s_seekBottom ? s_seekBottom : g_siF;
-  for (; f <= s_seekTop; f += s_seekStep) {
-    uint8_t r = host_si_rssi_at(f);
-    if (r >= s_seekThr) {
-      g_siF = f;
-      st->freq = f;
-      st->rssi = r;
-      st->valid = true;
-      return;
-    }
-  }
-  g_siF = s_seekTop;
-  st->freq = s_seekTop;
-  st->rssi = host_si_rssi_at(s_seekTop);
-  st->limit = true;
-}
-}
+
+/* В превью нет внешней W25Q32 — сохранение состояния не нужно. */
+void Store_MarkDirty(void) {}
+bool Store_ApplyRadio(void) { return false; }

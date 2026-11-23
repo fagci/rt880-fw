@@ -16,7 +16,7 @@
  * список и дальше, MENU или '*' или PTT — частоту в VFO и выход, EXIT —
  * выход без неё, длинный MENU — список находок.
  */
-#include "fc.h"
+#include "modes.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
@@ -28,9 +28,7 @@
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/statusline.h"
-#include "loot_screen.h"
 #include "mode.h"
-#include "vfo.h"
 #include "printf.h"
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +57,9 @@ static const FcBand BANDS[] = {
 
 struct {
   uint8_t scanSpeed;
-  uint16_t hz;
+  /* Младшие 14 бит REG_32: бит0 — enable, <13:1> — порог счётчика.
+   * Это не герцы; 0x244/0x580 — значения из UV-K5. */
+  uint16_t thr;
   uint8_t band;
   bool bandAutoSwitch;
   bool isScanning;
@@ -73,6 +73,7 @@ struct {
   uint32_t resumeAt; /* 0 — не ждём; иначе момент возобновления скана */
   bool stopped;
   uint8_t savedVfo;
+  uint8_t savedMonitors; /* multiwatch на время FC выключен */
   uint8_t scanVfo;
   uint32_t savedFreq;
   uint32_t captureF; /* частота в VFO при выходе (0 — вернуть прежнюю) */
@@ -114,7 +115,7 @@ static void selectBand(void) {
 static void enableScan() {
   BK4819_EnableFrequencyScanEx2(
       (FreqScanTime)(fcCtx.scanSpeed > F_SC_T_COUNT - 1 ? 0 : fcCtx.scanSpeed),
-      fcCtx.hz);
+      fcCtx.thr);
   fcCtx.isScanning = true;
   fcCtx.lastScanTime = millis();
 }
@@ -139,6 +140,21 @@ static bool freqAccepted(uint32_t freq) {
   if (freq >= 88 * MHZ && freq <= 108 * MHZ) /* FM-вещание — мусор */
     return false;
   return !LOOT_IsSkipped(freq, HIT_TOL, false); /* чёрный/белый список */
+}
+
+/* Счётчик на слабом сигнале отдаёт «хвост» развёртки/шум. Проверяем по RSSI,
+ * что на найденной частоте есть несущая, а не ровный шум. */
+static bool carrierPresent(uint32_t freq) {
+  uint32_t off = freq + 200u * KHZ; /* +200 кГц, вне полосы приёма */
+  if (off > BK4819_F_MAX)
+    off = freq - 200u * KHZ;
+  BK4819_TuneTo(freq, false);
+  delay_ms(5);
+  uint16_t on = BK4819_GetRSSI();
+  BK4819_TuneTo(off, false);
+  delay_ms(5);
+  uint16_t noise = BK4819_GetRSSI();
+  return on > noise + 12; /* 12 отсчётов ≈ 6 дБ */
 }
 
 /* Остановились на находке: настройка приёмника, учёт в списке */
@@ -175,12 +191,19 @@ public:
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
     fcCtx.scanVfo = currentVfo;
+    fcCtx.savedMonitors = 0;
+    for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
+      if (vfos[i].monitor) {
+        fcCtx.savedMonitors |= (uint8_t)(1u << i);
+        vfos[i].monitor = false;
+      }
+    }
     Radio_Init();
     fcCtx.savedFreq = vfos[fcCtx.scanVfo].rxF; /* после Radio_Init */
 
     fcCtx.band = 0;
     fcCtx.scanSpeed = 0;
-    fcCtx.hz = 0x244;
+    fcCtx.thr = 0x244;
     fcCtx.bandAutoSwitch = false; /* без авто-переключения: реле не щёлкает */
     fcCtx.isScanning = false;
     fcCtx.currentFrequency = 0;
@@ -214,6 +237,9 @@ public:
       vfos[currentVfo].rxF = fcCtx.savedFreq;
       Radio_TuneTo(fcCtx.savedFreq, true);
     }
+    for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
+      if (fcCtx.savedMonitors & (1u << i))
+        vfos[i].monitor = true;
     currentVfo = fcCtx.savedVfo;
     Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
                                дальше решает шумодав VFO (Radio_Update) */
@@ -223,8 +249,9 @@ public:
     if (fcCtx.isScanning) {
       uint32_t freq;
       if (BK4819_GetFrequencyScanResult(&freq)) {
+        disableScan();
         fcCtx.currentFrequency = freq;
-        bool ok = freqAccepted(freq);
+        bool ok = freqAccepted(freq) && carrierPresent(freq);
 
         if (ok && DeltaF(freq, fcCtx.lastDetectedFrequency) < HIT_TOL)
           fcCtx.frequencyHits++;
@@ -232,12 +259,10 @@ public:
           fcCtx.frequencyHits = ok ? 1 : 0;
         fcCtx.lastDetectedFrequency = ok ? freq : 0;
 
-        if (fcCtx.frequencyHits >= REQUIRED_HITS) {
+        if (fcCtx.frequencyHits >= REQUIRED_HITS)
           stopOnHit(freq);
-        } else {
-          disableScan();
+        else
           enableScan();
-        }
       }
 
       if (fcCtx.isScanning) {
@@ -277,14 +302,14 @@ public:
 
     /* строка настроек */
     snprintf(buf, sizeof(buf), "%s %ums THR %03X SQ %u%s", BANDS[fcCtx.band].name,
-             200u << fcCtx.scanSpeed, (unsigned)fcCtx.hz,
+             200u << fcCtx.scanSpeed, (unsigned)fcCtx.thr,
              (unsigned)squelchLevel, fcCtx.bandAutoSwitch ? " [A]" : "");
     drawLine(0, 4, FC_STATUS_H + 16, 16, POS_L, C_WHITE, F_M, buf);
 
     /* частота: последняя найденная счётчиком / на которой стоим */
     uint32_t f = fcCtx.stopped ? fcCtx.stopFreq : fcCtx.currentFrequency;
     snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(f / MHZ),
-             (unsigned long)((f % MHZ) / 1000));
+             (unsigned long)((f % MHZ) / KHZ));
     drawLine(1, LCD_XCENTER, FC_STATUS_H + 52, 34, POS_C,
              fcCtx.stopped ? C_GREEN : C_YELLOW, F_XL, buf);
 
@@ -345,7 +370,7 @@ public:
       Radio_SetSquelch(squelchLevel);
       return true;
     case KEY_5:
-      fcCtx.hz = fcCtx.hz == 0x244 ? 0x580 : 0x244;
+      fcCtx.thr = fcCtx.thr == 0x244 ? 0x580 : 0x244;
       if (fcCtx.isScanning) {
         disableScan();
         enableScan();

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Генерация LVGL-шрифтов интерфейса.
 # Мелкий — Cozette 13 px / 1 bpp (MIT, tools/fonts/), совпадает с
-# растровым cozette.bdf пиксель в пиксель. M/L/XL — JetBrains Mono
+# растровым cozette.bdf пиксель в пиксель. M/XL — JetBrains Mono
 # (Medium/ExtraBold); XL — ExtraBold 38 px для цифр частоты.
 # Во всех шрифтах убран/заменён ноль: у Cozette — диагональная черта,
 # у JetBrains — точка просто удаляется.
@@ -43,7 +43,5 @@ gen ui_font_s  "$TMP/CozetteVector-slash.ttf" 13 0x20-0x7E 1 \
   "Cozette 1.30.0 (tools/fonts), zero = slash"
 gen ui_font_m  "$TMP/jb-medium.ttf"           14 0x20-0x7E 4 \
   "JetBrains Mono Medium 14 px, zero = nodot"
-gen ui_font_l  "$TMP/jb-extrabold.ttf"        20 0x20-0x7E 4 \
-  "JetBrains Mono ExtraBold 20 px, zero = nodot"
 gen ui_font_xl "$TMP/jb-extrabold.ttf"        38 0x20,0x25,0x2B-0x3A 4 \
   "JetBrains Mono ExtraBold 38 px, zero = nodot"

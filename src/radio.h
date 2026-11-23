@@ -3,16 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define MHZ 100000
-
 typedef enum { RADIO_BK4819A, RADIO_BK4819B, RADIO_SI4732 } Radio;
-typedef enum {
-  OFFSET_NONE,
-  OFFSET_PLUS,
-  OFFSET_MINUS,
-  OFFSET_FREQ
-} OffsetDirection;
-typedef enum { TX_POW_ULOW, TX_POW_LOW, TX_POW_MID, TX_POW_HIGH } TXOutputPower;
 typedef enum {
   STEP_0_02kHz,
   STEP_0_05kHz,
@@ -33,45 +24,14 @@ typedef enum {
 } Step;
 
 typedef struct {
-  uint8_t value;
-  uint8_t type : 4;
-} Code;
-typedef struct {
-  Code rx;
-  Code tx;
-} CodeRXTX;
-typedef struct {
-  uint8_t value : 4;
-  uint8_t type : 2;
-} Squelch;
-
-typedef struct {
-  uint16_t scanlists;
-  uint16_t channel;
-  char name[10];
   uint32_t rxF : 27;
-  int32_t ppm : 5;
-  uint32_t txF : 27;
-  OffsetDirection offsetDir : 2;
-  bool allowTx : 1;
-  uint8_t reserved2 : 2;
   Step step : 4;
   uint8_t modulation : 4;
   uint8_t bw : 4;
   Radio radio : 2;
   bool radioManual : 1; /* приёмник выбран вручную, не по частоте */
-  TXOutputPower power : 2;
-  uint8_t mic : 4;
-  uint8_t scrambler : 4;
-  Squelch squelch;
-  CodeRXTX code;
-  bool fixedBoundsMode : 1;
-  bool isChMode : 1;
   bool monitor : 1; /* VFO закреплён за фоновым мониторингом */
-  uint8_t reserved3 : 1;
   uint8_t gainIndex : 5;
-  uint8_t deviation;
-  uint32_t upconverter;
 } __attribute__((packed)) VFO;
 
 #define DEVICE_VFO_COUNT 3
@@ -80,7 +40,6 @@ extern VFO vfos[DEVICE_VFO_COUNT];
 extern uint8_t currentVfo;
 
 extern Filter filters[];
-extern const char *FILTER_NAMES[];
 extern int8_t filterIndex; /* -1 = AUTO, 0..3 = filters[] */
 
 extern const uint16_t StepFrequencyTable[15];
@@ -95,9 +54,6 @@ void Radio_TuneTo(uint32_t f, bool precise);
 void Radio_TuneToAuto(uint32_t f);
 /* модуляция и шаг активного VFO по плану диапазонов; false — вне плана */
 bool Radio_ApplyBandPlan(uint32_t f);
-const char *Radio_BandName(uint32_t f); /* "40m", "AIR"...; "" вне плана */
-/* Границы диапазона PLAN, в который попадает f (ед. 10 Гц). */
-bool Radio_BandRange(uint32_t f, uint32_t *start, uint32_t *end);
 void Radio_NextBand(int8_t dir);        /* +1/-1: следующий/пред. диапазон группы */
 void Radio_NextGroup(void);
 void Radio_TuneStep(int8_t dir);
@@ -107,7 +63,6 @@ void Radio_SwitchToVfo(uint8_t idx);
 void Radio_ApplyPending(void);
 void Radio_ToggleMonitor(uint8_t idx);
 void Radio_NextFilter(void);
-void Radio_ToggleFilter(void);
 /* Вернуть AUTO-фильтр по частоте (режимы сканирования не наследуют ручной) */
 void Radio_FilterAuto(void);
 void Radio_Update(void);
@@ -118,8 +73,5 @@ void Radio_SiAudio(bool on);
 void Radio_SetSquelch(uint8_t level);
 void Radio_ToggleSquelchForce(void);
 void Radio_NextStep(void);
-void Radio_PrevStep(void);
-void Radio_NextFilter(void);
-void Radio_ToggleFilter(void);
 
 extern uint8_t squelchLevel;

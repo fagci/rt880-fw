@@ -1,11 +1,12 @@
 #include "mode.h"
 #include "../driver/board.h"
 #include "../driver/st7789.h"
+#include "../helper/store.h"
 #include "../ui/graphics.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "lvgl.h"
-#include "vfo.h"
+#include "modes.h"
 
 static Mode *current = nullptr;
 static Mode *next = nullptr;
@@ -65,6 +66,9 @@ uint16_t Mode_RenderInterval() {
 bool Mode_KeyLocked(void) { return s_keyLocked; }
 
 void Mode_Key(KEY_Code_t key, Key_State_t state) {
+  /* Любая клавиша могла изменить VFO/настройки — сохраним после паузы. */
+  Store_MarkDirty();
+
   /* Долгий EXIT гасит дисплей и подсветку клавиатуры. Пока они погашены,
    * остальные клавиши игнорируются; включает обратно только повторный
    * долгий EXIT. */

@@ -108,12 +108,13 @@ vector_table:
     .word   OTGFS1_IRQHandler           /* IRQ67 */
     .word   DMA2_Channel6_IRQHandler    /* IRQ68 */
     .word   DMA2_Channel7_IRQHandler    /* IRQ69 */
-    .word   USART6_IRQHandler           /* IRQ70 */
-    .word   I2C3_EVT_IRQHandler         /* IRQ71 */
-    .word   I2C3_ERR_IRQHandler         /* IRQ72 */
-    .word   0                           /* IRQ73: Reserved */
+    .word   0                           /* IRQ70: Reserved */
+    .word   USART6_IRQHandler           /* IRQ71 */
+    .word   I2C3_EVT_IRQHandler         /* IRQ72 */
+    .word   I2C3_ERR_IRQHandler         /* IRQ73 */
     .word   0                           /* IRQ74: Reserved */
     .word   0                           /* IRQ75: Reserved */
+    .word   0                           /* IRQ76: Reserved */
 
     .size vector_table, .-vector_table
 
@@ -148,6 +149,11 @@ Reset_Handler:
     blo     .Lzero_loop
 
     bl      SystemInit
+    /* C++: статические конструкторы (.init_array). Без этого default-поля
+     * ctx-структур остаются нулями: сканер стартовал в PAUSE и с range 0.
+     * Свой цикл, а не __libc_init_array: в этом линке _init/_fini — обрубки
+     * crti без crtn. */
+    bl      RunInitArray
     bl      main
     b       .
 

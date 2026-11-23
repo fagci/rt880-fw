@@ -65,6 +65,26 @@ static const gpio_pin_t PIN_KEY_M4 =
 static const gpio_pin_t PIN_KEY_PTT =
     GPIO_PIN(GPIOB, GPIO_PINS_6, CRM_GPIOB_PERIPH_CLOCK);
 
+/* ── UART на USB-разъёме ────────────────────────────────────────────── */
+/* PA11/PA12, ноги 44/45: USART6 AF8 (TX/RX), как в стоке. Это не USB:
+ * кабель CPS/прошивки — обычный USB-UART, линии идут на D+/D-. */
+static const gpio_pin_t PIN_UART_TX =
+    GPIO_PIN(GPIOA, GPIO_PINS_11, CRM_GPIOA_PERIPH_CLOCK);
+static const gpio_pin_t PIN_UART_RX =
+    GPIO_PIN(GPIOA, GPIO_PINS_12, CRM_GPIOA_PERIPH_CLOCK);
+
+/* ── Внешняя SPI-флеш W25Q32 (U509) ─────────────────────────────────── */
+/* PB12, нога 33: W25Q-CS (программный CS). */
+static const gpio_pin_t PIN_FLASH_CS =
+    GPIO_PIN(GPIOB, GPIO_PINS_12, CRM_GPIOB_PERIPH_CLOCK);
+/* PB13/14/15, ноги 34/35/36: W25Q-SCK/DO/DI — SPI2, AF5. */
+static const gpio_pin_t PIN_FLASH_SCK =
+    GPIO_PIN(GPIOB, GPIO_PINS_13, CRM_GPIOB_PERIPH_CLOCK);
+static const gpio_pin_t PIN_FLASH_DO =
+    GPIO_PIN(GPIOB, GPIO_PINS_14, CRM_GPIOB_PERIPH_CLOCK);
+static const gpio_pin_t PIN_FLASH_DI =
+    GPIO_PIN(GPIOB, GPIO_PINS_15, CRM_GPIOB_PERIPH_CLOCK);
+
 /* ── Аналоговые входы ───────────────────────────────────────────────── */
 /* PC2, нога 10: KEYIN-AD — резистивная лестница SIDE1/SIDE2/ALARM. */
 static const gpio_pin_t PIN_KEY_ADC =

@@ -80,6 +80,8 @@ void BK4819_Idle(void);
 
 void BK4819_WriteRegister(uint8_t reg, uint16_t data);
 uint16_t BK4819_ReadRegister(uint8_t reg);
+/* Чтение по шине, минуя кэш REG_30 (для отладки). */
+uint16_t BK4819_ReadRegisterRaw(uint8_t reg);
 
 uint32_t BK4819_GetFrequency(void);
 void BK4819_TuneTo(uint32_t freq, bool precise);

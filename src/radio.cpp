@@ -1,4 +1,5 @@
 #include "radio.h"
+#include "bands.h"
 #include "driver/bk4819-regs.h"
 #include "driver/bk4819.h"
 #include "driver/board.h"
@@ -6,6 +7,7 @@
 #include "driver/si473x.h"
 #include "helper/log.h"
 #include "helper/measurements.h"
+#include "helper/store.h"
 #include "misc.h"
 #include "ui/graphics.h"
 #include <string.h>
@@ -15,7 +17,6 @@ VFO vfos[DEVICE_VFO_COUNT] = {{}, {}, {}};
 uint8_t currentVfo = 0;
 
 Filter filters[] = {FILTER_HF, FILTER_VHF, FILTER_UHF, FILTER_800};
-const char *FILTER_NAMES[] = {"HF", "VHF", "UHF", "800"};
 int8_t filterIndex = -1; /* -1 = AUTO, 0..3 = filters[] */
 
 const uint16_t StepFrequencyTable[STEP_COUNT] = {
@@ -39,7 +40,8 @@ static bool s_bootMute;     /* старт: не открывать звук до
 
 /* Как часто BK «бегает» по закреплённым VFO и сколько сидит на каждом */
 #define MON_DWELL_MS 120
-#define MON_SETTLE_MS 8
+#define MON_SETTLE_MS 15  /* PLL/AGC после перестройки */
+#define MON_CONFIRM_MS 20 /* второй отсчёт шумодава: отсечь всплеск */
 #define MON_RETURN_MS 1500 /* BK молчит столько — вернуться на прежний VFO */
 static uint32_t s_lastMon;
 /* Возврат после перехвата: на каком VFO поймали и куда вернуться. */
@@ -48,112 +50,9 @@ static uint8_t s_monCaught;
 static uint32_t s_monClosedAt;
 static uint32_t s_monCheckAt;
 
-/* ── План диапазонов: автонастройка модуляции и шага ───────────
- * При вводе частоты и при переходе через границу диапазона шагами
- * VFO получает модуляцию и шаг по умолчанию для диапазона. Первое
- * совпадение выигрывает — узкие диапазоны стоят раньше общих.
- * Границы в кГц: начало включительно, конец исключительно. */
-/* Группы диапазонов: SIDE1/SIDE2 перебирают диапазоны своей группы.
- * BC — вещание (AM/WFM), HAM — любительские SSB, SVC — службы (CB, авиа,
- * 2 м/70 см, морской, PMR). Общие диапазоны вне групп. */
-typedef enum { CAT_BC, CAT_HAM, CAT_SVC, CAT_COUNT, CAT_NONE = 0xFF } BandCat;
-
-typedef struct {
-  uint32_t startKhz;
-  uint32_t endKhz;
-  uint8_t mod;
-  uint8_t step;
-  const char *name;
-  uint8_t cat;
-  bool loop; /* шаг UP/DOWN зацикливается внутри диапазона; выбирается SIDE1/2 */
-} BandPlan;
-
-#define BC(a, b, m, st, nm) {a, b, m, st, nm, CAT_BC, true}
-#define HAM(a, b, m, st, nm) {a, b, m, st, nm, CAT_HAM, true}
-#define SVC(a, b, m, st, nm) {a, b, m, st, nm, CAT_SVC, true}
-
-/* Первое совпадение выигрывает; общие диапазоны (loop=false) — в конце.
- * V/UHF: пока везде FM и шаг 25 кГц (авиа — AM). */
-static const BandPlan PLAN[] = {
-    /* вещание: ДВ/СВ и все КВ-вещательные */
-    BC(153, 279, MOD_AM, STEP_9_0kHz, "LW"),
-    BC(520, 1710, MOD_AM, STEP_9_0kHz, "MW"),
-    BC(2300, 2495, MOD_AM, STEP_5_0kHz, "120m BC"),
-    BC(3200, 3400, MOD_AM, STEP_5_0kHz, "90m BC"),
-    BC(3900, 4000, MOD_AM, STEP_5_0kHz, "75m BC"),
-    BC(4750, 5060, MOD_AM, STEP_5_0kHz, "60m BC"),
-    BC(5900, 6200, MOD_AM, STEP_5_0kHz, "49m BC"),
-    BC(7200, 7450, MOD_AM, STEP_5_0kHz, "41m BC"),
-    BC(9400, 9900, MOD_AM, STEP_5_0kHz, "31m BC"),
-    BC(11600, 12100, MOD_AM, STEP_5_0kHz, "25m BC"),
-    BC(13570, 13870, MOD_AM, STEP_5_0kHz, "22m BC"),
-    BC(15100, 15800, MOD_AM, STEP_5_0kHz, "19m BC"),
-    BC(17480, 17900, MOD_AM, STEP_5_0kHz, "16m BC"),
-    BC(18900, 19020, MOD_AM, STEP_5_0kHz, "15m BC"),
-    BC(21450, 21850, MOD_AM, STEP_5_0kHz, "13m BC"),
-    BC(25670, 26100, MOD_AM, STEP_5_0kHz, "11m BC"),
-    BC(64000, 108000, MOD_WFM, STEP_100_0kHz, "FM BC"), /* на SI4732 */
-    /* любительские КВ (SSB): ниже 10 МГц LSB, выше USB */
-    HAM(1800, 2000, MOD_LSB, STEP_1_0kHz, "160m"),
-    HAM(3500, 3800, MOD_LSB, STEP_1_0kHz, "80m"),
-    HAM(5300, 5410, MOD_USB, STEP_1_0kHz, "60m"),
-    HAM(7000, 7200, MOD_LSB, STEP_1_0kHz, "40m"),
-    HAM(10100, 10150, MOD_USB, STEP_1_0kHz, "30m"),
-    HAM(14000, 14350, MOD_USB, STEP_1_0kHz, "20m"),
-    HAM(18068, 18168, MOD_USB, STEP_1_0kHz, "17m"),
-    HAM(21000, 21450, MOD_USB, STEP_1_0kHz, "15m"),
-    HAM(24890, 24990, MOD_USB, STEP_1_0kHz, "12m"),
-    HAM(28000, 29700, MOD_USB, STEP_1_0kHz, "10m"),
-    /* службы */
-    SVC(26965, 27405, MOD_AM, STEP_10_0kHz, "CB"),
-    SVC(118000, 136000, MOD_AM, STEP_25_0kHz, "AIR"),
-    SVC(144000, 146000, MOD_FM, STEP_25_0kHz, "2m"),
-    SVC(156000, 163000, MOD_FM, STEP_25_0kHz, "MARINE"),
-    SVC(430000, 440000, MOD_FM, STEP_25_0kHz, "70cm"),
-    SVC(446000, 446200, MOD_FM, STEP_25_0kHz, "PMR446"),
-    /* общие: без зацикливания и без группы */
-    {100, 30000, MOD_AM, STEP_5_0kHz, "HF", CAT_NONE, false},
-    {30000, 1340000, MOD_FM, STEP_25_0kHz, "V/UHF", CAT_NONE, false},
-};
-#define PLAN_N (sizeof(PLAN) / sizeof(PLAN[0]))
-
-/* последняя частота в каждом диапазоне — при возврате SIDE1/2 */
-static uint32_t s_bandMem[PLAN_N];
-/* последний диапазон, где были в группе — при переключении группы */
-static int8_t s_groupLast[CAT_COUNT] = {-1, -1, -1};
-
-static int8_t findPlanIdx(uint32_t f) {
-  uint32_t khz = f / 100; /* 10 Гц → кГц */
-  for (uint8_t i = 0; i < PLAN_N; i++)
-    if (khz >= PLAN[i].startKhz && khz < PLAN[i].endKhz)
-      return (int8_t)i;
-  return -1;
-}
-
-static const BandPlan *findPlan(uint32_t f) {
-  int8_t i = findPlanIdx(f);
-  return i < 0 ? nullptr : &PLAN[i];
-}
-
-const char *Radio_BandName(uint32_t f) {
-  const BandPlan *b = findPlan(f);
-  return b ? b->name : "";
-}
-
-bool Radio_BandRange(uint32_t f, uint32_t *start, uint32_t *end) {
-  const BandPlan *b = findPlan(f);
-  if (!b)
-    return false;
-  if (start)
-    *start = (uint32_t)b->startKhz * KHZ;
-  if (end)
-    *end = (uint32_t)b->endKhz * KHZ;
-  return true;
-}
-
 /* Выставить модуляцию и шаг активного VFO по плану. false — вне плана. */
 bool Radio_ApplyBandPlan(uint32_t f) {
-  const BandPlan *b = findPlan(f);
+  const BandPlan *b = Band_Find(f);
   if (!b)
     return false;
   vfos[currentVfo].modulation = b->mod;
@@ -385,6 +284,10 @@ static void monitorReturnTick(void) {
  * другом кристалле/приёмнике (один тракт не слушает два места).
  * SI-кандидаты не мониторим: у SI нет шумодава, а I2C-опрос щёлкает. */
 static void monitorTick(void) {
+  /* Шумодав выключен — критерия «открылся» нет, не прыгаем по каналам. */
+  if (squelchLevel == 0)
+    return;
+
   uint32_t now = millis();
   if (now - s_lastMon < MON_DWELL_MS)
     return;
@@ -414,10 +317,23 @@ static void monitorTick(void) {
   uint8_t chip = vfoChip(i);
 
   BK4819_SelectChip(chip);
+  /* Настраиваем кандидата полностью: при несовпадении модуляции/полосы с
+   * тем, что осталось на BK, шумодав ложно открывается без сигнала. */
+  BK4819_SelectFilterByFrequency(m->rxF);
   BK4819_TuneTo(m->rxF, false);
+  BK4819_SetModulation(static_cast<ModulationType>(m->modulation));
+  BK4819_SetAGC(m->modulation != MOD_AM, m->gainIndex);
+  if (m->modulation != MOD_WFM)
+    BK4819_SetFilterBandwidth(
+        static_cast<BK4819_FilterBandwidth_t>(m->bw));
   BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
   delay_ms(MON_SETTLE_MS);
+  /* Перестройка даёт короткий всплеск — требуем два открытых отсчёта. */
   bool open = BK4819_IsSquelchOpen();
+  if (open) {
+    delay_ms(MON_CONFIRM_MS);
+    open = BK4819_IsSquelchOpen();
+  }
   if (bkDacOn[chip]) { /* монитор не должен звучать */
     BK4819_ToggleAFDAC(false);
     bkDacOn[chip] = false;
@@ -486,6 +402,7 @@ void Radio_Init(void) {
   siMuted = true; /* SI ещё не включён: при включении включим громкость */
   bkDacOn[0] = bkDacOn[1] = false;
   s_bootMute = true;
+  Store_ApplyRadio(); /* последние VFO/шумодав/фильтр/диапазоны */
   applyVfo(true);
   s_bootMute = false;
 }
@@ -583,7 +500,7 @@ void Radio_TuneStep(int8_t dir) {
   VFO *v = &vfos[currentVfo];
   int64_t step = StepFrequencyTable[v->step];
   int64_t nf = (int64_t)v->rxF + step * dir;
-  const BandPlan *a = findPlan(v->rxF);
+  const BandPlan *a = Band_Find(v->rxF);
 
   /* внутри диапазона шаг зацикливается: вверх за край — на начало,
    * вниз за начало — на последнюю точку сетки у края */
@@ -600,7 +517,7 @@ void Radio_TuneStep(int8_t dir) {
   /* вне «петли» (общие диапазоны): вошли в другой — берём его модуляцию и шаг */
   if (nf < 0)
     nf = 0;
-  const BandPlan *b = findPlan((uint32_t)nf);
+  const BandPlan *b = Band_Find((uint32_t)nf);
   bool changed = b && a != b;
   if (changed) {
     v->modulation = b->mod;
@@ -612,9 +529,9 @@ void Radio_TuneStep(int8_t dir) {
 /* Группа, в которой сейчас VFO: по диапазону, а вне диапазонов — по
  * модуляции (SSB — любительские, AM/WFM — вещание, FM — службы). */
 static uint8_t currentCat(const VFO *v) {
-  int8_t i = findPlanIdx(v->rxF);
-  if (i >= 0 && PLAN[i].cat != CAT_NONE)
-    return PLAN[i].cat;
+  int8_t i = Band_Index(v->rxF);
+  if (i >= 0 && Band_At(i).cat != CAT_NONE)
+    return Band_At(i).cat;
   if (v->modulation == MOD_LSB || v->modulation == MOD_USB)
     return CAT_HAM;
   if (v->modulation == MOD_AM || v->modulation == MOD_WFM)
@@ -623,8 +540,8 @@ static uint8_t currentCat(const VFO *v) {
 }
 
 static void gotoBand(int8_t t) {
-  uint32_t f = s_bandMem[t] ? s_bandMem[t] : PLAN[t].startKhz * 100;
-  s_groupLast[PLAN[t].cat] = t;
+  uint32_t f = Band_Mem(t) ? Band_Mem(t) : Band_At(t).startKhz * 100;
+  Band_GroupLastSet(Band_At(t).cat, t);
   Radio_TuneToAuto(f); /* модуляция и шаг диапазона */
 }
 
@@ -633,28 +550,28 @@ static void gotoBand(int8_t t) {
  * последней, на которой были в этом диапазоне. */
 void Radio_NextBand(int8_t dir) {
   VFO *v = &vfos[currentVfo];
-  int8_t cur = findPlanIdx(v->rxF);
+  int8_t cur = Band_Index(v->rxF);
   if (cur >= 0)
-    s_bandMem[cur] = v->rxF;
+    Band_MemSet(cur, v->rxF);
   uint8_t cat = currentCat(v);
 
-  uint32_t key = (cur >= 0 && PLAN[cur].loop && PLAN[cur].cat == cat)
-                     ? PLAN[cur].startKhz
+  uint32_t key = (cur >= 0 && Band_At(cur).loop && Band_At(cur).cat == cat)
+                     ? Band_At(cur).startKhz
                      : v->rxF / 100;
   int8_t best = -1, edge = -1; /* ближайший по направлению / крайний (оборот) */
-  for (uint8_t i = 0; i < PLAN_N; i++) {
-    if (!PLAN[i].loop || PLAN[i].cat != cat)
+  for (uint8_t i = 0; i < Band_Count(); i++) {
+    if (!Band_At(i).loop || Band_At(i).cat != cat)
       continue;
-    uint32_t s = PLAN[i].startKhz;
+    uint32_t s = Band_At(i).startKhz;
     if (dir > 0) {
-      if (s > key && (best < 0 || s < PLAN[best].startKhz))
+      if (s > key && (best < 0 || s < Band_At(best).startKhz))
         best = i;
-      if (edge < 0 || s < PLAN[edge].startKhz)
+      if (edge < 0 || s < Band_At(edge).startKhz)
         edge = i;
     } else {
-      if (s < key && (best < 0 || s > PLAN[best].startKhz))
+      if (s < key && (best < 0 || s > Band_At(best).startKhz))
         best = i;
-      if (edge < 0 || s > PLAN[edge].startKhz)
+      if (edge < 0 || s > Band_At(edge).startKhz)
         edge = i;
     }
   }
@@ -667,16 +584,16 @@ void Radio_NextBand(int8_t dir) {
  * диапазон, где были в этой группе, или на её самый низкий. */
 void Radio_NextGroup(void) {
   VFO *v = &vfos[currentVfo];
-  int8_t cur = findPlanIdx(v->rxF);
+  int8_t cur = Band_Index(v->rxF);
   if (cur >= 0)
-    s_bandMem[cur] = v->rxF;
+    Band_MemSet(cur, v->rxF);
   uint8_t ng = (currentCat(v) + 1) % CAT_COUNT;
 
-  int8_t t = s_groupLast[ng];
+  int8_t t = Band_GroupLast(ng);
   if (t < 0) {
-    for (uint8_t i = 0; i < PLAN_N; i++)
-      if (PLAN[i].loop && PLAN[i].cat == ng &&
-          (t < 0 || PLAN[i].startKhz < PLAN[t].startKhz))
+    for (uint8_t i = 0; i < Band_Count(); i++)
+      if (Band_At(i).loop && Band_At(i).cat == ng &&
+          (t < 0 || Band_At(i).startKhz < Band_At(t).startKhz))
         t = i;
   }
   if (t >= 0)
@@ -703,19 +620,15 @@ void Radio_ApplyPending(void) {
 }
 
 void Radio_ToggleMonitor(uint8_t idx) {
-  if (idx == currentVfo)
-    return; /* активный не мониторится — он и так на своём приёмнике */
+  /* Текущий VFO тоже можно закрепить: он просто не опрашивается, пока
+   * активен (monitorTick пропускает currentVfo), и начнёт мониториться,
+   * когда пользователь переключится на другой. */
   vfos[idx].monitor = !vfos[idx].monitor;
 }
 
 void Radio_NextStep(void) {
   VFO *v = &vfos[currentVfo];
   v->step = static_cast<Step>((v->step + 1) % STEP_COUNT);
-}
-
-void Radio_PrevStep(void) {
-  VFO *v = &vfos[currentVfo];
-  v->step = static_cast<Step>((v->step + STEP_COUNT - 1) % STEP_COUNT);
 }
 
 /* AUTO → HF → VHF → UHF → 800 → AUTO. В AUTO фильтр выбирается по частоте
@@ -736,11 +649,4 @@ void Radio_FilterAuto(void) {
   filterIndex = -1;
   BK4819_SetFilterOverride(filters[0], false);
   BK4819_SelectFilterByFrequency(vfos[currentVfo].rxF);
-}
-
-void Radio_ToggleFilter(void) {
-  if (filterIndex < 0)
-    return; /* в AUTO ручное выключение не имеет смысла */
-  BK4819_ToggleFilter(filters[filterIndex],
-                      !(BK4819_GetFilter() & filters[filterIndex]));
 }

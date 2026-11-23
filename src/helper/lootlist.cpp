@@ -1,5 +1,6 @@
 #include "lootlist.h"
 #include "../driver/board.h"
+#include "store.h"
 
 static Loot loot[LOOT_SIZE_MAX];
 static uint16_t lootCount;
@@ -44,6 +45,7 @@ void LOOT_Remove(uint16_t i) {
   /* сдвиг массива инвалидировал указатели */
   durOwner = nullptr;
   relinkLast();
+  Store_MarkDirty();
 }
 
 void LOOT_Clear(void) {
@@ -51,6 +53,7 @@ void LOOT_Clear(void) {
   gLastActiveLoot = nullptr;
   lastActiveF = 0;
   durOwner = nullptr;
+  Store_MarkDirty();
 }
 
 Loot *LOOT_Add(uint32_t f) {
@@ -78,6 +81,7 @@ Loot *LOOT_Add(uint32_t f) {
   n->f = f;
   n->lastTimeOpen = (uint16_t)(millis() / 1000);
   n->code = LOOT_NO_CODE;
+  Store_MarkDirty();
   return n;
 }
 
@@ -143,6 +147,7 @@ void LOOT_BlacklistLast(void) {
   if (gLastActiveLoot) {
     gLastActiveLoot->whitelist = false;
     gLastActiveLoot->blacklist = true;
+    Store_MarkDirty();
   }
 }
 
@@ -150,6 +155,7 @@ void LOOT_WhitelistLast(void) {
   if (gLastActiveLoot) {
     gLastActiveLoot->blacklist = false;
     gLastActiveLoot->whitelist = true;
+    Store_MarkDirty();
   }
 }
 
@@ -158,6 +164,7 @@ void LOOT_ToggleBlacklist(Loot *item) {
     return;
   item->whitelist = false;
   item->blacklist = !item->blacklist;
+  Store_MarkDirty();
 }
 
 void LOOT_ToggleWhitelist(Loot *item) {
@@ -165,6 +172,7 @@ void LOOT_ToggleWhitelist(Loot *item) {
     return;
   item->blacklist = false;
   item->whitelist = !item->whitelist;
+  Store_MarkDirty();
 }
 
 uint32_t LOOT_SecondsAgo(const Loot *item) {
@@ -206,4 +214,17 @@ void LOOT_Sort(LootCmp compare, bool reverse) {
   }
   durOwner = nullptr;
   relinkLast();
+}
+
+const Loot *LOOT_Data(void) { return loot; }
+
+Loot *LOOT_LoadSlot(uint16_t i) {
+  return i < LOOT_SIZE_MAX ? &loot[i] : nullptr;
+}
+
+void LOOT_LoadCommit(uint16_t n) {
+  lootCount = n > LOOT_SIZE_MAX ? LOOT_SIZE_MAX : n;
+  gLastActiveLoot = nullptr;
+  lastActiveF = 0;
+  durOwner = nullptr;
 }

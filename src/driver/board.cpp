@@ -1,10 +1,12 @@
 #include "board.h"
+#include "../helper/bootprof.h"
 #include "../ui/graphics.h"
 #include "at32f423.h"
 #include "at32f423_flash.h"
 #include "gpio.h"
 #include "keyboard.h"
 #include "st7789.h"
+#include "uart.h"
 
 volatile uint32_t tick_ms = 0;
 
@@ -36,6 +38,7 @@ static void clock_init(void) {
     src = CRM_PLL_SOURCE_HICK;
     g_clockStage = 2;
   }
+  Prof_Mark(PROF_HEXT);
 
   crm_pll_config(src, 150, 1, CRM_PLL_FR_4);
   crm_clock_source_enable(CRM_CLOCK_SOURCE_PLL, TRUE);
@@ -70,7 +73,7 @@ static void clock_init(void) {
 
 static void dwt_init(void) {
   CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-  DWT->CYCCNT = 0;
+  /* CYCCNT не сбрасываем: Prof_Init включает его в начале main. */
   DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
@@ -199,9 +202,19 @@ uint16_t rt880_adc_read_keyin(void) {
 void board_init(void) {
   SCB->VTOR = 0x08002800; // таблица векторов не на 0x08000000
 
+  /* Если загрузчик всё же ушёл в приложение, PB6 остался залоченным выходом
+   * в ноль после software-входа. Снимается только сбросом. */
+  crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
+  if (GPIOB->wpr & GPIO_PINS_6)
+    NVIC_SystemReset();
+
   clock_init();
+  Prof_Mark(PROF_CLOCK);
   dwt_init();
   SysTick_Config(SystemCoreClock / 1000); // 1 мс тик
+
+  uart_init(UART_BAUD_DEFAULT);
+  Prof_Mark(PROF_UART);
 
   gpio_pin_init_output(&PIN_LED_RED);
   gpio_pin_init_output(&PIN_LED_GREEN);
@@ -238,22 +251,27 @@ void board_init(void) {
   gpio_pin_clr(&PIN_LED_GREEN);
   gpio_pin_set(&PIN_LED_GREEN);
 
+  Prof_Mark(PROF_GPIO);
   rt880_adc_init();
+  Prof_Mark(PROF_ADC);
 
   // Test point 2: after ADC
   gpio_pin_clr(&PIN_LED_GREEN);
   gpio_pin_set(&PIN_LED_GREEN);
 
   st7789_init();
+  Prof_Mark(PROF_LCD);
 
   // Test point 3: after LCD init
   gpio_pin_clr(&PIN_LED_GREEN);
   gpio_pin_set(&PIN_LED_GREEN);
 
   UI_ClearScreen(C_BLACK);
+  Prof_Mark(PROF_CLEAR);
 
   st7789_backlight_on();
   keyboard_backlight_set(true);
 
   keyboard_init();
+  Prof_Mark(PROF_BOARD);
 }

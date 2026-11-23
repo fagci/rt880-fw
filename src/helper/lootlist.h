@@ -76,6 +76,12 @@ void LOOT_ToggleWhitelist(Loot *item);
 
 uint32_t LOOT_SecondsAgo(const Loot *item);
 
+/* Энергонезависимое хранение: массив записей подряд и загрузка без
+ * промежуточного буфера (RAM в обрез). */
+const Loot *LOOT_Data(void);
+Loot *LOOT_LoadSlot(uint16_t i);
+void LOOT_LoadCommit(uint16_t n);
+
 bool LOOT_SortByLastOpenTime(const Loot *a, const Loot *b);
 bool LOOT_SortByDuration(const Loot *a, const Loot *b);
 bool LOOT_SortByF(const Loot *a, const Loot *b);

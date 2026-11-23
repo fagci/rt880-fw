@@ -212,11 +212,6 @@ void SP_Invalidate(uint8_t sh) {
   forceRedraw = true;
 }
 
-void SP_ResetRender(void) {
-  ticksRendered = false;
-  forceRedraw = true;
-}
-
 void SP_Begin(void) {
   /* Проход мог закончиться не на range.end (каналы/сетка): дописываем
    * накопленный пиксель до пересчёта уровня. */
@@ -224,11 +219,6 @@ void SP_Begin(void) {
   computeAutoLevel(levelHeight);
   sweepMin = UINT16_MAX; /* следующий проход считает свой пол */
   currentStep = 0;
-}
-
-void SP_Next(void) {
-  if (currentStep < stepsCount - 1)
-    currentStep++;
 }
 
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
@@ -590,11 +580,3 @@ void SP_RenderArrow(FRange *p, uint32_t f, uint8_t sx, uint8_t sy, uint8_t sh) {
   st7789_fill_rect_dma(cx, sy, 1, 4, C_GRAY);
   st7789_fill_rect_dma(cx - 2, sy, 5, 2, C_GRAY);
 }
-
-DBmRange SP_GetGradientRange(void) { return dBmRange; }
-
-uint16_t SP_GetNoiseFloor(void) { return Std(rssiHistory, filledPoints); }
-
-uint16_t SP_GetNoiseMax(void) { return Max(noiseHistory, filledPoints); }
-
-const uint16_t *SP_GetHistory(void) { return rssiHistory; }

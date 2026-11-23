@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Usage: python3 flash.py [--iradio] <port> <firmware_file>
+Usage: python3 flash.py [--iradio] [--boot] <port> <firmware_file>
+       python3 flash.py --dump-boot <port> <output_file>
 """
 
-import sys, os, time, threading, math, serial, serial.tools.list_ports
+import sys, os, time, threading, math, hashlib, serial, serial.tools.list_ports
+
+BOOT_DUMP_ADDR = 0x08000000
+BOOT_DUMP_LEN  = 0x2800
 
 SEND_CONNECT_DEFAULT = bytes([57, 51, 5, 16, 211])
 SEND_END_DEFAULT     = bytes([57, 51, 5, 238, 177])
@@ -217,20 +221,122 @@ class Flasher:
         print(f"\nDone.")
 
 
+def _read_line(port, deadline):
+    line = bytearray()
+    while time.time() < deadline:
+        b = port.read(1)
+        if not b:
+            continue
+        if b == b"\n":
+            return bytes(line).rstrip(b"\r")
+        line += b
+    raise TimeoutError("no response")
+
+
+def _read_exact(port, count, deadline):
+    data = bytearray()
+    while len(data) < count and time.time() < deadline:
+        chunk = port.read(count - len(data))
+        if chunk:
+            data += chunk
+    if len(data) != count:
+        raise TimeoutError(f"got {len(data)} of {count} bytes")
+    return bytes(data)
+
+
+def dump_boot(port_name, out_path):
+    """dumpboot через UART-консоль работающей прошивки; ничего не стирает."""
+    port = serial.Serial(port_name, 115200, bytesize=8, parity="N",
+                         stopbits=1, timeout=0.1, write_timeout=1.0)
+    try:
+        port.reset_input_buffer()
+        port.write(b"dumpboot\n")
+        port.flush()
+
+        line = _read_line(port, time.time() + 5.0)
+        while not line.startswith(b"RT880BOOT"):
+            if not (line.startswith(b"READY ") or line.startswith(b"PROF ")):
+                raise RuntimeError(f"unexpected response: {line!r}")
+            line = _read_line(port, time.time() + 5.0)
+        parts = line.decode("ascii", "replace").split()
+        if len(parts) != 4 or parts[0] != "RT880BOOT":
+            raise RuntimeError(f"unexpected response: {line!r}")
+
+        addr = int(parts[1], 16)
+        length = int(parts[2], 16)
+        expected = int(parts[3], 16)
+        if addr != BOOT_DUMP_ADDR or length != BOOT_DUMP_LEN:
+            raise RuntimeError(f"unexpected range: {addr:#x}+{length:#x}")
+
+        data = _read_exact(port, length, time.time() + 5.0)
+        actual = sum(data) & 0xFFFFFFFF
+        if actual != expected:
+            raise RuntimeError(f"checksum mismatch: {actual:08x} != {expected:08x}")
+
+        with open(out_path, "wb") as f:
+            f.write(data)
+        print(f"Bootloader: {out_path} ({len(data)} bytes, "
+              f"sha256 {hashlib.sha256(data).hexdigest()})")
+    finally:
+        port.close()
+
+
+def reboot_to_bootloader(port_name, timeout=2.0):
+    """Команда boot в UART-консоли приложения, затем ожидание загрузчика."""
+    port = serial.Serial(port_name, 115200, bytesize=8, parity="N",
+                         stopbits=1, timeout=0.1, write_timeout=1.0)
+    try:
+        port.reset_input_buffer()
+        port.write(b"boot\n")
+        port.flush()
+        while True:
+            line = _read_line(port, time.time() + timeout)
+            if line == b"OK":
+                break
+            if not (line.startswith(b"READY ") or line.startswith(b"PROF ")):
+                raise RuntimeError(f"unexpected response: {line!r}")
+    finally:
+        port.close()
+    # Загрузчик инициализирует UART примерно через 200 мс после перехода.
+    time.sleep(0.7)
+
+
 def main():
     args = sys.argv[1:]
     use_iradio = "--iradio" in args
     if use_iradio:
         args.remove("--iradio")
+    dump = "--dump-boot" in args
+    if dump:
+        args.remove("--dump-boot")
+    boot = "--boot" in args
+    if boot:
+        args.remove("--boot")
 
     if len(args) != 2:
-        print(f"Usage: {sys.argv[0]} [--iradio] <port> <firmware>")
+        print(f"Usage: {sys.argv[0]} [--iradio] [--boot] <port> <firmware>")
+        print(f"       {sys.argv[0]} --dump-boot <port> <output_file>")
         ports = [p.device for p in serial.tools.list_ports.comports()]
         if ports:
             print("Ports:", ", ".join(sorted(ports)))
         sys.exit(1)
 
     port_name, fw_path = args
+
+    if dump:
+        try:
+            dump_boot(port_name, fw_path)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if boot:
+        try:
+            reboot_to_bootloader(port_name)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
     firmware = load_firmware(fw_path)
     Flasher(port_name, firmware, use_iradio).flash()
 

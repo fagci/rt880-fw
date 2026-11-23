@@ -1,10 +1,11 @@
-#include "analyser.h"
+#include "modes.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
 #include "../helper/log.h"
 #include "../helper/measurements.h"
+#include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
@@ -14,7 +15,6 @@
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
-#include "vfo.h"
 #include "printf.h"
 #include <stdlib.h>
 #include <string.h>
@@ -107,19 +107,6 @@ static uint32_t snapToGrid(uint32_t f, uint32_t base, uint32_t step) {
     off -= rem;
   int64_t v = (int64_t)base + off;
   return v < 0 ? 0 : (uint32_t)v;
-}
-
-/* Компактная частота/полоса: вход в единицах 10 Гц → 24.00k / 1.20M / 1.79G. */
-static void fmtSpan(char *buf, size_t n, uint32_t f) {
-  if (f >= 100000000u) /* ≥ 1 ГГц */
-    snprintf(buf, n, "%lu.%02luG", (unsigned long)(f / 100000000u),
-             (unsigned long)((f % 100000000u) / 1000000u));
-  else if (f >= 100000u) /* ≥ 1 МГц */
-    snprintf(buf, n, "%lu.%02luM", (unsigned long)(f / 100000u),
-             (unsigned long)((f % 100000u) / 1000u));
-  else
-    snprintf(buf, n, "%lu.%02luk", (unsigned long)(f / 100u),
-             (unsigned long)(f % 100u));
 }
 
 /* BK4819 принимает 18–660 и 840–1300 МГц; остальное пропускаем */
@@ -833,24 +820,24 @@ private:
     } else {
       if (anaCtx.listen)
         PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "LISTEN");
-      else
-        PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "%lu.%03lu",
-                (unsigned long)(leftF / MHZ),
-                (unsigned long)((leftF % MHZ) / 100));
-      PrintfT(LCD_XCENTER, UI_INFO1_BASE, midStyle, "%lu.%03lu",
-              (unsigned long)(centerF / MHZ),
-              (unsigned long)((centerF % MHZ) / 100));
-      PrintfT(UI_RIGHT_X, UI_INFO1_BASE, rightStyle, "%lu.%03lu",
-              (unsigned long)(rightF / MHZ),
-              (unsigned long)((rightF % MHZ) / 100));
+      else {
+        char fbuf[16];
+        fmt_mhz3(fbuf, sizeof(fbuf), leftF);
+        PrintfT(UI_LEFT_X, UI_INFO1_BASE, leftStyle, "%s", fbuf);
+      }
+      char fbuf[16];
+      fmt_mhz3(fbuf, sizeof(fbuf), centerF);
+      PrintfT(LCD_XCENTER, UI_INFO1_BASE, midStyle, "%s", fbuf);
+      fmt_mhz3(fbuf, sizeof(fbuf), rightF);
+      PrintfT(UI_RIGHT_X, UI_INFO1_BASE, rightStyle, "%s", fbuf);
     }
 
     char bw[16];
-    fmtSpan(bw, sizeof(bw), rightF - leftF);
+    fmt_span(bw, sizeof(bw), rightF - leftF);
     PrintfT(UI_LEFT_X, UI_INFO2_BASE,
             text_style(C_GRAY, C_BLACK, POS_L, F_S), "BW %s", bw);
     char span[16];
-    fmtSpan(span, sizeof(span), anaCtx.range.end - anaCtx.range.start);
+    fmt_span(span, sizeof(span), anaCtx.range.end - anaCtx.range.start);
     PrintfT(LCD_XCENTER, UI_INFO2_BASE,
             text_style(C_GRAY, C_BLACK, POS_C, F_S), "%s", span);
     PrintfT(UI_RIGHT_X, UI_INFO2_BASE,

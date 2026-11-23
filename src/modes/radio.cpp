@@ -20,8 +20,9 @@
  *   MENU        — текущую частоту в VFO и выход;
  *   EXIT        — выход в VFO (во время ввода первый EXIT его отменяет).
  */
-#include "radio.h"
-#include "bc_bands.h"
+#include "modes.h"
+#include "vfo_session.h"
+#include "../bands.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/si473x.h"
@@ -33,7 +34,6 @@
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
 #include "mode.h"
-#include "vfo.h"
 #include <stdio.h>
 
 /* Раскладка (240×320). */
@@ -78,57 +78,57 @@ typedef struct {
   const char *name;
 } RxBand;
 
-static bool s_scanning;
-static bool s_scanAll;
-static bool s_multiMode; /* обзор всех полос (скан всех диапазонов) */
-static uint8_t s_scanBand; /* BC_BANDS во время скана всех */
-static uint32_t s_scanStartF, s_scanEndF, s_scanStep;
-static const char *s_scanName;
-static uint16_t s_scanChan, s_scanChannels;
-static uint16_t s_scanDone, s_scanTotal;
-static int16_t s_candIdx; /* станция, которую сейчас «тянем» */
-static uint16_t s_candLast;
-static uint32_t s_scanReturnF;
-static uint32_t s_nextAt;
+static struct Ctx {
+  bool s_scanning;
+  bool s_scanAll;
+  bool s_multiMode; /* обзор всех полос (скан всех диапазонов) */
+  uint8_t s_scanBand; /* BC_BANDS во время скана всех */
+  uint32_t s_scanStartF, s_scanEndF, s_scanStep;
+  const char *s_scanName;
+  uint16_t s_scanChan, s_scanChannels;
+  uint16_t s_scanDone, s_scanTotal;
+  int16_t s_candIdx; /* станция, которую сейчас «тянем» */
+  uint16_t s_candLast;
+  uint32_t s_scanReturnF;
+  uint32_t s_nextAt;
+  RxStation s_found[RX_MAX_FOUND];
+  uint16_t s_foundCount;
+  uint16_t s_sel;
+  uint8_t s_rssi;
+  uint8_t s_snr;
+  NumVal_t s_nv;
+  VfoSnapshot s_saved;
+  bool s_captured;
+  bool s_noSi;
+  SI47XX_MODE s_siMode = SI47XX_AM;
+  bool s_siModeSet;
+  int16_t s_bfo;
+  bool s_drawnMulti;
+  uint32_t s_drawnStart = 0xFFFFFFFF;
+  uint32_t s_drawnEnd;
+  bool s_scaleDirty = true;
+  bool s_scaleScan;
+  uint32_t s_scaleStart, s_scaleEnd, s_scaleF;
+  uint16_t s_scaleCount, s_scaleSel;
+  bool s_multiDirty = true;
+  bool s_multiScan;
+  uint32_t s_multiF;
+  uint16_t s_multiCount;
+  uint8_t s_multiBand;
+} ctx;
 
-static RxStation s_found[RX_MAX_FOUND];
-static uint16_t s_foundCount;
-static uint16_t s_sel;
-static uint8_t s_rssi;
-static uint8_t s_snr;
 
 /* Крупная частота — общий редактор, как в VFO. */
-static NumVal_t s_nv;
 
-static uint32_t s_savedF;
-static uint8_t s_savedMod;
-static uint8_t s_savedStep;
-static bool s_captured;
-static bool s_noSi;
 
-static SI47XX_MODE s_siMode = SI47XX_AM;
-static bool s_siModeSet;
-static int16_t s_bfo;
 
 /* Ключ предыдущего вида: при смене полосы или обзор↔шкала пул LVGL
  * освобождаем, иначе на экране остаются старые подписи. */
-static bool s_drawnMulti;
-static uint32_t s_drawnStart = 0xFFFFFFFF;
-static uint32_t s_drawnEnd;
 
 /* Кэш шкалы: при простом прослушивании ничего не меняется — не перерисовываем
  * её каждый кадр (мелькание). */
-static bool s_scaleDirty = true;
-static bool s_scaleScan;
-static uint32_t s_scaleStart, s_scaleEnd, s_scaleF;
-static uint16_t s_scaleCount, s_scaleSel;
 
 /* Кэш обзора полос: после скана он статичен, во время скана — живой. */
-static bool s_multiDirty = true;
-static bool s_multiScan;
-static uint32_t s_multiF;
-static uint16_t s_multiCount;
-static uint8_t s_multiBand;
 
 static uint16_t bandChannels(uint8_t b) {
   uint32_t n = (BC_BANDS[b].end - BC_BANDS[b].start) / BC_CH_STEP;
@@ -149,8 +149,8 @@ static bool siCovers(uint32_t f) {
 }
 
 static bool bandHasFound(uint8_t b) {
-  for (uint16_t i = 0; i < s_foundCount; i++) {
-    if (s_found[i].f >= BC_BANDS[b].start && s_found[i].f < BC_BANDS[b].end)
+  for (uint16_t i = 0; i < ctx.s_foundCount; i++) {
+    if (ctx.s_found[i].f >= BC_BANDS[b].start && ctx.s_found[i].f < BC_BANDS[b].end)
       return true;
   }
   return false;
@@ -172,7 +172,7 @@ static int16_t multiX(uint32_t f, uint8_t b) {
 }
 
 static bool ssbActive(void) {
-  return s_siMode == SI47XX_LSB || s_siMode == SI47XX_USB;
+  return ctx.s_siMode == SI47XX_LSB || ctx.s_siMode == SI47XX_USB;
 }
 
 static SI47XX_MODE modToSiMode(ModulationType m) {
@@ -198,20 +198,20 @@ static bool applySiMode(uint32_t f) {
     m = MOD_AM;
   SI47XX_MODE sm = modToSiMode(m);
 
-  if (!s_siModeSet || sm != s_siMode) {
+  if (!ctx.s_siModeSet || sm != ctx.s_siMode) {
     if (!SI47XX_Acquire(sm)) {
-      s_noSi = true;
-      s_scanning = false;
+      ctx.s_noSi = true;
+      ctx.s_scanning = false;
       return false;
     }
-    s_siMode = sm;
-    s_siModeSet = true;
+    ctx.s_siMode = sm;
+    ctx.s_siModeSet = true;
     if (sm == SI47XX_AM) {
       SI47XX_SetAutomaticGainControl(0, 0);
       SI47XX_SetBandwidth(SI47XX_BW_4_kHz, true);
     } else if (sm == SI47XX_LSB || sm == SI47XX_USB) {
       SI47XX_SetAutomaticGainControl(0, 0);
-      SI47XX_SetBFO(s_bfo);
+      SI47XX_SetBFO(ctx.s_bfo);
     }
   }
   return true;
@@ -221,28 +221,28 @@ static void tuneTo(uint32_t f) {
   applySiMode(f);
   vfos[currentVfo].rxF = f;
   SI47XX_TuneTo(f);
-  if (NumVal_GetValue(&s_nv) != f)
-    NumVal_SetValue(&s_nv, f);
+  if (NumVal_GetValue(&ctx.s_nv) != f)
+    NumVal_SetValue(&ctx.s_nv, f);
 }
 
 /* Полоса для шкалы/шага: во время скана — его текущая полоса, иначе по
  * PLAN. Слишком широкие общие полосы (HF) заменяем узким окном ±25 кГц. */
 static void currentView(RxBand *v) {
-  if (s_scanning) {
-    v->start = s_scanStartF;
-    v->end = s_scanEndF;
-    v->step = s_scanStep;
-    v->name = s_scanName;
+  if (ctx.s_scanning) {
+    v->start = ctx.s_scanStartF;
+    v->end = ctx.s_scanEndF;
+    v->step = ctx.s_scanStep;
+    v->name = ctx.s_scanName;
     return;
   }
 
   uint32_t f = vfos[currentVfo].rxF;
   uint32_t s, e;
-  if (Radio_BandRange(f, &s, &e) && !((e - s) > 2000000UL && f < RX_SI_FM_MIN)) {
+  if (Band_Range(f, &s, &e) && !((e - s) > 2000000UL && f < RX_SI_FM_MIN)) {
     v->start = s;
     v->end = e;
     v->step = StepFrequencyTable[vfos[currentVfo].step];
-    v->name = Radio_BandName(f);
+    v->name = Band_Name(f);
     return;
   }
 
@@ -277,75 +277,75 @@ static int16_t scaleX(uint32_t f, const RxBand *b) {
 }
 
 static int16_t addFound(uint32_t f, uint8_t snr) {
-  if (s_foundCount >= RX_MAX_FOUND)
+  if (ctx.s_foundCount >= RX_MAX_FOUND)
     return -1;
-  s_found[s_foundCount].f = f;
-  s_found[s_foundCount].snr = snr;
-  return (int16_t)s_foundCount++;
+  ctx.s_found[ctx.s_foundCount].f = f;
+  ctx.s_found[ctx.s_foundCount].snr = snr;
+  return (int16_t)ctx.s_foundCount++;
 }
 
 static void scanSetBand(uint32_t start, uint32_t end, uint32_t step,
                         const char *name) {
-  s_scanStartF = start;
-  s_scanEndF = end;
-  s_scanStep = step;
-  s_scanName = name;
+  ctx.s_scanStartF = start;
+  ctx.s_scanEndF = end;
+  ctx.s_scanStep = step;
+  ctx.s_scanName = name;
   uint32_t n = (end - start) / step;
-  s_scanChannels = n ? (uint16_t)(n > 0xFFFF ? 0xFFFF : n) : 1;
-  s_scanChan = 0;
-  s_candIdx = -1;
-  s_candLast = 0;
+  ctx.s_scanChannels = n ? (uint16_t)(n > 0xFFFF ? 0xFFFF : n) : 1;
+  ctx.s_scanChan = 0;
+  ctx.s_candIdx = -1;
+  ctx.s_candLast = 0;
   tuneTo(start);
-  s_nextAt = millis() + RX_SETTLE_MS;
+  ctx.s_nextAt = millis() + RX_SETTLE_MS;
 }
 
 static void startScan(bool all) {
-  if (s_noSi)
+  if (ctx.s_noSi)
     return;
   Radio_SiAudio(false);
 
-  /* Полосу одиночного скана берём до включения s_scanning, иначе
+  /* Полосу одиночного скана берём до включения ctx.s_scanning, иначе
    * currentView вернёт ещё не заполненную полосу скана. */
   RxBand single;
   if (!all)
     currentView(&single);
 
-  s_scanReturnF = vfos[currentVfo].rxF;
-  s_scanning = true;
-  s_scanAll = all;
-  s_multiMode = all;
-  s_foundCount = 0;
-  s_sel = 0;
-  s_candIdx = -1;
-  s_scanDone = 0;
-  s_scanTotal = 0;
-  s_rssi = 0;
-  s_snr = 0;
-  s_drawnStart = 0xFFFFFFFF; /* новый список — перерисовать с чистого листа */
+  ctx.s_scanReturnF = vfos[currentVfo].rxF;
+  ctx.s_scanning = true;
+  ctx.s_scanAll = all;
+  ctx.s_multiMode = all;
+  ctx.s_foundCount = 0;
+  ctx.s_sel = 0;
+  ctx.s_candIdx = -1;
+  ctx.s_scanDone = 0;
+  ctx.s_scanTotal = 0;
+  ctx.s_rssi = 0;
+  ctx.s_snr = 0;
+  ctx.s_drawnStart = 0xFFFFFFFF; /* новый список — перерисовать с чистого листа */
 
   if (all) {
-    s_scanBand = 0;
+    ctx.s_scanBand = 0;
     for (uint8_t i = 0; i < BC_BAND_COUNT; i++)
-      s_scanTotal += bandChannels(i);
+      ctx.s_scanTotal += bandChannels(i);
     const BcBand *b = &BC_BANDS[0];
-    scanSetBand(b->start, b->end, BC_CH_STEP, Radio_BandName(b->start));
+    scanSetBand(b->start, b->end, BC_CH_STEP, Band_Name(b->start));
   } else {
     uint32_t n = (single.end - single.start) / single.step;
-    s_scanTotal = n ? (uint16_t)(n > 0xFFFF ? 0xFFFF : n) : 1;
+    ctx.s_scanTotal = n ? (uint16_t)(n > 0xFFFF ? 0xFFFF : n) : 1;
     scanSetBand(single.start, single.end, single.step, single.name);
   }
 }
 
 static void finishScan(void) {
-  s_scanning = false;
-  s_candIdx = -1;
-  if (s_foundCount) {
-    s_sel = 0;
-    tuneTo(s_found[0].f);
-    s_snr = s_found[0].snr;
+  ctx.s_scanning = false;
+  ctx.s_candIdx = -1;
+  if (ctx.s_foundCount) {
+    ctx.s_sel = 0;
+    tuneTo(ctx.s_found[0].f);
+    ctx.s_snr = ctx.s_found[0].snr;
     Radio_SiAudio(true);
   } else {
-    tuneTo(s_scanReturnF);
+    tuneTo(ctx.s_scanReturnF);
   }
 }
 
@@ -354,51 +354,51 @@ static void finishScan(void) {
 static void scanTick(void) {
   uint8_t rssi, snr;
   SI47XX_GetRssiSnr(&rssi, &snr);
-  s_rssi = rssi;
-  s_snr = snr;
+  ctx.s_rssi = rssi;
+  ctx.s_snr = snr;
 
-  uint32_t f = s_scanStartF + (uint32_t)s_scanChan * s_scanStep;
+  uint32_t f = ctx.s_scanStartF + (uint32_t)ctx.s_scanChan * ctx.s_scanStep;
   if (snr >= RX_SNR_THR) {
-    if (s_candIdx >= 0 && (uint16_t)(s_scanChan - s_candLast) <= 2) {
-      RxStation *st = &s_found[s_candIdx];
+    if (ctx.s_candIdx >= 0 && (uint16_t)(ctx.s_scanChan - ctx.s_candLast) <= 2) {
+      RxStation *st = &ctx.s_found[ctx.s_candIdx];
       if (snr > st->snr) {
         st->snr = snr;
         st->f = f;
       }
     } else {
-      s_candIdx = addFound(f, snr);
+      ctx.s_candIdx = addFound(f, snr);
     }
-    s_candLast = s_scanChan;
-  } else if (s_candIdx >= 0 && (uint16_t)(s_scanChan - s_candLast) > 1) {
-    s_candIdx = -1;
+    ctx.s_candLast = ctx.s_scanChan;
+  } else if (ctx.s_candIdx >= 0 && (uint16_t)(ctx.s_scanChan - ctx.s_candLast) > 1) {
+    ctx.s_candIdx = -1;
   }
 
-  s_scanDone++;
-  s_scanChan++;
+  ctx.s_scanDone++;
+  ctx.s_scanChan++;
 
-  if (s_scanChan >= s_scanChannels) {
-    s_candIdx = -1;
-    if (s_scanAll && s_scanBand + 1u < BC_BAND_COUNT) {
-      s_scanBand++;
-      const BcBand *b = &BC_BANDS[s_scanBand];
-      scanSetBand(b->start, b->end, BC_CH_STEP, Radio_BandName(b->start));
+  if (ctx.s_scanChan >= ctx.s_scanChannels) {
+    ctx.s_candIdx = -1;
+    if (ctx.s_scanAll && ctx.s_scanBand + 1u < BC_BAND_COUNT) {
+      ctx.s_scanBand++;
+      const BcBand *b = &BC_BANDS[ctx.s_scanBand];
+      scanSetBand(b->start, b->end, BC_CH_STEP, Band_Name(b->start));
       return;
     }
     finishScan();
     return;
   }
 
-  tuneTo(s_scanStartF + (uint32_t)s_scanChan * s_scanStep);
-  s_nextAt = millis() + RX_SETTLE_MS;
+  tuneTo(ctx.s_scanStartF + (uint32_t)ctx.s_scanChan * ctx.s_scanStep);
+  ctx.s_nextAt = millis() + RX_SETTLE_MS;
 }
 
 static void stepStation(int8_t dir) {
-  if (!s_foundCount)
+  if (!ctx.s_foundCount)
     return;
-  uint16_t n = s_foundCount;
-  s_sel = (uint16_t)((s_sel + n + dir) % n);
-  tuneTo(s_found[s_sel].f);
-  s_snr = s_found[s_sel].snr;
+  uint16_t n = ctx.s_foundCount;
+  ctx.s_sel = (uint16_t)((ctx.s_sel + n + dir) % n);
+  tuneTo(ctx.s_found[ctx.s_sel].f);
+  ctx.s_snr = ctx.s_found[ctx.s_sel].snr;
   Radio_SiAudio(true);
 }
 
@@ -420,9 +420,9 @@ static void tuneStep(int8_t dir) {
 
 static void switchBand(int8_t dir) {
   Radio_SiAudio(false);
-  s_multiMode = false;
-  s_foundCount = 0;
-  s_sel = 0;
+  ctx.s_multiMode = false;
+  ctx.s_foundCount = 0;
+  ctx.s_sel = 0;
   int8_t bi = bandIndex(vfos[currentVfo].rxF);
   uint8_t idx = bi >= 0 ? (uint8_t)bi : 6;
   idx = (uint8_t)((idx + BC_BAND_COUNT + dir) % BC_BAND_COUNT);
@@ -432,49 +432,49 @@ static void switchBand(int8_t dir) {
 static void bfoStep(int8_t dir) {
   if (!ssbActive())
     return;
-  int32_t v = s_bfo + dir * RX_BFO_STEP;
+  int32_t v = ctx.s_bfo + dir * RX_BFO_STEP;
   if (v > RX_BFO_MAX)
     v = RX_BFO_MAX;
   if (v < -RX_BFO_MAX)
     v = -RX_BFO_MAX;
-  s_bfo = (int16_t)v;
-  SI47XX_SetBFO(s_bfo);
+  ctx.s_bfo = (int16_t)v;
+  SI47XX_SetBFO(ctx.s_bfo);
 }
 
 /* Стереть курсор редактора: он рисуется прямым DMA снаружи bbox лейбла и
  * сам не исчезает, когда ввод заканчивается. */
 static void clearFreqCursor(void) {
-  int16_t tw = (int16_t)s_nv.cursor * s_nv.charW;
-  int16_t cx = s_nv.pos == POS_R   ? (int16_t)s_nv.x
-               : s_nv.pos == POS_C ? (int16_t)s_nv.x + tw / 2
-                                   : (int16_t)s_nv.x + tw;
-  FillRect(cx, (int16_t)s_nv.y - s_nv.charH + 1, 2, s_nv.charH, C_BLACK);
+  int16_t tw = (int16_t)ctx.s_nv.cursor * ctx.s_nv.charW;
+  int16_t cx = ctx.s_nv.pos == POS_R   ? (int16_t)ctx.s_nv.x
+               : ctx.s_nv.pos == POS_C ? (int16_t)ctx.s_nv.x + tw / 2
+                                   : (int16_t)ctx.s_nv.x + tw;
+  FillRect(cx, (int16_t)ctx.s_nv.y - ctx.s_nv.charH + 1, 2, ctx.s_nv.charH, C_BLACK);
 }
 
 static void onFreqEntered(uint32_t f) {
   if (!siCovers(f)) { /* 30–64 МГц SI не принимает */
-    NumVal_SetValue(&s_nv, vfos[currentVfo].rxF);
+    NumVal_SetValue(&ctx.s_nv, vfos[currentVfo].rxF);
     return;
   }
-  s_multiMode = false;
-  s_foundCount = 0;
-  s_sel = 0;
+  ctx.s_multiMode = false;
+  ctx.s_foundCount = 0;
+  ctx.s_sel = 0;
   tuneTo(f);
   Radio_SiAudio(true);
 }
 
 static void drawScale(const RxBand *b) {
-  if (!s_scaleDirty && b->start == s_scaleStart && b->end == s_scaleEnd &&
-      vfos[currentVfo].rxF == s_scaleF && s_foundCount == s_scaleCount &&
-      s_sel == s_scaleSel && s_scanning == s_scaleScan)
+  if (!ctx.s_scaleDirty && b->start == ctx.s_scaleStart && b->end == ctx.s_scaleEnd &&
+      vfos[currentVfo].rxF == ctx.s_scaleF && ctx.s_foundCount == ctx.s_scaleCount &&
+      ctx.s_sel == ctx.s_scaleSel && ctx.s_scanning == ctx.s_scaleScan)
     return;
-  s_scaleDirty = false;
-  s_scaleStart = b->start;
-  s_scaleEnd = b->end;
-  s_scaleF = vfos[currentVfo].rxF;
-  s_scaleCount = s_foundCount;
-  s_scaleSel = s_sel;
-  s_scaleScan = s_scanning;
+  ctx.s_scaleDirty = false;
+  ctx.s_scaleStart = b->start;
+  ctx.s_scaleEnd = b->end;
+  ctx.s_scaleF = vfos[currentVfo].rxF;
+  ctx.s_scaleCount = ctx.s_foundCount;
+  ctx.s_scaleSel = ctx.s_sel;
+  ctx.s_scaleScan = ctx.s_scanning;
 
   FillRect(0, RX_SCALE_TOP, LCD_WIDTH, RX_SCALE_BOTTOM - RX_SCALE_TOP, C_BLACK);
   DrawHLine(RX_SCALE_X, RX_SCALE_AXIS_Y, RX_SCALE_W, C_GRAY);
@@ -505,14 +505,14 @@ static void drawScale(const RxBand *b) {
   }
 
   /* Станции: высота и цвет засечки — SNR (6..30 px). */
-  for (uint16_t i = 0; i < s_foundCount; i++) {
-    uint32_t f = s_found[i].f;
+  for (uint16_t i = 0; i < ctx.s_foundCount; i++) {
+    uint32_t f = ctx.s_found[i].f;
     if (f < b->start || f >= b->end)
       continue;
-    uint8_t lvl = s_found[i].snr > RX_SNR_MAX ? RX_SNR_MAX : s_found[i].snr;
+    uint8_t lvl = ctx.s_found[i].snr > RX_SNR_MAX ? RX_SNR_MAX : ctx.s_found[i].snr;
     uint8_t h = (uint8_t)(6 + (uint16_t)lvl * 24 / RX_SNR_MAX);
     DrawVLine(scaleX(f, b), RX_SCALE_AXIS_Y - h, h,
-              snrColor(s_found[i].snr));
+              snrColor(ctx.s_found[i].snr));
   }
 
   /* Указатель текущей частоты — одна стрелка под шкалой. */
@@ -525,18 +525,18 @@ static void drawScale(const RxBand *b) {
  * без подписей частот (только метраж). Найденные станции — вертикальные
  * цветные полоски, высота = SNR; текущая частота — стрелка под шкалой. */
 static void drawMulti(void) {
-  uint8_t curBand = s_scanning ? s_scanBand
+  uint8_t curBand = ctx.s_scanning ? ctx.s_scanBand
                                : (uint8_t)bandIndex(vfos[currentVfo].rxF);
   uint32_t f = vfos[currentVfo].rxF;
-  if (!s_scanning && !s_multiDirty && !s_multiScan &&
-      s_multiCount == s_foundCount && s_multiF == f &&
-      s_multiBand == curBand)
+  if (!ctx.s_scanning && !ctx.s_multiDirty && !ctx.s_multiScan &&
+      ctx.s_multiCount == ctx.s_foundCount && ctx.s_multiF == f &&
+      ctx.s_multiBand == curBand)
     return;
-  s_multiDirty = false;
-  s_multiScan = s_scanning;
-  s_multiCount = s_foundCount;
-  s_multiF = f;
-  s_multiBand = curBand;
+  ctx.s_multiDirty = false;
+  ctx.s_multiScan = ctx.s_scanning;
+  ctx.s_multiCount = ctx.s_foundCount;
+  ctx.s_multiF = f;
+  ctx.s_multiBand = curBand;
 
   FillRect(0, RX_MULTI_TOP - 2, LCD_WIDTH,
            RX_HINT_Y - (RX_MULTI_TOP - 2), C_BLACK);
@@ -553,13 +553,13 @@ static void drawMulti(void) {
     DrawHLine(RX_MULTI_X, baseY, RX_MULTI_W, C_GRAY);
 
     const BcBand *band = &BC_BANDS[b];
-    for (uint16_t i = 0; i < s_foundCount; i++) {
-      uint32_t sf = s_found[i].f;
+    for (uint16_t i = 0; i < ctx.s_foundCount; i++) {
+      uint32_t sf = ctx.s_found[i].f;
       if (sf < band->start || sf >= band->end)
         continue;
-      uint8_t lvl = s_found[i].snr > RX_SNR_MAX ? RX_SNR_MAX : s_found[i].snr;
+      uint8_t lvl = ctx.s_found[i].snr > RX_SNR_MAX ? RX_SNR_MAX : ctx.s_found[i].snr;
       uint8_t h = (uint8_t)(2 + (uint16_t)lvl * 6 / RX_SNR_MAX); /* 2..8 */
-      DrawVLine(multiX(sf, b), baseY - h, h, snrColor(s_found[i].snr));
+      DrawVLine(multiX(sf, b), baseY - h, h, snrColor(ctx.s_found[i].snr));
     }
 
     if (isCur) {
@@ -587,30 +587,28 @@ void RadioMode::enter() {
   lv_port_set_direct_areas(false);
   Radio_Init();
 
-  s_savedF = vfos[currentVfo].rxF;
-  s_savedMod = vfos[currentVfo].modulation;
-  s_savedStep = vfos[currentVfo].step;
-  s_captured = false;
-  s_noSi = false;
-  s_scanning = false;
-  s_scanAll = false;
-  s_multiMode = false;
-  s_foundCount = 0;
-  s_sel = 0;
-  s_rssi = 0;
-  s_snr = 0;
-  s_candIdx = -1;
-  s_scanDone = 0;
-  s_scanTotal = 0;
-  s_bfo = 0;
-  s_siModeSet = false;
-  s_drawnMulti = false;
-  s_drawnStart = 0xFFFFFFFF;
-  s_drawnEnd = 0;
-  s_scaleDirty = true;
-  s_multiDirty = true;
+  ctx.s_saved = Vfo_Capture();
+  ctx.s_captured = false;
+  ctx.s_noSi = false;
+  ctx.s_scanning = false;
+  ctx.s_scanAll = false;
+  ctx.s_multiMode = false;
+  ctx.s_foundCount = 0;
+  ctx.s_sel = 0;
+  ctx.s_rssi = 0;
+  ctx.s_snr = 0;
+  ctx.s_candIdx = -1;
+  ctx.s_scanDone = 0;
+  ctx.s_scanTotal = 0;
+  ctx.s_bfo = 0;
+  ctx.s_siModeSet = false;
+  ctx.s_drawnMulti = false;
+  ctx.s_drawnStart = 0xFFFFFFFF;
+  ctx.s_drawnEnd = 0;
+  ctx.s_scaleDirty = true;
+  ctx.s_multiDirty = true;
 
-  uint32_t startF = siCovers(s_savedF) ? s_savedF : BC_BANDS[6].start;
+  uint32_t startF = siCovers(ctx.s_saved.freq) ? ctx.s_saved.freq : BC_BANDS[6].start;
 
   vfos[currentVfo].radio = RADIO_SI4732;
   if (!applySiMode(startF)) {
@@ -618,7 +616,7 @@ void RadioMode::enter() {
     return;
   }
 
-  NumVal_Init(&s_nv, LCD_XCENTER, RX_FREQ_Y, F_XL, 0, 0, UNIT_MHZ, startF,
+  NumVal_Init(&ctx.s_nv, LCD_XCENTER, RX_FREQ_Y, F_XL, 0, 0, UNIT_MHZ, startF,
               RX_SI_MIN, RX_SI_FM_MAX, onFreqEntered, POS_C, nullptr, 0, 0);
   Radio_SiAudio(false);
   Radio_ScanAudio(false);
@@ -627,11 +625,8 @@ void RadioMode::enter() {
 
 void RadioMode::exit() {
   Radio_SiAudio(false);
-  if (!s_captured) {
-    vfos[currentVfo].rxF = s_savedF;
-    vfos[currentVfo].modulation = static_cast<ModulationType>(s_savedMod);
-    vfos[currentVfo].step = static_cast<Step>(s_savedStep);
-    Radio_TuneTo(s_savedF, true);
+  if (!ctx.s_captured) {
+    Vfo_Restore(ctx.s_saved, false);
   } else {
     Radio_ApplyBandPlan(vfos[currentVfo].rxF);
     Radio_TuneTo(vfos[currentVfo].rxF, true);
@@ -641,12 +636,12 @@ void RadioMode::exit() {
 }
 
 void RadioMode::update() {
-  if (s_noSi)
+  if (ctx.s_noSi)
     return;
-  NumVal_Update(&s_nv);
-  if (!s_scanning)
+  NumVal_Update(&ctx.s_nv);
+  if (!ctx.s_scanning)
     return;
-  if ((int32_t)(millis() - s_nextAt) < 0)
+  if ((int32_t)(millis() - ctx.s_nextAt) < 0)
     return;
   scanTick();
 }
@@ -654,7 +649,7 @@ void RadioMode::update() {
 void RadioMode::render() {
   STATUSLINE_render();
 
-  if (s_noSi) {
+  if (ctx.s_noSi) {
     PrintfT(LCD_XCENTER, RX_SCAN_Y,
             text_style(C_RED, C_BLACK, POS_C, F_M), "SI4732 NOT FOUND");
     PrintfT(LCD_XCENTER, RX_INFO_Y,
@@ -665,18 +660,18 @@ void RadioMode::render() {
   RxBand v;
   currentView(&v);
 
-  bool keyMulti = s_multiMode;
+  bool keyMulti = ctx.s_multiMode;
   uint32_t keyStart = keyMulti ? 0 : v.start;
   uint32_t keyEnd = keyMulti ? 0 : v.end;
-  if (keyMulti != s_drawnMulti || keyStart != s_drawnStart ||
-      keyEnd != s_drawnEnd) {
-    s_drawnMulti = keyMulti;
-    s_drawnStart = keyStart;
-    s_drawnEnd = keyEnd;
-    s_scaleDirty = true;
-    s_multiDirty = true;
+  if (keyMulti != ctx.s_drawnMulti || keyStart != ctx.s_drawnStart ||
+      keyEnd != ctx.s_drawnEnd) {
+    ctx.s_drawnMulti = keyMulti;
+    ctx.s_drawnStart = keyStart;
+    ctx.s_drawnEnd = keyEnd;
+    ctx.s_scaleDirty = true;
+    ctx.s_multiDirty = true;
     UI_ReleaseLabels();
-    NumVal_Invalidate(&s_nv);
+    NumVal_Invalidate(&ctx.s_nv);
     FillRect(0, RX_SCAN_Y, LCD_WIDTH, RX_HINT_Y - RX_SCAN_Y, C_BLACK);
   }
 
@@ -690,17 +685,17 @@ void RadioMode::render() {
   PrintfT(LCD_WIDTH - 8, RX_BAND_Y,
           text_style(C_GRAY, C_BLACK, POS_R, F_S), "%s", rng);
 
-  NumVal_Render(&s_nv);
+  NumVal_Render(&ctx.s_nv);
 
-  if (s_scanning) {
+  if (ctx.s_scanning) {
     uint16_t pct =
-        s_scanTotal ? (uint16_t)((uint32_t)s_scanDone * 100 / s_scanTotal) : 0;
+        ctx.s_scanTotal ? (uint16_t)((uint32_t)ctx.s_scanDone * 100 / ctx.s_scanTotal) : 0;
     snprintf(line, sizeof(line), "SCAN %u%%  %u/%u", (unsigned)pct,
-             (unsigned)s_scanDone, (unsigned)s_scanTotal);
+             (unsigned)ctx.s_scanDone, (unsigned)ctx.s_scanTotal);
     PrintfT(LCD_XCENTER, RX_SCAN_Y,
             text_style(C_GREEN, C_BLACK, POS_C, F_M), "%s", line);
-  } else if (s_foundCount) {
-    snprintf(line, sizeof(line), "found %u", (unsigned)s_foundCount);
+  } else if (ctx.s_foundCount) {
+    snprintf(line, sizeof(line), "found %u", (unsigned)ctx.s_foundCount);
     PrintfT(LCD_XCENTER, RX_SCAN_Y,
             text_style(C_YELLOW, C_BLACK, POS_C, F_M), "%s", line);
   } else {
@@ -708,40 +703,40 @@ void RadioMode::render() {
             text_style(C_GRAY, C_BLACK, POS_C, F_M), "no scan yet");
   }
 
-  if (s_multiMode) {
+  if (ctx.s_multiMode) {
     drawMulti();
   } else {
     drawScale(&v);
 
     bool selInBand =
-        s_foundCount && s_found[s_sel].f >= v.start && s_found[s_sel].f < v.end;
-    if (s_scanning) {
-      snprintf(line, sizeof(line), "RSSI %u  SNR %u", (unsigned)s_rssi,
-               (unsigned)s_snr);
+        ctx.s_foundCount && ctx.s_found[ctx.s_sel].f >= v.start && ctx.s_found[ctx.s_sel].f < v.end;
+    if (ctx.s_scanning) {
+      snprintf(line, sizeof(line), "RSSI %u  SNR %u", (unsigned)ctx.s_rssi,
+               (unsigned)ctx.s_snr);
     } else if (selInBand) {
-      fmt_value(fbuf, sizeof(fbuf), s_found[s_sel].f, UMHZ, UNIT_MHZ);
+      fmt_value(fbuf, sizeof(fbuf), ctx.s_found[ctx.s_sel].f, UMHZ, UNIT_MHZ);
       snprintf(line, sizeof(line), "%u/%u  %s MHz  SNR %u",
-               (unsigned)(s_sel + 1), (unsigned)s_foundCount, fbuf,
-               (unsigned)s_found[s_sel].snr);
+               (unsigned)(ctx.s_sel + 1), (unsigned)ctx.s_foundCount, fbuf,
+               (unsigned)ctx.s_found[ctx.s_sel].snr);
     } else {
       snprintf(line, sizeof(line), "1 scan band   2 scan all");
     }
     PrintfT(LCD_XCENTER, RX_INFO_Y,
-            text_style(s_scanning ? C_GREEN : selInBand ? C_YELLOW : C_GRAY,
+            text_style(ctx.s_scanning ? C_GREEN : selInBand ? C_YELLOW : C_GRAY,
                        C_BLACK, POS_C, F_M),
             "%s", line);
   }
 
-  if (s_scanning) {
+  if (ctx.s_scanning) {
     PrintfT(LCD_XCENTER, RX_HINT_Y,
             text_style(C_GRAY, C_BLACK, POS_C, F_S), "scanning...   EXIT abort");
-  } else if (s_multiMode) {
+  } else if (ctx.s_multiMode) {
     PrintfT(LCD_XCENTER, RX_HINT_Y,
             text_style(C_GRAY, C_BLACK, POS_C, F_S),
             "UP/DOWN station   EXIT back");
   } else if (ssbActive()) {
     char bb[28];
-    int16_t bv = s_bfo;
+    int16_t bv = ctx.s_bfo;
     unsigned av = bv < 0 ? (unsigned)(-bv) : (unsigned)bv;
     snprintf(bb, sizeof(bb), "BFO %c%u  3/9  EXIT", bv < 0 ? '-' : '+', av);
     PrintfT(LCD_XCENTER, RX_HINT_Y,
@@ -754,7 +749,7 @@ void RadioMode::render() {
 }
 
 bool RadioMode::key(KEY_Code_t k, Key_State_t state) {
-  if (s_noSi) {
+  if (ctx.s_noSi) {
     if (state == KEY_RELEASED && (k == KEY_EXIT || k == KEY_MENU)) {
       Mode_Switch(MODE_VFO);
       return true;
@@ -764,30 +759,30 @@ bool RadioMode::key(KEY_Code_t k, Key_State_t state) {
 
   /* Ввод частоты: пока редактор активен, клавиши забирает он. Первый EXIT
    * отменяет ввод и возвращает в режим, повторный — выходит в VFO. */
-  if (NumVal_IsEditing(&s_nv)) {
+  if (NumVal_IsEditing(&ctx.s_nv)) {
     if (state == KEY_RELEASED && k == KEY_EXIT) {
-      NumVal_Cancel(&s_nv);
+      NumVal_Cancel(&ctx.s_nv);
       clearFreqCursor();
       return true;
     }
-    NumVal_Key(&s_nv, k, state);
-    if (!NumVal_IsEditing(&s_nv))
+    NumVal_Key(&ctx.s_nv, k, state);
+    if (!NumVal_IsEditing(&ctx.s_nv))
       clearFreqCursor(); /* подтверждение/невалидный ввод закрыли редактор */
     return true;
   }
 
   /* Короткое нажатие цифры открывает ввод частоты, как в VFO. */
-  if (state == KEY_RELEASED && k >= KEY_0 && k <= KEY_9 && !s_scanning) {
-    if (NumVal_Key(&s_nv, k, state))
+  if (state == KEY_RELEASED && k >= KEY_0 && k <= KEY_9 && !ctx.s_scanning) {
+    if (NumVal_Key(&ctx.s_nv, k, state))
       return true;
   }
 
   /* Стрелки: по найденным станциям, а без скана — шаг по полосе. */
   if ((k == KEY_UP || k == KEY_DOWN) &&
       (state == KEY_PRESSED || state == KEY_LONG_PRESSED_CONT)) {
-    if (s_scanning)
+    if (ctx.s_scanning)
       return true;
-    if (s_foundCount)
+    if (ctx.s_foundCount)
       stepStation(k == KEY_UP ? +1 : -1);
     else
       tuneStep(k == KEY_UP ? +1 : -1);
@@ -821,15 +816,15 @@ bool RadioMode::key(KEY_Code_t k, Key_State_t state) {
     Mode_Switch(MODE_VFO);
     return true;
   case KEY_MENU:
-    s_captured = true;
+    ctx.s_captured = true;
     Mode_Switch(MODE_VFO);
     return true;
   case KEY_SIDE1:
-    if (!s_scanning)
+    if (!ctx.s_scanning)
       switchBand(+1);
     return true;
   case KEY_SIDE2:
-    if (!s_scanning)
+    if (!ctx.s_scanning)
       switchBand(-1);
     return true;
   default:

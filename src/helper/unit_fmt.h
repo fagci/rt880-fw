@@ -69,4 +69,46 @@ static inline uint8_t fmt_value(char *buf, uint8_t cap, uint32_t value,
   return (uint8_t)snprintf(buf, cap, "%lu", (unsigned long)ip);
 }
 
+/* Частота (единицы 10 Гц) → "145.500" — 3 знака, как в анализаторе. */
+static inline uint8_t fmt_mhz3(char *buf, uint8_t cap, uint32_t f) {
+  return (uint8_t)snprintf(buf, cap, "%lu.%03lu", (unsigned long)(f / UMHZ),
+                           (unsigned long)((f % UMHZ) / 100));
+}
+
+/* Частота (единицы 10 Гц) → "145.50000". */
+static inline uint8_t fmt_mhz5(char *buf, uint8_t cap, uint32_t f) {
+  return (uint8_t)snprintf(buf, cap, "%u.%05u", (unsigned)(f / UMHZ),
+                           (unsigned)(f % UMHZ));
+}
+
+/* Шаг из StepFrequencyTable (единицы 10 Гц) → "5.00k". */
+static inline uint8_t fmt_step(char *buf, uint8_t cap, uint32_t step) {
+  return (uint8_t)snprintf(buf, cap, "%u.%02uk", (unsigned)(step / 100),
+                           (unsigned)(step % 100));
+}
+
+/* Полоса (единицы 10 Гц) → "24.00k" / "1.20M" / "1.79G". */
+static inline uint8_t fmt_span(char *buf, uint8_t cap, uint32_t f) {
+  if (f >= 100000000u) /* ≥ 1 ГГц */
+    return (uint8_t)snprintf(buf, cap, "%lu.%02luG",
+                             (unsigned long)(f / 100000000u),
+                             (unsigned long)((f % 100000000u) / 1000000u));
+  if (f >= 100000u) /* ≥ 1 МГц */
+    return (uint8_t)snprintf(buf, cap, "%lu.%02luM",
+                             (unsigned long)(f / 100000u),
+                             (unsigned long)((f % 100000u) / 1000u));
+  return (uint8_t)snprintf(buf, cap, "%lu.%02luk", (unsigned long)(f / 100u),
+                           (unsigned long)(f % 100u));
+}
+
+/* Компактное время: «45s», «12m», «3h» (3 символа). */
+static inline void fmt_duration(char *out, uint8_t cap, uint32_t s) {
+  if (s < 100)
+    snprintf(out, cap, "%2us", (unsigned)s);
+  else if (s < 6000)
+    snprintf(out, cap, "%2um", (unsigned)(s / 60));
+  else
+    snprintf(out, cap, "%2uh", (unsigned)(s / 3600 > 99 ? 99 : s / 3600));
+}
+
 #endif
