@@ -9,6 +9,7 @@
 #include "../driver/st7789.h"
 #include "../misc.h"
 #include "../modes/modes.h"
+#include "../ui/lv_port.h"
 #include "store.h"
 #include "at32f423.h"
 #include "bootprof.h"
@@ -520,10 +521,15 @@ static void run(const char *cmd) {
       Mode_SetPaint(on != 0);
       uart_printf("PAINT %lu\r\n", (unsigned long)on);
     }
+  } else if (strcmp(cmd, "lv") == 0)
+    lv_port_stats_print();
+  else if (strcmp(cmd, "lv reset") == 0) {
+    lv_port_stats_reset();
+    uart_puts("LVSTAT RESET\r\n");
   } else if (strcmp(cmd, "help") == 0)
     uart_puts("boot\r\nreboot\r\nprof\r\ndumpboot\r\nflashmap\r\n"
               "flashdump <addr> <len>\r\nstore\r\nstorewipe\r\n"
-              "paint 0|1\r\n"
+              "paint 0|1\r\nlv [reset]\r\n"
               "bk r|w|chip|filter|bw|afc|agc|ant|tune|scan|stop|res|"
               "rssi[kHz [step [dwell]]]|fc\r\n");
   else

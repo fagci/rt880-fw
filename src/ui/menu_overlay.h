@@ -5,12 +5,17 @@
 #include "lvgl.h"
 #include <stdint.h>
 
-/* Пункт меню: имя, текущее значение и изменение на -1/+1. */
+/* Пункт меню: имя, текущее значение и изменение на -1/+1. id — необязательный
+ * контекст пункта (индекс регистра в меню BK4819 и т.п.). */
 struct MenuItem {
   const char *name;
-  const char *(*value)(void);
-  void (*change)(int8_t dir);
+  const char *(*value)(const MenuItem *item);
+  void (*change)(const MenuItem *item, int8_t dir);
+  uint16_t id;
 };
+
+/* Высота окна: подсказка + 4 пункта (строка F_S = 13 px) с рамкой. */
+#define MENU_OVERLAY_BOX_H 67
 
 /* Небольшое меню поверх текущего экрана. Если spectrumOverlay — разрешить
  * LVGL писать в зону спектра: спектр и водопад продолжают рисоваться
@@ -24,9 +29,9 @@ bool MenuOverlay_IsOpen(void);
  * чтобы режим открыл loot. */
 bool MenuOverlay_Key(KEY_Code_t key, Key_State_t state);
 void MenuOverlay_Render(void);
-/* Режим только что нарисовал спектр напрямую (DMA) поверх области меню —
- * вернуть меню на следующем кадре. Без прямых заливок меню не трогаем:
- * лишние flush — это помеха в 437–441 МГц. */
-void MenuOverlay_Invalidate(void);
+/* Режим нарисовал напрямую (DMA) полосу y1..y2 поверх части меню —
+ * перерисовать только пересечение с окном меню. Без прямых заливок меню
+ * не трогаем: лишние flush — это помеха в 437–441 МГц. */
+void MenuOverlay_InvalidateBand(int16_t y1, int16_t y2);
 
 #endif

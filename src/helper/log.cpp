@@ -4,7 +4,7 @@
 #include <stdarg.h>
 #include "printf.h"
 
-#define LOG_LINES 8
+#define LOG_LINES 4
 #define LOG_LINE_W LCD_WIDTH
 
 static char logBuf[LOG_LINES][LOG_LINE_W];

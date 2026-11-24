@@ -118,6 +118,7 @@ void BK4819_SelectChip(uint8_t) {}
 void BK4819_RX_TurnOn(void) {}
 void BK4819_SetAFC(uint8_t) {}
 void BK4819_SetAGC(bool, uint8_t) {}
+uint8_t BK4819_GetGainDb(uint8_t) { return 0; }
 void BK4819_ToggleAFDAC(bool) {}
 void BK4819_ToggleFilter(Filter, bool) {}
 void BK4819_SelectFilter(Filter) {}
@@ -127,6 +128,9 @@ void BK4819_SetModulation(ModulationType) {}
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t) {}
 void BK4819_SetupSquelch(SQL, uint8_t, uint8_t) {}
 void BK4819_WriteRegister(uint8_t, uint16_t) {}
+uint16_t BK4819_ReadRegister(uint8_t) { return 0; }
+uint16_t BK4819_ReadRegisterRaw(uint8_t) { return 0; }
+uint8_t BK4819_GetAFC(void) { return 0; }
 void BK4819_SelectFilterByFrequency(uint32_t) {}
 void BK4819_TuneTo(uint32_t f, bool) { g_tuneF = f; }
 uint16_t BK4819_GetRSSI(void) { return host_signal_rssi(g_tuneF); }

@@ -1,5 +1,17 @@
 #include "lv_helpers.h"
 
+static void no_ext_cb(lv_event_t *e) {
+  lv_coord_t *sz = (lv_coord_t *)lv_event_get_param(e);
+  if (sz)
+    *sz = 0;
+}
+
+void lvLabelNoExt(lv_obj_t *label) {
+  if (!label)
+    return;
+  lv_obj_add_event_cb(label, no_ext_cb, LV_EVENT_REFR_EXT_DRAW_SIZE, NULL);
+}
+
 lv_color_t lvColor(Color c) {
   c = TC(c);
   return lv_color_make((uint8_t)((c >> 8) & 0xF8), (uint8_t)((c >> 3) & 0xFC),

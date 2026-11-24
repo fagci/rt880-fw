@@ -15,13 +15,15 @@ extern "C" {
 
 #define C_BLACK 0x0000
 #define C_WHITE 0xFFFF
-#define C_RED 0xF800
-#define C_GREEN 0x07E0
-#define C_BLUE 0x001F
-#define C_YELLOW 0xFFE0
-#define C_CYAN 0x07FF
-#define C_MAGENTA 0xF81F
-#define C_GRAY 0x8410
+/* Пастельная палитра интерфейса: на чёрном фоне не режет глаз, в светлой
+ * теме TC() переводит её в тёмные варианты. */
+#define C_RED RGB565(0xF2, 0x8B, 0x82)
+#define C_GREEN RGB565(0x8C, 0xE9, 0x9A)
+#define C_BLUE RGB565(0x8A, 0xB4, 0xF8)
+#define C_YELLOW RGB565(0xF5, 0xE6, 0xA3)
+#define C_CYAN RGB565(0x9A, 0xDC, 0xE8)
+#define C_MAGENTA RGB565(0xE8, 0xA3, 0xD4)
+#define C_GRAY RGB565(0x9A, 0xA0, 0xA6)
 #define C_DARK 0x000F
 
 void st7789_init(void);

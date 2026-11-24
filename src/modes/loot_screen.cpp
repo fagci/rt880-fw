@@ -53,7 +53,7 @@ static struct Ctx {
   lv_obj_t *s_scr;
   lv_obj_t *s_sel;
   lv_obj_t *s_title;
-  lv_obj_t *s_list;
+  lv_obj_t *s_rows[ROWS];
   lv_obj_t *s_detail;
   lv_obj_t *s_hint;
   uint16_t s_selIdx;
@@ -62,12 +62,15 @@ static struct Ctx {
   bool s_sortRev;
   bool s_dirty;
   bool s_keep; /* MENU: оставить выбранную частоту в VFO */
-  uint16_t s_lastSec;
+  uint32_t s_lastMs;
   uint16_t s_lastCount;
   VfoSnapshot s_saved;
-  char s_listBuf[ROWS * 40];
+  char s_rowBuf[ROWS][40];
+  char s_rowShown[ROWS][40];
   char s_titleBuf[40];
+  char s_titleShown[40];
   char s_detailBuf[48];
+  char s_detailShown[48];
   char s_msg[16];
   uint32_t s_msgUntil;
 } ctx;
@@ -88,6 +91,25 @@ static lv_color_t lootSelColor(void) {
     return lv_color_make(190, 215, 255);
   Color c = (Color)(((0 & 0xF8) << 8) | ((40 & 0xFC) << 3) | (96 >> 3));
   return lvColor(c);
+}
+
+static void setHidden(lv_obj_t *o, bool hidden) {
+  if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hidden)
+    return;
+  if (hidden)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* lv_label_set_text_static всегда инвалидирует лейбл, даже если строка та же.
+ * Сравниваем с показанным и трогаем только изменившееся. */
+static void setTextIfChanged(lv_obj_t *label, char *shown, size_t cap,
+                             const char *text) {
+  if (!label || strcmp(shown, text) == 0)
+    return;
+  snprintf(shown, cap, "%s", text);
+  lv_label_set_text_static(label, shown);
 }
 
 static void tuneSel(void) {
@@ -119,23 +141,28 @@ static void refresh(void) {
 
   /* заголовок; на 1.2 с — результат long 5/8/9 */
   if (ctx.s_msg[0] && (int32_t)(ctx.s_msgUntil - millis()) > 0) {
-    lv_label_set_text_static(ctx.s_title, ctx.s_msg);
+    setTextIfChanged(ctx.s_title, ctx.s_titleShown, sizeof(ctx.s_titleShown),
+                     ctx.s_msg);
   } else {
     ctx.s_msg[0] = 0;
     snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "LOOT %u/%u  by %s %s",
              (unsigned)(n ? ctx.s_selIdx + 1 : 0), (unsigned)n,
              SORT_NAMES[ctx.s_sort], ctx.s_sortRev ? "rev" : "");
-    lv_label_set_text_static(ctx.s_title, ctx.s_titleBuf);
+    setTextIfChanged(ctx.s_title, ctx.s_titleShown, sizeof(ctx.s_titleShown),
+                     ctx.s_titleBuf);
   }
 
-  /* список: строка = метка, частота, «сколько назад», длительность */
-  char *p = ctx.s_listBuf;
-  char *end = ctx.s_listBuf + sizeof(ctx.s_listBuf);
-  p[0] = 0;
-  if (!n) {
-    snprintf(p, end - p, "#808080 empty: scan to find#");
-  }
-  for (uint16_t r = 0; r < ROWS && ctx.s_top + r < n; ++r) {
+  /* Список — отдельная метка на строку: обновление «сколько назад» больше
+   * не перерисовывает многострочный лейбл целиком. */
+  for (uint8_t r = 0; r < ROWS; ++r) {
+    lv_obj_t *row = ctx.s_rows[r];
+    if (!row)
+      continue;
+    if (ctx.s_top + r >= n) {
+      if (ctx.s_rowShown[r][0])
+        setTextIfChanged(row, ctx.s_rowShown[r], sizeof(ctx.s_rowShown[r]), "");
+      continue;
+    }
     const Loot *it = LOOT_Item(ctx.s_top + r);
     const bool L = gThemeLight;
     const char *col = it->blacklist ? "909090"
@@ -145,22 +172,20 @@ static void refresh(void) {
     char ago[5], dur[5];
     fmt_duration(ago, sizeof(ago), LOOT_SecondsAgo(it));
     fmt_duration(dur, sizeof(dur), it->duration);
-    int w = snprintf(p, end - p, "#%s %c%4u.%05u %s %s#\n", col,
-                     it->blacklist ? '-' : it->whitelist ? '+' : ' ',
-                     (unsigned)(it->f / MHZ), (unsigned)(it->f % MHZ), ago,
-                     dur);
-    if (w < 0 || w >= end - p)
-      break;
-    p += w;
+    snprintf(ctx.s_rowBuf[r], sizeof(ctx.s_rowBuf[r]),
+             "#%s %c%4u.%05u %s %s#", col,
+             it->blacklist ? '-' : it->whitelist ? '+' : ' ',
+             (unsigned)(it->f / MHZ), (unsigned)(it->f % MHZ), ago, dur);
+    setTextIfChanged(row, ctx.s_rowShown[r], sizeof(ctx.s_rowShown[r]),
+                     ctx.s_rowBuf[r]);
   }
-  lv_label_set_text_static(ctx.s_list, ctx.s_listBuf);
 
   /* подсветка выбранной строки */
   if (n) {
-    lv_obj_clear_flag(ctx.s_sel, LV_OBJ_FLAG_HIDDEN);
+    setHidden(ctx.s_sel, false);
     lv_obj_set_pos(ctx.s_sel, 0, LIST_Y + (ctx.s_selIdx - ctx.s_top) * ROW_H);
   } else {
-    lv_obj_add_flag(ctx.s_sel, LV_OBJ_FLAG_HIDDEN);
+    setHidden(ctx.s_sel, true);
   }
 
   /* детали выбранной */
@@ -176,11 +201,12 @@ static void refresh(void) {
     ctx.s_detailBuf[0] = ' ';
     ctx.s_detailBuf[1] = 0;
   }
-  lv_label_set_text_static(ctx.s_detail, ctx.s_detailBuf);
+  setTextIfChanged(ctx.s_detail, ctx.s_detailShown,
+                   sizeof(ctx.s_detailShown), ctx.s_detailBuf);
 
   ctx.s_dirty = false;
   ctx.s_lastCount = n;
-  ctx.s_lastSec = (uint16_t)(millis() / 1000);
+  ctx.s_lastMs = millis();
 }
 
 static void move(int8_t d) {
@@ -233,10 +259,18 @@ public:
       lv_obj_set_style_bg_color(ctx.s_sel, lootSelColor(), LV_PART_MAIN);
     ctx.s_title = lvLabel(ctx.s_scr, F_M, C_YELLOW, 4, TITLE_Y, LCD_WIDTH - 8,
                       LV_TEXT_ALIGN_LEFT);
-    ctx.s_list = lvLabel(ctx.s_scr, F_M, C_WHITE, 4, LIST_Y, LCD_WIDTH - 8,
-                     LV_TEXT_ALIGN_LEFT);
-    if (ctx.s_list)
-      lv_label_set_recolor(ctx.s_list, true);
+    for (uint8_t r = 0; r < ROWS; ++r) {
+      ctx.s_rows[r] = lvLabel(ctx.s_scr, F_M, C_WHITE, 4, LIST_Y + r * ROW_H,
+                              LCD_WIDTH - 8, LV_TEXT_ALIGN_LEFT);
+      if (ctx.s_rows[r]) {
+        lv_label_set_recolor(ctx.s_rows[r], true);
+        /* Фиксированная высота + ext=0: соседние строки не перекрываются
+         * областями инвалидации и не склеиваются в перерисовку всего списка. */
+        lv_obj_set_height(ctx.s_rows[r], ROW_H);
+        lv_label_set_text_static(ctx.s_rows[r], "");
+        lvLabelNoExt(ctx.s_rows[r]);
+      }
+    }
     ctx.s_detail = lvLabel(ctx.s_scr, F_M, C_CYAN, 4, DETAIL_Y, LCD_WIDTH - 8,
                        LV_TEXT_ALIGN_LEFT);
     ctx.s_hint = lvLabel(ctx.s_scr, F_S, C_GRAY, 4, HINT_Y, LCD_WIDTH - 8,
@@ -245,9 +279,13 @@ public:
       lv_label_set_text_static(
           ctx.s_hint, "1 TIME 2 DUR 3 BL 4 FREQ\nS1 BLK S2 WHT 0 DEL L5/8 CH L9 LOAD");
 
-    if (!ctx.s_scr || !ctx.s_sel || !ctx.s_title || !ctx.s_list || !ctx.s_detail)
+    if (!ctx.s_scr || !ctx.s_sel || !ctx.s_title || !ctx.s_rows[0] ||
+        !ctx.s_detail)
       return; /* куча LVGL исчерпана — экран пустой, но без падения */
 
+    memset(ctx.s_rowShown, 0, sizeof(ctx.s_rowShown));
+    ctx.s_titleShown[0] = 0;
+    ctx.s_detailShown[0] = 0;
     clampSel();
     ctx.s_dirty = true;
     refresh();
@@ -258,7 +296,9 @@ public:
   void exit() override {
     if (ctx.s_scr) {
       lv_obj_del(ctx.s_scr);
-      ctx.s_scr = ctx.s_sel = ctx.s_title = ctx.s_list = ctx.s_detail = ctx.s_hint = NULL;
+      ctx.s_scr = ctx.s_sel = ctx.s_title = ctx.s_detail = ctx.s_hint = NULL;
+      for (uint8_t r = 0; r < ROWS; ++r)
+        ctx.s_rows[r] = NULL;
     }
     if (!ctx.s_keep)
       Vfo_Restore(ctx.s_saved, false);
@@ -268,18 +308,19 @@ public:
 
   void render() override {
     STATUSLINE_render();
-    if (!ctx.s_scr || !ctx.s_list)
+    if (!ctx.s_scr || !ctx.s_rows[0])
       return;
     if (ctx.s_msg[0] && (int32_t)(ctx.s_msgUntil - millis()) <= 0)
       ctx.s_dirty = true;
-    /* раз в секунду (время «назад») и при смене размера/состояния */
+    /* «сколько назад» — раз в 5 с: каждое обновление перерисовывает
+     * изменившиеся строки, а раз в секунду это заметный кадр. */
     if (ctx.s_dirty || LOOT_Size() != ctx.s_lastCount ||
-        (uint16_t)(millis() / 1000) != ctx.s_lastSec)
+        millis() - ctx.s_lastMs >= 5000)
       refresh();
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
-    if (!ctx.s_scr || !ctx.s_list)
+    if (!ctx.s_scr || !ctx.s_rows[0])
       return false;
 
     if (state == KEY_LONG_PRESSED) {

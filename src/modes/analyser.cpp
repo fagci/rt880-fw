@@ -5,13 +5,16 @@
 #include "../driver/st7789.h"
 #include "../helper/log.h"
 #include "../helper/measurements.h"
+#include "../helper/store.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_port.h"
+#include "../ui/bk_regs_menu.h"
 #include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
+#include "../ui/radio_menu.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
@@ -173,36 +176,116 @@ static void onRangeChanged() {
   WF_Clear(UI_WATERFALL_Y);
 }
 
-/* ── Меню-оверлей: шаг и выдержка ── */
+/* ── Меню-оверлей: параметры приёмника и выдержка ── */
 
-static const char *menuStepValue(void) {
-  return STEP_NAMES[vfos[currentVfo].step];
-}
-
-static void menuStepChange(int8_t dir) {
-  vfos[currentVfo].step = static_cast<Step>(
-      (vfos[currentVfo].step + STEP_COUNT + dir) % STEP_COUNT);
-  onRangeChanged();
-}
-
-static const char *menuSpeedValue(void) {
+static const char *menuSpeedValue(const MenuItem *item) {
+  (void)item;
   static char buf[10];
   snprintf(buf, sizeof(buf), "%uus", (unsigned)ANA_DWELL_US[s_dwellIdx]);
   return buf;
 }
 
-static void menuSpeedChange(int8_t dir) {
+static void menuSpeedChange(const MenuItem *item, int8_t dir) {
+  (void)item;
   int i = (int)s_dwellIdx + dir;
   if (i >= 0 && i < (int)ANA_DWELL_N)
     s_dwellIdx = (uint8_t)i;
 }
 
-static const MenuItem ANA_MENU_ITEMS[] = {
-    {"Step", menuStepValue, menuStepChange},
-    {"Speed", menuSpeedValue, menuSpeedChange},
+static const char *menuPaletteValue(const MenuItem *item) {
+  (void)item;
+  return SP_PaletteName(gWaterfallPalette);
+}
+
+static void menuPaletteChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_NextPalette(dir);
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+  Store_MarkDirty();
+}
+
+static const char *menuLevelMinValue(const MenuItem *item) {
+  (void)item;
+  static char b[8];
+  snprintf(b, sizeof(b), "%d", SP_LevelMin());
+  return b;
+}
+
+static const char *menuLevelMaxValue(const MenuItem *item) {
+  (void)item;
+  static char b[8];
+  snprintf(b, sizeof(b), "%d", SP_LevelMax());
+  return b;
+}
+
+static void menuLevelMinChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_SetLevelMin((int16_t)(SP_LevelMin() + dir * 5));
+  SP_Invalidate(UI_SPECTRUM_H);
+  anaCtx.spectrumDirty = true;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+static void menuLevelMaxChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_SetLevelMax((int16_t)(SP_LevelMax() + dir * 5));
+  SP_Invalidate(UI_SPECTRUM_H);
+  anaCtx.spectrumDirty = true;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+static const char *menuLevelAutoValue(const MenuItem *item) {
+  (void)item;
+  return "Fit";
+}
+
+static void menuLevelAutoChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  SP_LevelAutoFit();
+  SP_Invalidate(UI_SPECTRUM_H);
+  anaCtx.spectrumDirty = true;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+/* Скан анализатора на каждой точке только перестраивает частоту; полосу,
+ * модуляцию и усиление применяем сразу при изменении в меню. */
+static void anaMenuApply(uint8_t id) {
+  VFO *v = &vfos[currentVfo];
+  BK4819_SelectChip(0);
+  switch (id) {
+  case RADIO_MENU_STEP:
+    onRangeChanged();
+    break;
+  case RADIO_MENU_MOD:
+    BK4819_SetModulation(static_cast<ModulationType>(v->modulation));
+    break;
+  case RADIO_MENU_BW:
+    BK4819_SetFilterBandwidth(static_cast<BK4819_FilterBandwidth_t>(v->bw));
+    break;
+  case RADIO_MENU_GAIN:
+    BK4819_SetAGC(v->modulation != MOD_AM, v->gainIndex);
+    break;
+  default:
+    break;
+  }
+}
+
+/* Скорость — сразу после шага. */
+static const MenuItem ANA_MENU[] = {
+    RADIO_MENU_ITEM_STEP, {"Speed", menuSpeedValue, menuSpeedChange, 0},
+    RADIO_MENU_ITEM_MOD,  RADIO_MENU_ITEM_BW,     RADIO_MENU_ITEM_SQL,
+    RADIO_MENU_ITEM_GAIN, RADIO_MENU_ITEM_AFC,
+    {"Min", menuLevelMinValue, menuLevelMinChange, 0},
+    {"Max", menuLevelMaxValue, menuLevelMaxChange, 0},
+    {"Auto", menuLevelAutoValue, menuLevelAutoChange, 0},
+    {"Palette", menuPaletteValue, menuPaletteChange, 0},
 };
-#define ANA_MENU_COUNT \
-  ((uint8_t)(sizeof(ANA_MENU_ITEMS) / sizeof(ANA_MENU_ITEMS[0])))
+#define ANA_MENU_COUNT (uint8_t)(sizeof(ANA_MENU) / sizeof(ANA_MENU[0]))
 
 static void shiftRange(int32_t deltaStep) {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
@@ -539,6 +622,7 @@ public:
      * Radio_Init vfos нулевые, и exit настраивал BK на частоту 0
      * (импульс VCO на нуле вешает PLL до снятия питания). */
     Radio_Init();
+    RadioMenu_SetApply(anaMenuApply);
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
     /* Анализатор всегда работает трактом BK A: даже если в VFO остался
@@ -725,12 +809,13 @@ public:
 
     renderInfo(editFreq, want);
     if (directDrawn)
-      MenuOverlay_Invalidate();
+      MenuOverlay_InvalidateBand(UI_SPECTRUM_Y, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1);
     MenuOverlay_Render();
   }
 
   void exit() override {
     MenuOverlay_Close();
+    RadioMenu_SetApply(nullptr);
     anaCtx.menuWasOpen = false;
     /* BK и rxF остались на последней точке скана — возвращаем VFO сканера
      * его частоту и настраиваем чип (иначе шумодав читается по чужой
@@ -773,9 +858,13 @@ public:
         anaCtx.spectrumDirty = true; /* в still спектр сам не перерисуется */
         return true;
       }
-      if (k == KEY_MENU) { /* меню слева под статусбаром: шаг и выдержка */
-        MenuOverlay_Open(ANA_MENU_ITEMS, ANA_MENU_COUNT, 0, UI_STATUS_H,
-                         LCD_WIDTH / 2, 41, true);
+      if (k == KEY_MENU) { /* меню: параметры приёмника и выдержка */
+        MenuOverlay_Open(ANA_MENU, ANA_MENU_COUNT, 0, UI_STATUS_H,
+                         LCD_WIDTH / 2, MENU_OVERLAY_BOX_H, true);
+        return true;
+      }
+      if (k == KEY_0) { /* второе меню: регистры BK4819 */
+        BKRegsMenu_Open();
         return true;
       }
       return false;

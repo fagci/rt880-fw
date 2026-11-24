@@ -13,6 +13,7 @@
  */
 #include "graphics.h"
 #include "driver/st7789.h"
+#include "lv_helpers.h"
 #include "lvgl.h"
 #include "printf.h"
 #include <stdlib.h>
@@ -325,6 +326,7 @@ static void printfEx(uint8_t x, uint16_t y, TextPos align, Color col, Color bg,
       slot->used = false;
       return;
     }
+    lvLabelNoExt(slot->label);
   }
 
   slot->x = x;

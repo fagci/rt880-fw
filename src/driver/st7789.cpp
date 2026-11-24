@@ -32,7 +32,7 @@ static bool dwt_expired(uint32_t start) { return (DWT->CYCCNT - start) > DWT_TIM
 #define ST7789_DMA_TC_FLAG DMA1_FDT1_FLAG
 #define ST7789_DMA_GL_FLAG DMA1_GL1_FLAG
 
-#define ST7789_DMA_PIXELS_PER_CHUNK 1024
+#define ST7789_DMA_PIXELS_PER_CHUNK 512
 
 static uint8_t st7789_dma_buf[ST7789_DMA_PIXELS_PER_CHUNK * 2];
 

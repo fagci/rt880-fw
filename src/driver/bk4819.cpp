@@ -31,6 +31,10 @@ static const BK4819_AF_Type_t MOD_TYPE_REG47_VALUES[] = {
     [MOD_WFM] = BK4819_AF_FM,
 };
 
+/* AF DAC Gain (REG_48 <3:0>): 0..15, ~2 дБ/шаг. Было 8; 2 = -12 дБ,
+ * чтобы даже минимальная громкость не была чрезмерной. */
+#define BK4819_AF_DAC_GAIN 2u
+
 typedef struct {
   gpio_type *scn_port;
   uint16_t scn_pin;
@@ -403,7 +407,8 @@ void BK4819_Init(void) {
     BK4819_WriteRegister(0x09, (i << 12) | DTMF_COEFFS[i]);
 
   BK4819_WriteRegister(BK4819_REG_48,
-                       (11u << 12) | (0 << 10) | (58 << 4) | (8 << 0));
+                       (11u << 12) | (0 << 10) | (58 << 4) |
+                           (BK4819_AF_DAC_GAIN << 0));
 
   BK4819_WriteRegister(BK4819_REG_19, 0x1041);
   BK4819_WriteRegister(BK4819_REG_7D, 0xE940 | 10); // mic
@@ -486,6 +491,10 @@ void BK4819_SetAGC(bool fm, uint8_t gainIndex) {
 
   BK4819_WriteRegister(BK4819_REG_49, reg49);
   BK4819_WriteRegister(BK4819_REG_7E, reg7E);
+}
+
+uint8_t BK4819_GetGainDb(uint8_t gainIndex) {
+  return gainIndex < 32 ? GAIN_TABLE[gainIndex].gainDb : 0;
 }
 
 void BK4819_SetAFC(uint8_t level) {
@@ -608,7 +617,7 @@ void BK4819_SetRegValue(RegisterSpec spec, uint16_t value) {
 void BK4819_SetModulation(ModulationType type) {
   bool isSsb = type == MOD_LSB || type == MOD_USB;
   BK4819_SetAF(MOD_TYPE_REG47_VALUES[type]);
-  BK4819_SetRegValue(RS_AF_DAC_GAIN, 0x8);
+  BK4819_SetRegValue(RS_AF_DAC_GAIN, BK4819_AF_DAC_GAIN);
   /* AFC выключаем только для SSB; на AM он нужен, как в стоке и k1-fw */
   BK4819_SetRegValue(RS_AFC_DIS, isSsb);
   if (type == MOD_WFM) {

@@ -18,6 +18,10 @@ void lv_port_set_direct_areas(bool on);
  * (спектр и водопад продолжают рисоваться), водопад не трогаем. */
 void lv_port_set_spectrum_overlay(bool on);
 
+/* Диагностика по UART (команда `lv`): кадры/пиксели/время LVGL и куча. */
+void lv_port_stats_reset(void);
+void lv_port_stats_print(void);
+
 #ifdef __cplusplus
 }
 #endif

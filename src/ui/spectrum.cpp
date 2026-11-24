@@ -34,14 +34,13 @@ static DBmRange dBmRange = {-110, -50};
  * пересчитывается только при заметном уходе пола. Иначе региональный подъём
  * шума на общем виде выглядит «сигналом», а после зума (когда опора уезжает
  * на локальный минимум) — пропадает. Единицы — сырой RSSI (0.5 дБ). */
-#define SP_LEVEL_SPAN 80     /* 40 дБ — фиксированный размах по вертикали */
-#define SP_LEVEL_SNAP_UP 40  /* пол выше опоры >20 дБ — новый диапазон/усиление */
-#define SP_LEVEL_SNAP_DOWN 4 /* пол ниже опоры >2 дБ — сразу вниз */
-#define SP_FLOOR_OFFSET 4    /* запас под шумовым полом (~2 дБ) */
+#define SP_LEVEL_MIN_SPAN 60  /* не меньше 30 дБ по вертикали */
+#define SP_LEVEL_MAX_SPAN 160 /* не больше 80 дБ */
+#define SP_LEVEL_HEADROOM 40  /* 20 дБ над самым сильным пиком */
+#define SP_FLOOR_OFFSET 6     /* 3 дБ под шумовым полом */
 static int levelMin = 100;
-static int levelMax = 100 + SP_LEVEL_SPAN;
+static int levelMax = 100 + 80;
 static bool levelValid;
-static uint8_t levelHeight = 52;
 
 /* Минимум сырых RSSI за проход. Пиксельная история хранит максимум по
  * нескольким замерам, и её минимум зависит от того, сколько замеров попало в
@@ -69,38 +68,97 @@ static bool peakDecayInit;
 extern bool gThemeLight; /* graphics.cpp */
 
 /* Плавный градиент водопада: уровень 0..255 интерполируется между
- * опорными цветами прямо при отрисовке. Прежняя палитра из 15 ступеней
- * давала заметные полосы. Таблица в RAM не нужна — 240 вызовов на строку
- * для Cortex-M4 дёшевы. */
+ * опорными цветами прямо при отрисовке. Таблица в RAM не нужна — 240
+ * вызовов на строку для Cortex-M4 дёшевы. Опорные точки взяты из палитр
+ * ../dsp (SDRangel/SDR++). */
 typedef struct {
   uint8_t pos; /* 0..255 */
   uint8_t r, g, b;
 } GradStop;
 
-/* тёмная тема: пол — тёмно-синий (не чёрный), дальше синий → голубой →
- * зелёный → жёлтый → оранжевый → красный → белый */
-static const GradStop DARK_GRADIENT[] = {
-    {0, 0, 0, 128},     {20, 0, 0, 220},    {40, 0, 32, 255},
-    {80, 0, 180, 255},  {100, 0, 255, 255}, {140, 0, 255, 80},
-    {160, 0, 255, 0},   {190, 160, 255, 0}, {210, 255, 255, 0},
-    {230, 255, 160, 0}, {245, 255, 40, 0},  {255, 255, 255, 255},
+typedef struct {
+  const char *name;
+  const GradStop *stops;
+  uint8_t count;
+} Palette;
+
+/* GQRX: чёрный → синий → голубой → зелёный → жёлтый → красный → белый. */
+static const GradStop GQRX_GRADIENT[] = {
+    {0, 0x00, 0x00, 0x00},   {16, 0x00, 0x00, 0x00},
+    {32, 0x00, 0x00, 0x21},  {48, 0x00, 0x00, 0x4E},
+    {64, 0x00, 0x00, 0x7B},  {80, 0x14, 0x29, 0xB2},
+    {96, 0x34, 0x6C, 0xEF},  {112, 0x6A, 0x9C, 0xC2},
+    {128, 0xA9, 0xC5, 0x71}, {144, 0xE7, 0xEF, 0x1F},
+    {160, 0xFF, 0xE6, 0x00}, {176, 0xFF, 0xBD, 0x00},
+    {192, 0xFF, 0x94, 0x00}, {208, 0xFF, 0x6C, 0x00},
+    {224, 0xFF, 0x43, 0x00}, {240, 0xFF, 0x1A, 0x00},
+    {255, 0xFF, 0xFF, 0xFF},
 };
 
-/* светлая тема: от белого (шум) через голубой/зелёный к тёмно-красному */
-static const GradStop LIGHT_GRADIENT[] = {
-    {0, 255, 255, 255},  {24, 220, 240, 255}, {64, 120, 220, 255},
-    {100, 0, 220, 220},  {140, 0, 180, 0},    {180, 200, 200, 0},
-    {215, 240, 120, 0},  {240, 180, 0, 0},    {255, 90, 0, 0},
+static const GradStop VIRIDIS_GRADIENT[] = {
+    {0, 0x44, 0x01, 0x54},   {25, 0x48, 0x28, 0x78},
+    {50, 0x3E, 0x49, 0x89},  {75, 0x31, 0x68, 0x8E},
+    {100, 0x26, 0x82, 0x8E}, {125, 0x1F, 0x9E, 0x89},
+    {150, 0x35, 0xB7, 0x79}, {175, 0x6E, 0xCE, 0x58},
+    {205, 0xB5, 0xDE, 0x2B}, {255, 0xFD, 0xE7, 0x25},
 };
+
+static const GradStop MAGMA_GRADIENT[] = {
+    {0, 0x00, 0x00, 0x04},   {30, 0x1C, 0x10, 0x44},
+    {55, 0x4F, 0x12, 0x7B},  {85, 0x81, 0x25, 0x81},
+    {115, 0xBC, 0x39, 0x78}, {145, 0xE7, 0x52, 0x63},
+    {175, 0xF8, 0x76, 0x5C}, {210, 0xFE, 0xBA, 0x7A},
+    {255, 0xFC, 0xFD, 0xBF},
+};
+
+static const GradStop TURBO_GRADIENT[] = {
+    {0, 0x30, 0x12, 0x3B},   {32, 0x41, 0x45, 0xAB},
+    {56, 0x46, 0x75, 0xED},  {80, 0x39, 0xA2, 0xFC},
+    {105, 0x1B, 0xCF, 0xD4}, {130, 0x24, 0xEC, 0xA6},
+    {155, 0x61, 0xFC, 0x6C}, {180, 0xA4, 0xFC, 0x3B},
+    {205, 0xD1, 0xE8, 0x34}, {228, 0xF9, 0xBA, 0x38},
+    {243, 0xFE, 0x9B, 0x2D}, {250, 0xF5, 0x69, 0x1B},
+    {253, 0xD9, 0x38, 0x06}, {255, 0x7A, 0x04, 0x03},
+};
+
+static const GradStop GRAY_GRADIENT[] = {
+    {0, 0x00, 0x00, 0x00},
+    {255, 0xFF, 0xFF, 0xFF},
+};
+
+static const Palette PALETTES[SP_PALETTE_COUNT] = {
+    {"Gqrx", GQRX_GRADIENT, ARRAY_SIZE(GQRX_GRADIENT)},
+    {"Viridis", VIRIDIS_GRADIENT, ARRAY_SIZE(VIRIDIS_GRADIENT)},
+    {"Magma", MAGMA_GRADIENT, ARRAY_SIZE(MAGMA_GRADIENT)},
+    {"Turbo", TURBO_GRADIENT, ARRAY_SIZE(TURBO_GRADIENT)},
+    {"Gray", GRAY_GRADIENT, ARRAY_SIZE(GRAY_GRADIENT)},
+};
+
+uint8_t gWaterfallPalette;
+
+const char *SP_PaletteName(uint8_t idx) {
+  return PALETTES[idx < SP_PALETTE_COUNT ? idx : 0].name;
+}
+
+void SP_SetPalette(uint8_t idx) {
+  gWaterfallPalette = idx < SP_PALETTE_COUNT ? idx : 0;
+}
+
+void SP_NextPalette(int8_t dir) {
+  if (!dir)
+    return;
+  gWaterfallPalette =
+      (uint8_t)((gWaterfallPalette + SP_PALETTE_COUNT + dir) % SP_PALETTE_COUNT);
+}
 
 static uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
   return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
 static uint16_t gradientColor(uint8_t lvl) {
-  const GradStop *st = gThemeLight ? LIGHT_GRADIENT : DARK_GRADIENT;
-  uint8_t n = gThemeLight ? (uint8_t)ARRAY_SIZE(LIGHT_GRADIENT)
-                          : (uint8_t)ARRAY_SIZE(DARK_GRADIENT);
+  const Palette *p = &PALETTES[gWaterfallPalette];
+  const GradStop *st = p->stops;
+  uint8_t n = p->count;
   uint8_t seg = 0;
   while (seg + 1 < n && lvl > st[seg + 1].pos)
     seg++;
@@ -111,6 +169,12 @@ static uint16_t gradientColor(uint8_t lvl) {
   uint8_t r = (uint8_t)(a->r + ((int)b->r - a->r) * t / 255);
   uint8_t g = (uint8_t)(a->g + ((int)b->g - a->g) * t / 255);
   uint8_t bl = (uint8_t)(a->b + ((int)b->b - a->b) * t / 255);
+  if (gThemeLight) { /* на белом фоне — инверсия с уходом шума в белый */
+    uint16_t k = lvl;
+    r = (uint8_t)(255u - (uint16_t)r * k / 255u);
+    g = (uint8_t)(255u - (uint16_t)g * k / 255u);
+    bl = (uint8_t)(255u - (uint16_t)bl * k / 255u);
+  }
   return rgb565(r, g, bl);
 }
 
@@ -120,30 +184,15 @@ static uint16_t levelColor(uint16_t rssi) {
   return gradientColor(lvl);
 }
 
-/* Цвет столбца — тот же градиент: высота столбца даёт уровень. В светлой
- * теме низ градиента почти белый, поэтому начинаем выше — иначе низкие
- * столбцы сливаются с фоном. */
-static uint16_t barRamp[SP_MAX_POINTS];
-static uint8_t barRampH;
-static int8_t barRampTheme = -1;
-static uint16_t colColor[SP_MAX_POINTS];
-
-static void initBarRamp(uint8_t sh) {
-  if (barRampH == sh && barRampTheme == (int8_t)gThemeLight)
-    return;
-  barRampH = sh;
-  barRampTheme = gThemeLight;
-  const uint16_t first = gThemeLight ? 64 : 0;
-  for (uint8_t h = 0; h <= sh; h++) {
-    uint16_t lvl = first;
-    if (sh)
-      lvl = (uint16_t)(first + (uint16_t)h * (255 - first) / sh);
-    barRamp[h] = gradientColor((uint8_t)lvl);
-  }
+/* Столбцы спектра — один спокойный цвет, без «радуги» по высоте. */
+static uint16_t barColor(void) {
+  return gThemeLight ? rgb565(40, 110, 88) : C_GREEN;
 }
 
+static uint16_t colColor[SP_MAX_POINTS];
+
 static uint16_t peakLineColor(void) {
-  return gThemeLight ? rgb565(150, 0, 0) : C_WHITE;
+  return gThemeLight ? rgb565(150, 0, 0) : C_YELLOW;
 }
 
 static uint16_t v(uint8_t x) { return rssiHistory[x]; }
@@ -152,27 +201,92 @@ static uint8_t f2x(uint32_t f) {
   return ConvertDomain(f, range.start, range.end, 0, SP_MAX_POINTS - 1);
 }
 
-/* Пересчёт уровня: опора — минимум сырых замеров (sweepMin), верх —
- * levelMin + SP_LEVEL_SPAN. Вниз опора опускается сразу (иначе после зума
- * шкала останется выше всего диапазона и экран будет пустым), вверх — только
- * при заметном уходе (другой диапазон/усиление). */
-static void computeAutoLevel(uint8_t sh) {
-  (void)sh;
-  if (sweepMin == UINT16_MAX)
-    return;
-
-  int target = (int)sweepMin - SP_FLOOR_OFFSET;
-  if (target < 0)
-    target = 0;
-  int diff = target - levelMin;
-  if (!levelValid || diff > SP_LEVEL_SNAP_UP || diff < -SP_LEVEL_SNAP_DOWN)
-    levelMin = target;
-
-  levelMax = levelMin + SP_LEVEL_SPAN;
+static void applyLevelRssi(int lo, int hi) {
+  if (lo < 0)
+    lo = 0;
+  if (hi > 320) /* 0 дБм */
+    hi = 320;
+  if (hi < lo + SP_LEVEL_MIN_SPAN)
+    hi = lo + SP_LEVEL_MIN_SPAN;
+  if (hi > 320) {
+    hi = 320;
+    if (lo > hi - SP_LEVEL_MIN_SPAN)
+      lo = hi - SP_LEVEL_MIN_SPAN;
+  }
+  if (lo < 0)
+    lo = 0;
+  levelMin = lo;
+  levelMax = hi;
   levelValid = true;
   dBmRange.min = Rssi2DBm((uint16_t)levelMin);
   dBmRange.max = Rssi2DBm((uint16_t)levelMax);
 }
+
+static int dbmToRssi(int dbm) {
+  if (dbm < -160)
+    dbm = -160;
+  if (dbm > 0)
+    dbm = 0;
+  return (int)DBm2Rssi((int16_t)dbm);
+}
+
+/* Auto как в SA ../dsp: один раз подобрать окно под текущий кадр — дно чуть
+ * ниже шума, верх на 20 дБ выше самого сильного пика, размах не меньше
+ * 30 дБ. Дальше окно живёт, пока пользователь не нажмёт Auto снова. */
+static void fitLevelFromHistory(void) {
+  uint16_t mn = UINT16_MAX;
+  uint16_t mx = 0;
+  for (uint8_t i = 0; i < SP_MAX_POINTS; i++) {
+    uint16_t r = rssiHistory[i];
+    if (!r)
+      continue;
+    if (r < mn)
+      mn = r;
+    if (peakHistory[i] > mx)
+      mx = peakHistory[i];
+  }
+  if (mn == UINT16_MAX) {
+    if (sweepMin == UINT16_MAX)
+      return;
+    mn = sweepMin;
+    mx = sweepMin;
+  }
+  if (mx < mn)
+    mx = mn;
+  int lo = (int)mn - SP_FLOOR_OFFSET;
+  int hi = (int)mx + SP_LEVEL_HEADROOM;
+  if (hi - lo < SP_LEVEL_MIN_SPAN)
+    hi = lo + SP_LEVEL_MIN_SPAN;
+  if (hi - lo > SP_LEVEL_MAX_SPAN)
+    hi = lo + SP_LEVEL_MAX_SPAN;
+  applyLevelRssi(lo, hi);
+}
+
+static void computeAutoLevel(void) {
+  if (!levelValid)
+    fitLevelFromHistory();
+}
+
+int16_t SP_LevelMin(void) { return Rssi2DBm((uint16_t)levelMin); }
+int16_t SP_LevelMax(void) { return Rssi2DBm((uint16_t)levelMax); }
+
+void SP_SetLevelMin(int16_t dbm) {
+  int lo = dbmToRssi(dbm);
+  int hi = levelMax;
+  if (lo > hi - SP_LEVEL_MIN_SPAN)
+    lo = hi - SP_LEVEL_MIN_SPAN;
+  applyLevelRssi(lo, hi);
+}
+
+void SP_SetLevelMax(int16_t dbm) {
+  int lo = levelMin;
+  int hi = dbmToRssi(dbm);
+  if (hi < lo + SP_LEVEL_MIN_SPAN)
+    hi = lo + SP_LEVEL_MIN_SPAN;
+  applyLevelRssi(lo, hi);
+}
+
+void SP_LevelAutoFit(void) { fitLevelFromHistory(); }
 
 /* Сбросить опору уровня. Нужно при входе в режим: у BK и SI разные шкалы
  * RSSI, и унаследованная опора сделала бы спектр пустым. Зум/смена шага
@@ -216,7 +330,7 @@ void SP_Begin(void) {
   /* Проход мог закончиться не на range.end (каналы/сетка): дописываем
    * накопленный пиксель до пересчёта уровня. */
   flushPixel();
-  computeAutoLevel(levelHeight);
+  computeAutoLevel(); /* один раз после входа в режим */
   sweepMin = UINT16_MAX; /* следующий проход считает свой пол */
   currentStep = 0;
 }
@@ -395,13 +509,6 @@ static void updatePeakFloor(void) {
 }
 
 void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
-  initBarRamp(sh);
-  levelHeight = sh;
-  /* Опускаем опору сразу, как только в текущем проходе встретился более
-   * низкий пол (после зума иначе можно получить пустой экран). Вверх она
-   * поднимается только при заметном уходе — см. computeAutoLevel. */
-  computeAutoLevel(sh);
-
   decayPeaks();
   updatePeakFloor();
 
@@ -409,7 +516,7 @@ void SP_Render(FRange *p, uint8_t sy, uint8_t sh) {
     int hv = ConvertDomain(v(x), levelMin, levelMax, 0, sh);
     uint8_t h = (uint8_t)(hv > sh ? sh : hv);
     topRow[x] = (uint8_t)(sh - h);
-    colColor[x] = barRamp[h];
+    colColor[x] = barColor();
 
     int pv = ConvertDomain(peakHistory[x], levelMin, levelMax, 0, sh);
     uint8_t ph = (uint8_t)(pv > sh ? sh : pv);

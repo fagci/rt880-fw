@@ -43,6 +43,7 @@
 #include "../ui/lv_port.h"
 #include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
+#include "../ui/radio_menu.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
@@ -160,30 +161,139 @@ static void changeStep(int8_t d) {
   onRangeChanged();
 }
 
-/* ── Меню-оверлей: шаг и скорость скана ── */
+/* ── Меню-оверлей: параметры приёмника, скорость и водопад ── */
 
-static const char *menuStepValue(void) {
-  return STEP_NAMES[vfos[currentVfo].step];
-}
-
-static const char *menuSpeedValue(void) {
+static const char *menuSpeedValue(const MenuItem *item) {
+  (void)item;
   static char buf[10];
   snprintf(buf, sizeof(buf), "%uus", (unsigned)DWELL_US[ctx.dwellIdx]);
   return buf;
 }
 
-static void menuSpeedChange(int8_t dir) {
+static void menuSpeedChange(const MenuItem *item, int8_t dir) {
+  (void)item;
   int i = (int)ctx.dwellIdx + dir;
   if (i >= 0 && i < (int)DWELL_N)
     ctx.dwellIdx = (uint8_t)i;
 }
 
-static const MenuItem SCAN_MENU_ITEMS[] = {
-    {"Step", menuStepValue, changeStep},
-    {"Speed", menuSpeedValue, menuSpeedChange},
+static const char *menuWaterfallValue(const MenuItem *item) {
+  (void)item;
+  return ctx.waterfall ? "ON" : "OFF";
+}
+
+static void menuWaterfallChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  bool on = dir > 0;
+  if (on == ctx.waterfall)
+    return;
+  ctx.waterfall = on;
+  if (!on) {
+    WF_Reset();
+    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
+             C_BLACK);
+  }
+}
+
+static const char *menuPaletteValue(const MenuItem *item) {
+  (void)item;
+  return SP_PaletteName(gWaterfallPalette);
+}
+
+static void menuPaletteChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_NextPalette(dir);
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+  Store_MarkDirty();
+}
+
+static const char *menuLevelMinValue(const MenuItem *item) {
+  (void)item;
+  static char b[8];
+  snprintf(b, sizeof(b), "%d", SP_LevelMin());
+  return b;
+}
+
+static const char *menuLevelMaxValue(const MenuItem *item) {
+  (void)item;
+  static char b[8];
+  snprintf(b, sizeof(b), "%d", SP_LevelMax());
+  return b;
+}
+
+static void menuLevelMinChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_SetLevelMin((int16_t)(SP_LevelMin() + dir * 5));
+  SP_Invalidate(UI_SPECTRUM_H);
+  ctx.lastSpRender = 0;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+static void menuLevelMaxChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  SP_SetLevelMax((int16_t)(SP_LevelMax() + dir * 5));
+  SP_Invalidate(UI_SPECTRUM_H);
+  ctx.lastSpRender = 0;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+static const char *menuLevelAutoValue(const MenuItem *item) {
+  (void)item;
+  return "Fit";
+}
+
+static void menuLevelAutoChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  SP_LevelAutoFit();
+  SP_Invalidate(UI_SPECTRUM_H);
+  ctx.lastSpRender = 0;
+  WF_Reset();
+  WF_Clear(UI_WATERFALL_Y);
+}
+
+/* Изменения полосы/модуляции/усиления скан сам не переприменяет на каждой
+ * точке — пишем в чип сразу; шаг требует пересборки сетки. */
+static void scanMenuApply(uint8_t id) {
+  VFO *v = &vfos[currentVfo];
+  BK4819_SelectChip(ctx.scanChip);
+  switch (id) {
+  case RADIO_MENU_STEP:
+    onRangeChanged();
+    break;
+  case RADIO_MENU_MOD:
+    BK4819_SetModulation(static_cast<ModulationType>(v->modulation));
+    break;
+  case RADIO_MENU_BW:
+    BK4819_SetFilterBandwidth(static_cast<BK4819_FilterBandwidth_t>(v->bw));
+    break;
+  case RADIO_MENU_GAIN:
+    BK4819_SetAGC(v->modulation != MOD_AM, v->gainIndex);
+    break;
+  default:
+    break;
+  }
+}
+
+/* Скорость — сразу после шага: до неё не нужно листать полменю. */
+static const MenuItem SCAN_MENU[] = {
+    RADIO_MENU_ITEM_STEP,
+    {"Speed", menuSpeedValue, menuSpeedChange, 0},
+    RADIO_MENU_ITEM_MOD,
+    RADIO_MENU_ITEM_BW,
+    RADIO_MENU_ITEM_SQL,
+    RADIO_MENU_ITEM_GAIN,
+    RADIO_MENU_ITEM_AFC,
+    {"Min", menuLevelMinValue, menuLevelMinChange, 0},
+    {"Max", menuLevelMaxValue, menuLevelMaxChange, 0},
+    {"Auto", menuLevelAutoValue, menuLevelAutoChange, 0},
+    {"Waterfall", menuWaterfallValue, menuWaterfallChange, 0},
+    {"Palette", menuPaletteValue, menuPaletteChange, 0},
 };
-#define SCAN_MENU_COUNT \
-  ((uint8_t)(sizeof(SCAN_MENU_ITEMS) / sizeof(SCAN_MENU_ITEMS[0])))
+#define SCAN_MENU_COUNT (uint8_t)(sizeof(SCAN_MENU) / sizeof(SCAN_MENU[0]))
 
 static void onStartEntered(uint32_t f) {
   ctx.range.start = f;
@@ -447,6 +557,7 @@ public:
     ctx.savedVfo = currentVfo;
     ctx.savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
+    RadioMenu_SetApply(scanMenuApply);
     /* Внутри сканера VFO гоняется по частотам; в сохранение должен попасть
      * снимок на входе, пока MENU не заберёт частоту обратно в VFO. */
     Store_PinRadio();
@@ -550,7 +661,8 @@ public:
     if (now - ctx.lastSpRender >= 300) {
       SP_Render(&ctx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       ctx.lastSpRender = now;
-      MenuOverlay_Invalidate(); /* прямой DMA мог затереть область меню */
+      /* прямой DMA затёр только полосу спектра — меню перерисует пересечение */
+      MenuOverlay_InvalidateBand(UI_SPECTRUM_Y, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1);
     }
     if (ctx.sweepDone) { /* строка водопада — раз за полный проход */
       ctx.sweepDone = false;
@@ -562,9 +674,10 @@ public:
     /* шаг между полями границ; при вводе не прячем — принятая граница
      * остаётся видимой рядом с редактором */
     uint32_t stp = StepFrequencyTable[vfos[currentVfo].step];
+    static char stepBuf[10];
+    fmt_step(stepBuf, sizeof(stepBuf), stp);
     PrintfT(LCD_XCENTER, UI_RANGE_BASE,
-            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%u.%02luk",
-            (unsigned)(stp / 100), (unsigned)(stp % 100));
+            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%s", stepBuf);
 
     /* Строка 1: состояние | текущая частота | скорость. */
     const char *state = !ctx.scanning ? "PAUSE" : (ctx.isListening ? "HOLD" : "SCAN");
@@ -602,6 +715,7 @@ public:
 
   void exit() override {
     MenuOverlay_Close();
+    RadioMenu_SetApply(nullptr);
     ctx.menuWasOpen = false;
     setAudio(false);
     LOOT_Standby();
@@ -640,9 +754,9 @@ public:
 
     if (state == KEY_LONG_PRESSED) {
       switch (k) {
-      case KEY_MENU: /* меню-оверлей: шаг и скорость */
-        MenuOverlay_Open(SCAN_MENU_ITEMS, SCAN_MENU_COUNT, 0, UI_STATUS_H,
-                         LCD_WIDTH / 2, 41, true);
+      case KEY_MENU: /* меню-оверлей: параметры, скорость и водопад */
+        MenuOverlay_Open(SCAN_MENU, SCAN_MENU_COUNT, 0, UI_STATUS_H,
+                         LCD_WIDTH / 2, MENU_OVERLAY_BOX_H, true);
         return true;
       case KEY_SIDE1: /* водопад вкл/выкл */
         ctx.waterfall = !ctx.waterfall;

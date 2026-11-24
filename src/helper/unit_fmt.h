@@ -81,10 +81,19 @@ static inline uint8_t fmt_mhz5(char *buf, uint8_t cap, uint32_t f) {
                            (unsigned)(f % UMHZ));
 }
 
-/* Шаг из StepFrequencyTable (единицы 10 Гц) → "5.00k". */
+/* Шаг из StepFrequencyTable (единицы 10 Гц) → "25k" / "12.5k" / "20Hz". */
 static inline uint8_t fmt_step(char *buf, uint8_t cap, uint32_t step) {
-  return (uint8_t)snprintf(buf, cap, "%u.%02uk", (unsigned)(step / 100),
-                           (unsigned)(step % 100));
+  if (step < 100) /* < 1 кГц — целые герцы */
+    return (uint8_t)snprintf(buf, cap, "%uHz", (unsigned)(step * 10));
+  uint32_t k = step / 100;
+  uint32_t frac = step % 100;
+  if (frac == 0)
+    return (uint8_t)snprintf(buf, cap, "%luk", (unsigned long)k);
+  if (frac % 10 == 0)
+    return (uint8_t)snprintf(buf, cap, "%lu.%luk", (unsigned long)k,
+                             (unsigned long)(frac / 10));
+  return (uint8_t)snprintf(buf, cap, "%lu.%02luk", (unsigned long)k,
+                           (unsigned long)frac);
 }
 
 /* Полоса (единицы 10 Гц) → "24.00k" / "1.20M" / "1.79G". */

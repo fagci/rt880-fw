@@ -8,6 +8,7 @@
 #include "../driver/w25q32.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
+#include "../ui/spectrum.h"
 
 #include <string.h>
 
@@ -268,7 +269,9 @@ static bool save_record(void) {
   memset(&f, 0, sizeof(f));
   f.lootCount = LOOT_Size();
   f.squelch = squelchLevel;
-  f.flags = (gThemeLight ? 1u : 0u) | (ant_is_main() ? 2u : 0u);
+  /* flags: bit0 — тема, bit1 — антенна, bit2..4 — палитра водопада. */
+  f.flags = (gThemeLight ? 1u : 0u) | (ant_is_main() ? 2u : 0u) |
+            (uint8_t)((gWaterfallPalette & 7u) << 2);
   if (s_radioPinned) {
     f.currentVfo = s_pinRadio.currentVfo;
     f.filter = s_pinRadio.filter;
@@ -372,6 +375,7 @@ bool Store_ApplyUi(void) {
     return false;
   gThemeLight = (f.flags & 1u) != 0;
   ant_sw((f.flags & 2u) != 0);
+  SP_SetPalette((f.flags >> 2) & 7u);
   return true;
 }
 
