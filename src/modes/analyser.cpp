@@ -10,12 +10,14 @@
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_port.h"
+#include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "printf.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -57,19 +59,22 @@ struct {
   NumVal_t endVal;
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
   bool spectrumDirty; /* перерисовать спектр вне очереди (сброс пиков) */
+  bool menuWasOpen;   /* меню закрылось — перерисовать спектр */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
   uint32_t cursorFreq; /* точная частота курсора (шаг сетки, не пиксель) */
 } anaCtx;
 
 /* Выдержка на точке перед чтением RSSI, мкс. 0 — максимально быстрый
  * обзор; далее шаг 100 мкс до 1 мс, затем по 1 мс до 10 мс.
- * 600 мкс — прежний режим с более плотными пиками (ПЛЛ/АРУ успевают
- * установиться). Меняется 1/7, текущее значение видно в верхней строке. */
+ * Меняется 1/7, текущее значение видно в верхней строке. */
 static const uint16_t ANA_DWELL_US[] = {
-    0,    100,  200,  300,  400,  500,  600,  700,  800,  900,
-    1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
+     0,    100,  200,  300,  400,  500,  600,  700,  800,  900,
+     1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000};
 #define ANA_DWELL_N (sizeof(ANA_DWELL_US) / sizeof(ANA_DWELL_US[0]))
-static uint8_t s_dwellIdx = 6; /* 600 мкс, как было */
+/* RSSI-фильтр BK тянется ~1 мс, поэтому пик при короткой выдержке
+ * «уезжает» на 1-2 шага сетки — это меньше одного столбца экрана.
+ * 500 мкс даёт ~1.8 с на проход 400–470 МГц шагом 25 кГц вместо ~6.5 с. */
+static uint8_t s_dwellIdx = 5;
 
 static uint32_t xToFreq(uint8_t x);
 
@@ -167,6 +172,37 @@ static void onRangeChanged() {
   FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
   WF_Clear(UI_WATERFALL_Y);
 }
+
+/* ── Меню-оверлей: шаг и выдержка ── */
+
+static const char *menuStepValue(void) {
+  return STEP_NAMES[vfos[currentVfo].step];
+}
+
+static void menuStepChange(int8_t dir) {
+  vfos[currentVfo].step = static_cast<Step>(
+      (vfos[currentVfo].step + STEP_COUNT + dir) % STEP_COUNT);
+  onRangeChanged();
+}
+
+static const char *menuSpeedValue(void) {
+  static char buf[10];
+  snprintf(buf, sizeof(buf), "%uus", (unsigned)ANA_DWELL_US[s_dwellIdx]);
+  return buf;
+}
+
+static void menuSpeedChange(int8_t dir) {
+  int i = (int)s_dwellIdx + dir;
+  if (i >= 0 && i < (int)ANA_DWELL_N)
+    s_dwellIdx = (uint8_t)i;
+}
+
+static const MenuItem ANA_MENU_ITEMS[] = {
+    {"Step", menuStepValue, menuStepChange},
+    {"Speed", menuSpeedValue, menuSpeedChange},
+};
+#define ANA_MENU_COUNT \
+  ((uint8_t)(sizeof(ANA_MENU_ITEMS) / sizeof(ANA_MENU_ITEMS[0])))
 
 static void shiftRange(int32_t deltaStep) {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
@@ -486,7 +522,8 @@ static NumVal_t *editingVal(void) {
   return nullptr;
 }
 
-#define SCAN_STEPS_PER_UPDATE 128
+/* Не блокируем главный цикл: 8 шагов при 500 мкс — ~5 мс, меньше кадра. */
+#define SCAN_STEPS_PER_UPDATE 8
 
 class AnalyserMode : public Mode {
 public:
@@ -498,6 +535,10 @@ public:
     /* ВАЖНО: memset обнуляет весь anaCtx, включая savedVfo — сохраняем
      * до него и пишем после (раньше выход всегда уходил в VFO 0) */
     uint8_t entryVfo = currentVfo;
+    /* Вход в анализатор мог быть первым режимом после старта: без
+     * Radio_Init vfos нулевые, и exit настраивал BK на частоту 0
+     * (импульс VCO на нуле вешает PLL до снятия питания). */
+    Radio_Init();
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
     /* Анализатор всегда работает трактом BK A: даже если в VFO остался
@@ -506,6 +547,13 @@ public:
     /* Ручной фильтр из VFO мог остаться от другого диапазона: сканируем в
      * AUTO, иначе на 450 МГц можно получить почти пустой спектр. */
     Radio_FilterAuto();
+    /* Полоса канала — из VFO: после WFM в REG_43 остаётся широкая полоса,
+     * и спектр «размазывается». AFC на время скана выключен: он подтягивает
+     * слабую несущую и уводит измеренную частоту с сетки. */
+    BK4819_SelectChip(0);
+    BK4819_SetFilterBandwidth(
+        static_cast<BK4819_FilterBandwidth_t>(vfos[currentVfo].bw));
+    BK4819_SetAFC(0);
     SP_ResetLevel(); /* шкала BK, не наследуем от другого режима/тракта */
     memset(&anaCtx, 0, sizeof(anaCtx));
     anaCtx.savedVfo = entryVfo;
@@ -558,12 +606,15 @@ public:
         vfos[currentVfo].rxF = anaCtx.scanF;
         BK4819_SelectFilterByFrequency(anaCtx.scanF);
         BK4819_SelectChip(0);
+        /* pulse, не precise: полный сброс REG_30 гасит тракт, и на
+         * короткой выдержке RSSI не успевает подняться. Импульс VCO_CALIB
+         * перестраивает PLL, не выключая приём. */
         BK4819_TuneTo(anaCtx.scanF, false);
       }
       /* Выдержка на каждой точке, в том числе вне диапазона BK: иначе
        * проход вне приёма шёл бы заметно быстрее показанного времени.
-       * Без паузы RSSI читается до установления ПЛЛ/АРУ и «размазывает»
-       * пики вдоль прохода (кривая горка); выдержка настраивается 1/7. */
+       * На нуле RSSI ещё не успевает отреагировать (горка); выдержка
+       * настраивается 1/7. */
       const uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
       if (dwell)
         delay_us(dwell);
@@ -620,16 +671,25 @@ public:
             STEP_NAMES[vfos[currentVfo].step],
             (unsigned)ANA_DWELL_US[s_dwellIdx]);
 
+    bool menuOpen = MenuOverlay_IsOpen();
+    if (anaCtx.menuWasOpen && !menuOpen) {
+      /* Меню закрылось: его пиксели в зоне спектра нужно заменить. */
+      anaCtx.spectrumDirty = true;
+      SP_Invalidate(UI_SPECTRUM_H);
+    }
+    anaCtx.menuWasOpen = menuOpen;
+
     /* Рамка курсора рисуется ПОВЕРХ спектра, а SP_Render перерисовывает
      * только изменившиеся строки. Поэтому стираем старую рамку и просим
      * полную перерисовку ДО рендера спектра — иначе нижняя часть рамки
      * оставалась чёрной, когда она пропадала по таймауту.
      * На время ввода центральной частоты рамку прячем. */
-    bool want =
-        anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout && !editFreq;
+    bool want = anaCtx.cursorActive && millis() <= anaCtx.cursorTimeout &&
+                !editFreq;
     bool moved = anaCtx.prevCursorActive &&
                  (!want || cursorX0() != anaCtx.prevCursorStart ||
                   cursorX1() != anaCtx.prevCursorEnd);
+    bool directDrawn = moved;
     if (moved) {
       eraseCursorZone();
       SP_Invalidate(UI_SPECTRUM_H);
@@ -645,6 +705,12 @@ public:
       lastSpectrumRender = millis();
       anaCtx.spectrumDirty = false;
       spectrumRedrawn = true;
+      directDrawn = true;
+    }
+
+    if (want && (spectrumRedrawn || !anaCtx.prevCursorActive)) {
+      drawCursorZone();
+      directDrawn = true;
     }
 
     if (anaCtx.spectrumReady) {
@@ -657,12 +723,15 @@ public:
       anaCtx.scanF = anaCtx.range.start;
     }
 
-    if (want && (spectrumRedrawn || !anaCtx.prevCursorActive))
-      drawCursorZone();
     renderInfo(editFreq, want);
+    if (directDrawn)
+      MenuOverlay_Invalidate();
+    MenuOverlay_Render();
   }
 
   void exit() override {
+    MenuOverlay_Close();
+    anaCtx.menuWasOpen = false;
     /* BK и rxF остались на последней точке скана — возвращаем VFO сканера
      * его частоту и настраиваем чип (иначе шумодав читается по чужой
      * частоте, а VFO уезжает). MENU на курсоре — забрать его частоту. */
@@ -682,6 +751,13 @@ public:
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    if (MenuOverlay_IsOpen()) {
+      if (MenuOverlay_Key(k, state))
+        return true;
+      LOOTLIST_OpenFrom(MODE_ANALYSER); /* STAR закрыл меню */
+      return true;
+    }
+
     /* идёт ввод (центр / начало / конец) — все клавиши туда */
     if (NumVal_t *ev = editingVal()) {
       if (NumVal_Key(ev, k, state))
@@ -695,6 +771,11 @@ public:
       if (k == KEY_5) {
         SP_ResetPeaks();
         anaCtx.spectrumDirty = true; /* в still спектр сам не перерисуется */
+        return true;
+      }
+      if (k == KEY_MENU) { /* меню слева под статусбаром: шаг и выдержка */
+        MenuOverlay_Open(ANA_MENU_ITEMS, ANA_MENU_COUNT, 0, UI_STATUS_H,
+                         LCD_WIDTH / 2, 41, true);
         return true;
       }
       return false;
@@ -782,6 +863,9 @@ public:
         exitListen();
       else
         enterListen();
+      return true;
+    case KEY_STAR: /* список находок */
+      LOOTLIST_OpenFrom(MODE_ANALYSER);
       return true;
     case KEY_EXIT: /* как везде: выход в VFO на прежнюю частоту */
       anaCtx.captureF = 0;

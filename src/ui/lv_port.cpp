@@ -23,8 +23,10 @@ static lv_color_t draw_buf1[LV_BUF_PX];
 static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 static bool s_directAreas;
+static bool s_spectrumOverlay;
 
 void lv_port_set_direct_areas(bool on) { s_directAreas = on; }
+void lv_port_set_spectrum_overlay(bool on) { s_spectrumOverlay = on; }
 
 static void flush_rows(const lv_area_t *area, const lv_color_t *color_p,
                        int32_t y1, int32_t y2) {
@@ -56,6 +58,18 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
    * водопадом. Иначе непрозрачный фон лейбла затирает спектр, а пиксели,
    * попавшие в память аппаратного vscroll, ползут вниз чёрными
    * прямоугольниками. */
+  if (s_spectrumOverlay) {
+    /* Открыто меню поверх спектра: LVGL можно писать до водопада, спектр
+     * продолжает рисоваться напрямую, меню перерисовывается поверх своей
+     * области. Водопад по-прежнему только DMA. */
+    const int32_t clip_bottom = UI_WATERFALL_Y - 3;
+    int32_t y2 = area->y2 < clip_bottom ? area->y2 : clip_bottom;
+    if (area->y1 <= y2)
+      flush_rows(area, color_p, area->y1, y2);
+    lv_disp_flush_ready(drv);
+    return;
+  }
+
   int32_t y2 = area->y2 < UI_SPECTRUM_Y - 1 ? area->y2 : UI_SPECTRUM_Y - 1;
   if (area->y1 <= y2)
     flush_rows(area, color_p, area->y1, y2);

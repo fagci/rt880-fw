@@ -14,6 +14,10 @@ void lv_port_init(void);
  * должны затирать спектр и попадать в память аппаратного скролла. */
 void lv_port_set_direct_areas(bool on);
 
+/* Меню-оверлей в зоне спектра: разрешить LVGL писать поверх прямого DMA
+ * (спектр и водопад продолжают рисоваться), водопад не трогаем. */
+void lv_port_set_spectrum_overlay(bool on);
+
 #ifdef __cplusplus
 }
 #endif

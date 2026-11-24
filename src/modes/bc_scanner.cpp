@@ -25,6 +25,7 @@
  *   длинный SIDE2 — полоса AM (6/4/3/2 кГц);
  *   длинный 5     — сброс пиков спектра;
  *   MENU          — текущий канал в VFO и выход;
+ *   STAR короткий — список находок;
  *   длинный MENU  — список находок;
  *   EXIT          — выход в VFO.
  */
@@ -534,6 +535,9 @@ public:
       return true;
     case KEY_EXIT:
       Mode_Switch(MODE_VFO);
+      return true;
+    case KEY_STAR: /* список находок */
+      LOOTLIST_OpenFrom(MODE_BC_SCANNER);
       return true;
     case KEY_SIDE1:
       switchBand(+1);

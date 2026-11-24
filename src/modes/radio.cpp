@@ -815,6 +815,9 @@ bool RadioMode::key(KEY_Code_t k, Key_State_t state) {
   case KEY_EXIT:
     Mode_Switch(MODE_VFO);
     return true;
+  case KEY_STAR:
+    LOOTLIST_OpenFrom(MODE_RADIO);
+    return true;
   case KEY_MENU:
     ctx.s_captured = true;
     Mode_Switch(MODE_VFO);

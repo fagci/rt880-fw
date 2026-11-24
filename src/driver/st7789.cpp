@@ -59,7 +59,9 @@ static void spi_hw_init(void) {
   crm_periph_clock_enable(CRM_SPI1_PERIPH_CLOCK, TRUE);
 
   gpio_default_para_init(&g);
-  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_STRONGER;
+  /* MODERATE только на SCK/MOSI: управляющие линии и подсветка остаются
+   * STRONGER. Мягче фронты — меньше помеха в приёмник. */
+  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_MODERATE;
   g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
   g.gpio_mode = GPIO_MODE_MUX;
   g.gpio_pins = GPIO_PINS_3 | GPIO_PINS_5; /* PB3=SCK, PB5=MOSI */
@@ -72,7 +74,9 @@ static void spi_hw_init(void) {
   spi_default_para_init(&s);
   s.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
   s.master_slave_mode = SPI_MODE_MASTER;
-  s.mclk_freq_division = SPI_MCLK_DIV_3; /* 150/3 = 50 МГц */
+  /* 135/4 = 33.75 МГц: 13-я гармоника 438.75, 14-я 472.5 — полоса
+   * сканера 440–470 попадает между ними. */
+  s.mclk_freq_division = SPI_MCLK_DIV_4;
   s.first_bit_transmission = SPI_FIRST_BIT_MSB;
   s.frame_bit_num = SPI_FRAME_8BIT;
   s.clock_polarity = SPI_CLOCK_POLARITY_LOW;
@@ -148,6 +152,37 @@ static void spi1_tx_dma(const uint8_t *buf, uint16_t len) {
     if (dwt_expired(t)) return;
 }
 
+static bool s_mute;
+
+/* TEMP: полностью гасит передачу пикселей на дисплей (тест помех). */
+void st7789_set_mute(bool mute) { s_mute = mute; }
+
+/* TEMP: смена делителя SPI на ходу для теста гармоник. */
+void st7789_set_spi_div(uint8_t div) {
+  spi_mclk_freq_div_type d = SPI_MCLK_DIV_4;
+  if (div == 2)
+    d = SPI_MCLK_DIV_2;
+  else if (div == 3)
+    d = SPI_MCLK_DIV_3;
+  else if (div == 8)
+    d = SPI_MCLK_DIV_8;
+
+  st7789_cs_high();
+  spi_enable(SPI1, FALSE);
+  spi_init_type s;
+  spi_default_para_init(&s);
+  s.transmission_mode = SPI_TRANSMIT_FULL_DUPLEX;
+  s.master_slave_mode = SPI_MODE_MASTER;
+  s.mclk_freq_division = d;
+  s.first_bit_transmission = SPI_FIRST_BIT_MSB;
+  s.frame_bit_num = SPI_FRAME_8BIT;
+  s.clock_polarity = SPI_CLOCK_POLARITY_LOW;
+  s.clock_phase = SPI_CLOCK_PHASE_1EDGE;
+  s.cs_mode_selection = SPI_CS_SOFTWARE_MODE;
+  spi_init(SPI1, &s);
+  spi_enable(SPI1, TRUE);
+}
+
 void st7789_backlight_off() { PIN_CLR(PORT_BL, PIN_BL); }
 
 void st7789_backlight_on() { PIN_SET(PORT_BL, PIN_BL); }
@@ -172,6 +207,8 @@ void st7789_write_data16(uint16_t data) {
 }
 
 void st7789_dma_start(const uint8_t *buf, uint16_t byte_count) {
+  if (s_mute)
+    return;
   uint32_t t = dwt_start();
   while (spi_i2s_flag_get(SPI1, SPI_I2S_BF_FLAG) != RESET)
     if (dwt_expired(t)) return;
@@ -183,6 +220,8 @@ void st7789_dma_start(const uint8_t *buf, uint16_t byte_count) {
 }
 
 void st7789_dma_wait(void) {
+  if (s_mute)
+    return;
   uint32_t t = dwt_start();
   while (dma_flag_get(ST7789_DMA_TC_FLAG) == RESET)
     if (dwt_expired(t)) { dma_channel_enable(ST7789_DMA_CH, FALSE); return; }
@@ -194,6 +233,8 @@ void st7789_dma_wait(void) {
 }
 
 void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  if (s_mute)
+    return;
   st7789_cs_low();
 
   st7789_write_cmd(0x2A);
@@ -268,6 +309,8 @@ void st7789_init(void) {
 
 void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                           uint16_t color) {
+  if (s_mute)
+    return;
   if (x >= ST7789_WIDTH || y >= ST7789_HEIGHT || w == 0 || h == 0)
     return;
   if (x + w > ST7789_WIDTH)
@@ -320,6 +363,8 @@ void st7789_flush(uint16_t color) {
 
 void st7789_set_addr_window_raw(uint16_t x, uint16_t y, uint16_t w,
                                 uint16_t h) {
+  if (s_mute)
+    return;
   st7789_write_cmd(0x2A);
   st7789_write_data16(x);
   st7789_write_data16(x + w - 1);
@@ -333,6 +378,8 @@ void st7789_set_addr_window_raw(uint16_t x, uint16_t y, uint16_t w,
 }
 
 void st7789_write_pixels_dma(const uint16_t *pixels, uint32_t count) {
+  if (s_mute)
+    return;
   while (count) {
     uint32_t chunk = count;
     if (chunk > ST7789_DMA_PIXELS_PER_CHUNK)
@@ -350,6 +397,8 @@ void st7789_write_pixels_dma(const uint16_t *pixels, uint32_t count) {
 }
 
 void st7789_set_vscroll_area(uint16_t tfa, uint16_t vsa, uint16_t bfa) {
+  if (s_mute)
+    return;
   st7789_cs_low();
   st7789_write_cmd(0x33); // VSCRDEF
   st7789_write_data16(tfa);
@@ -359,6 +408,8 @@ void st7789_set_vscroll_area(uint16_t tfa, uint16_t vsa, uint16_t bfa) {
 }
 
 void st7789_set_vscroll_start(uint16_t vsp) {
+  if (s_mute)
+    return;
   st7789_cs_low();
   st7789_write_cmd(0x37); // VSCRSADD
   st7789_write_data16(vsp);

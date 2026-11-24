@@ -2,6 +2,7 @@
 #define ST7789_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +29,8 @@ void st7789_reset(void);
 
 void st7789_backlight_off();
 void st7789_backlight_on();
+void st7789_set_spi_div(uint8_t div); /* TEMP: тест гармоник */
+void st7789_set_mute(bool mute);     /* TEMP: тест гармоник */
 
 void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 void st7789_write_cmd(uint8_t cmd);

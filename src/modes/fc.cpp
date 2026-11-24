@@ -13,8 +13,8 @@
  *
  * Клавиши: 1/7 скорость, 3/9 шумодав, 5 порог счётчика (Гц), '#' диапазон
  * вручную, 0 автопереключение диапазонов, SIDE1/SIDE2 — находку в чёрный/белый
- * список и дальше, MENU или '*' или PTT — частоту в VFO и выход, EXIT —
- * выход без неё, длинный MENU — список находок.
+ * список и дальше, MENU или PTT — частоту в VFO и выход, STAR короткий —
+ * список находок, EXIT — выход без неё, длинный MENU — список находок.
  */
 #include "modes.h"
 #include "../driver/bk4819.h"
@@ -344,7 +344,7 @@ public:
     drawLine(9, 4, LCD_HEIGHT - 14, 12, POS_L, C_GRAY, F_S,
              "1/7 SPD 3/9 SQ 5 THR #/0 BAND");
     drawLine(10, 4, LCD_HEIGHT - 2, 12, POS_L, C_GRAY, F_S,
-             "S1 -BL S2 +WL MENU>VFO EXIT");
+             "S1 -BL S2 +WL * LOOT MENU>VFO");
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
@@ -394,8 +394,10 @@ public:
         resumeScan();
       }
       return true;
+    case KEY_STAR: /* список находок */
+      LOOTLIST_OpenFrom(MODE_FC);
+      return true;
     case KEY_MENU:
-    case KEY_STAR:
     case KEY_PTT:
       fcCtx.captureF = fcCtx.stopped ? fcCtx.stopFreq : 0;
       Mode_Switch(MODE_VFO);

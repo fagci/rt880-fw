@@ -20,6 +20,12 @@ bool Store_HasState(void);
 void Store_MarkDirty(void);
 void Store_Poll(void);
 
+/* Пока сканирующий режим временно гоняет VFO по частотам, в запись должно
+ * попадать состояние на входе, а не промежуточная частота скана. Pin
+ * запоминает текущие VFO/currentVfo/фильтр, Unpin — снова пишет живые. */
+void Store_PinRadio(void);
+void Store_UnpinRadio(void);
+
 /* Применить сохранённое: UI (тема, антенна) — до первого Mode_Switch,
  * настройки VFO/диапазонов — из Radio_Init после дефолтов. */
 bool Store_ApplyUi(void);

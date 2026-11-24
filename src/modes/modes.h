@@ -10,6 +10,10 @@ extern Mode &MODE_RADIO;
 extern Mode &MODE_LOOTLIST;
 extern Mode &MODE_CHANNELS;
 
-/* Экран списка находок (loot). Открывается из сканера (MENU длинный) и
- * из VFO (длинный 8). EXIT — назад в тот режим, откуда открыли. */
+/* Экран списка находок (loot). Открывается коротким STAR во всех режимах
+ * (в редакторе частоты STAR — десятичная точка). EXIT — назад в тот режим,
+ * откуда открыли. */
 void LOOTLIST_OpenFrom(Mode &from);
+
+/* TEMP: тест помех от дисплея при сканировании 400-470. */
+void SCANNER_DebugStart(uint32_t secs, bool mute, uint8_t flags);

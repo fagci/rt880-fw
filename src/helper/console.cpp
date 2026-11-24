@@ -6,7 +6,9 @@
 #include "../driver/gpio.h"
 #include "../driver/uart.h"
 #include "../driver/w25q32.h"
+#include "../driver/st7789.h"
 #include "../misc.h"
+#include "../modes/modes.h"
 #include "store.h"
 #include "at32f423.h"
 #include "bootprof.h"
@@ -268,6 +270,33 @@ static void bk_cmd(const char *args) {
   } else if (strcmp(args, "chip 1") == 0) {
     BK4819_SelectChip(1);
     uart_puts("BK CHIP 1\r\n");
+  } else if (strncmp(args, "afc ", 4) == 0) {
+    const char *p = parse_dec(args + 4, &a);
+    if (!p || a > 8) {
+      uart_puts("ERR\r\n");
+      return;
+    }
+    BK4819_SetAFC((uint8_t)a);
+    uart_printf("BK AFC %u level=%u reg73=%04x\r\n", (unsigned)a,
+                BK4819_GetAFC(), BK4819_ReadRegisterRaw(0x73));
+  } else if (strncmp(args, "agc ", 4) == 0) {
+    const char *p = parse_dec(args + 4, &a);
+    if (!p || a > 31) {
+      uart_puts("ERR\r\n");
+      return;
+    }
+    BK4819_SetAGC(true, (uint8_t)a);
+    uart_printf("BK AGC %lu reg13=%04x\r\n", (unsigned long)a,
+                BK4819_ReadRegisterRaw(BK4819_REG_13));
+  } else if (strncmp(args, "bw ", 3) == 0) {
+    const char *p = parse_dec(args + 3, &a);
+    if (!p || a > BK4819_FILTER_BW_26k) {
+      uart_puts("ERR\r\n");
+      return;
+    }
+    BK4819_SetFilterBandwidth((BK4819_FilterBandwidth_t)a);
+    uart_printf("BK BW %lu reg43=%04x\r\n", (unsigned long)a,
+                BK4819_ReadRegisterRaw(BK4819_REG_43));
   } else if (strncmp(args, "filter ", 7) == 0) {
     const char *p = parse_hex(args + 7, &a);
     if (!p || a >= ARRAY_SIZE(BK_FILTERS)) {
@@ -320,10 +349,13 @@ static void bk_cmd(const char *args) {
       return;
     }
     const char *q = parse_dec(p, &b);
-    uint32_t step = 10000;
-    if (q)
-      parse_dec(q, &step);
-    if (!q || a > b || step == 0 || b > 1300000) {
+    uint32_t step = 10, dwell = 3000;
+    if (q) {
+      const char *r = parse_dec(q, &step);
+      if (r)
+        parse_dec(r, &dwell);
+    }
+    if (!q || a > b || step == 0 || b > 1300000 || dwell > 100000) {
       uart_puts("ERR\r\n");
       return;
     }
@@ -332,7 +364,8 @@ static void bk_cmd(const char *args) {
     step *= 100;
     for (uint32_t f = a; f <= b; f += step) {
       BK4819_TuneTo(f, false);
-      delay_ms(3);
+      if (dwell)
+        delay_us(dwell);
       uart_printf("%lu.%03lu %u\r\n", (unsigned long)(f / MHZ),
                   (unsigned long)((f % MHZ) / KHZ), BK4819_GetRSSI());
     }
@@ -345,7 +378,102 @@ static void bk_cmd(const char *args) {
   } else if (strncmp(args, "fc", 2) == 0) {
     bk_fc(args + 2);
   } else {
-    uart_puts("bk r/w/chip/filter/ant/tune/scan/stop/res/rssi[kHz]/fc\r\n");
+    uart_puts("bk r|w|chip|filter|bw|afc|agc|ant|tune|scan|stop|res|"
+              "rssi[kHz [step [dwell]]]|fc\r\n");
+  }
+}
+
+/* TEMP: тест гармоник дисплея. harm div <2|3|4|8>;
+ * harm sweep <a_kHz> <b_kHz> <step_kHz> <dwell_us> <disp 0|1>;
+ * harm fix <f_kHz> <n> <dwell_us> [disp]. */
+static void harm_load(uint32_t phase) {
+  for (uint8_t i = 0; i < 8; i++) {
+    uint16_t c = (uint16_t)(0x1111u * (1 + ((phase + i) & 7)));
+    st7789_fill_rect_dma(0, 180 + i * 4, 240, 4, c);
+  }
+}
+
+static void harm_sweep(const char *args) {
+  uint32_t a, b, step, dwell, disp;
+  const char *p = parse_dec(args, &a);
+  if (p)
+    p = parse_dec(p, &b);
+  if (p)
+    p = parse_dec(p, &step);
+  if (p)
+    p = parse_dec(p, &dwell);
+  if (p)
+    p = parse_dec(p, &disp);
+  if (!p || a > b || step == 0 || b > 1300000 || dwell > 100000) {
+    uart_puts("ERR\r\n");
+    return;
+  }
+  a *= 100;
+  b *= 100;
+  step *= 100;
+  uart_printf("HARM start=%lu stop=%lu step=%lu disp=%lu\r\n",
+              (unsigned long)(a / 100), (unsigned long)(b / 100),
+              (unsigned long)(step / 100), (unsigned long)disp);
+  uint32_t i = 0;
+  for (uint32_t f = a; f <= b; f += step, i++) {
+    BK4819_SelectFilterByFrequency(f);
+    BK4819_TuneTo(f, false);
+    if (disp)
+      harm_load(i);
+    else if (dwell)
+      delay_us(dwell);
+    uart_printf("%lu %u\r\n", (unsigned long)(f / 100), BK4819_GetRSSI());
+  }
+  uart_puts("HARMDONE\r\n");
+}
+
+static void harm_fix(const char *args) {
+  uint32_t f, n, dwell, disp = 1;
+  const char *p = parse_dec(args, &f);
+  if (p)
+    p = parse_dec(p, &n);
+  if (p)
+    p = parse_dec(p, &dwell);
+  if (p)
+    parse_dec(p, &disp);
+  if (!p || n == 0 || n > 1000 || f > 1300000) {
+    uart_puts("ERR\r\n");
+    return;
+  }
+  f *= 100;
+  uart_printf("HARMFIX %lu n=%lu dwell=%lu\r\n", (unsigned long)(f / 100),
+              (unsigned long)n, (unsigned long)dwell);
+  for (uint32_t i = 0; i < n; i++) {
+    BK4819_SelectFilterByFrequency(f);
+    BK4819_TuneTo(f, false);
+    if (dwell)
+      delay_us(dwell);
+    uint16_t idle = BK4819_GetRSSI();
+    if (disp)
+      harm_load(i);
+    uint16_t on = BK4819_GetRSSI();
+    uart_printf("%lu %u %u\r\n", (unsigned long)(f / 100), idle, on);
+  }
+}
+
+static void harm_cmd(const char *args) {
+  while (*args == ' ')
+    ++args;
+  uint32_t a;
+  if (strncmp(args, "div ", 4) == 0) {
+    const char *p = parse_dec(args + 4, &a);
+    if (!p || (a != 2 && a != 3 && a != 4 && a != 8)) {
+      uart_puts("ERR\r\n");
+      return;
+    }
+    st7789_set_spi_div((uint8_t)a);
+    uart_printf("HARM SPI DIV %lu\r\n", (unsigned long)a);
+  } else if (strncmp(args, "sweep ", 6) == 0) {
+    harm_sweep(args + 6);
+  } else if (strncmp(args, "fix ", 4) == 0) {
+    harm_fix(args + 4);
+  } else {
+    uart_puts("ERR\r\n");
   }
 }
 
@@ -370,10 +498,34 @@ static void run(const char *cmd) {
     uart_printf("STOREWIPE %u\r\n", Store_Wipe() ? 1u : 0u);
   else if (strcmp(cmd, "bk") == 0 || strncmp(cmd, "bk ", 3) == 0)
     bk_cmd(cmd + 2);
-  else if (strcmp(cmd, "help") == 0)
+  else if (strcmp(cmd, "harm") == 0 || strncmp(cmd, "harm ", 5) == 0)
+    harm_cmd(cmd + 4);
+  else if (strncmp(cmd, "scan dbg", 8) == 0) {
+    uint32_t secs, mute = 0, flags = 0;
+    const char *p = parse_dec(cmd + 8, &secs);
+    if (p)
+      p = parse_dec(p, &mute);
+    if (p)
+      parse_dec(p, &flags);
+    if (!p || secs == 0 || secs > 300 || mute > 1 || flags > 3)
+      uart_puts("ERR\r\n");
+    else
+      SCANNER_DebugStart(secs, mute != 0, (uint8_t)flags);
+  }
+  else if (strncmp(cmd, "paint ", 6) == 0) {
+    uint32_t on;
+    if (!parse_dec(cmd + 6, &on) || on > 1)
+      uart_puts("ERR\r\n");
+    else {
+      Mode_SetPaint(on != 0);
+      uart_printf("PAINT %lu\r\n", (unsigned long)on);
+    }
+  } else if (strcmp(cmd, "help") == 0)
     uart_puts("boot\r\nreboot\r\nprof\r\ndumpboot\r\nflashmap\r\n"
               "flashdump <addr> <len>\r\nstore\r\nstorewipe\r\n"
-              "bk r|w|chip|filter|ant|tune|scan|stop|res|rssi[kHz]|fc\r\n");
+              "paint 0|1\r\n"
+              "bk r|w|chip|filter|bw|afc|agc|ant|tune|scan|stop|res|"
+              "rssi[kHz [step [dwell]]]|fc\r\n");
   else
     uart_puts("ERR\r\n");
 }

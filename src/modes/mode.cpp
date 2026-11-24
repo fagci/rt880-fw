@@ -12,9 +12,7 @@ static Mode *current = nullptr;
 static Mode *next = nullptr;
 static bool s_displayOff;
 static bool s_keyLocked;
-/* Цифра, у которой длинное нажатие уже сработало как команда (VFO 1/2/3,
- * скан, BFO): её отпускание не должно открывать ввод частоты. */
-static KEY_Code_t s_longDigit = KEY_NONE;
+static bool s_paintPaused;
 
 void Mode_Switch(Mode &mode) {
   next = &mode;
@@ -41,8 +39,13 @@ void Mode_Update() {
     }
     current = next;
     next = nullptr;
-    if (current)
+    if (current) {
       current->enter();
+      /* Пауза отрисовки (замеры): даём один кадр, чтобы после смены режима
+       * не остался пустой экран, дальше дисплей молчит. */
+      if (s_paintPaused)
+        current->render();
+    }
     /* Аппаратный скролл сбрасывается при каждой смене режима — вместе с
      * ним сбрасываем и программное состояние водопада (wfScrollInited).
      * Иначе второй вход в режим с водопадом пропускает инициализацию
@@ -55,9 +58,12 @@ void Mode_Update() {
 }
 
 void Mode_Render() {
-  if (current)
+  if (current && !s_paintPaused)
     current->render();
 }
+
+void Mode_SetPaint(bool on) { s_paintPaused = !on; }
+bool Mode_PaintPaused(void) { return s_paintPaused; }
 
 uint16_t Mode_RenderInterval() {
   return current ? current->renderIntervalMs() : 50;
@@ -87,15 +93,8 @@ void Mode_Key(KEY_Code_t key, Key_State_t state) {
     return;
   }
 
-  /* Отпускание цифры после длинного нажатия — не короткое нажатие:
-   * иначе, например, после long 1 (multiwatch/скан) открывался бы
-   * редактор частоты с этой цифрой. */
-  if (state == KEY_LONG_PRESSED && key >= KEY_0 && key <= KEY_9)
-    s_longDigit = key;
-  if (state == KEY_RELEASED && key == s_longDigit) {
-    s_longDigit = KEY_NONE;
-    return;
-  }
+  /* Отпускание цифры после длинного нажатия драйвер клавиатуры не шлёт
+   * (long_sent в keyboard.cpp), поэтому здесь его гасить не нужно. */
 
   if (s_keyLocked)
     return;

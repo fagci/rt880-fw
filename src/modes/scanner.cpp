@@ -1,8 +1,9 @@
 /* Сканер — алгоритм заимствован из s0v4 (src/helper/scan.c):
  *
  * - адаптивный порог шумодава (ctx.floorRssi) тянется к noise floor;
- * - открытие подтверждается повторным замером через SQL_DELAY («thinking»),
- *   ложные срабатывания поднимают порог;
+ * - быстрый проход идёт на короткой выдержке; найденный кандидат
+ *   подтверждается локальным окном назад на длинной выдержке (RSSI-фильтр
+ *   BK «тянет» пик на 1-6 шагов вперёд), ложные — поднимают порог;
  * - HOLD: стоим на открытой частоте и слушаем (AF DAC вкл), пока шумодав
  *   не закроется или не истечёт LISTEN_TIMEOUT_MS;
  * - закрытая частота — сразу дальше; каждые 64 закрытых шага порог
@@ -18,8 +19,9 @@
  * (blacklist) сканер пропускает всегда, белый (whitelist) — тоже.
  *
  * Клавиши: 5 — ввод границ (сначала начало, затем конец),
- * MENU — захватить частоту в VFO и выйти, MENU длинный — список находок,
- * EXIT — выход, SIDE1 — в чёрный список последнюю находку (и дальше),
+ * MENU — захватить частоту в VFO и выйти, STAR короткий — список находок,
+ * MENU длинный — меню слева под статусбаром (шаг/скорость), EXIT — выход,
+ * SIDE1 — в чёрный список последнюю находку (и дальше),
  * SIDE1 длинный — водопад вкл/выкл, SIDE2 — в белый список,
  * UP/DOWN — шаг сканирования, 1/7 — выдержка на частоте (скорость
  * сканирования), 3/9 — шаг сканирования.
@@ -27,21 +29,26 @@
 #include "modes.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
+#include "../driver/si473x.h"
 #include "../driver/st7789.h"
+#include "../driver/uart.h"
 #include "../helper/log.h"
 #include "../helper/lootlist.h"
 #include "../helper/measurements.h"
+#include "../helper/store.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_port.h"
+#include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
 #include "../ui/screen_layout.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "printf.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -50,11 +57,21 @@
  * не должно, иначе они «плывут» вместе с водопадом. */
 
 #define LISTEN_TIMEOUT_MS 5000
-#define SQL_DELAY_MS 30
 #define SQL_MARGIN 10 /* ~5 дБ над шумом (RSSI: 2 ед. = 1 дБ) */
 #define SQL_HYST 4
+/* Подтверждение: пик в окне должен быть заметно выше второго максимума.
+ * Абсолютный порог не годится — шкала RSSI на короткой и длинной выдержке
+ * разная (фильтр/АРУ), и шум на длинной иногда перекрывает порог,
+ * посчитанный по быстрым замерам. */
+#define SQL_PEAK_MARGIN 16
 #define WARM_STEPS 16 /* калибровка шума: первые шаги скана без поиска сигнала */
-#define BATCH_STEPS 32 /* шагов за один проход главного цикла */
+#define BATCH_STEPS 8 /* шагов за проход главного цикла (~5 мс при 500 мкс) */
+/* RSSI-фильтр BK после перестройки тянется ~1 мс: при короткой выдержке
+ * сигнал «виден» на 1-6 шагов выше своей частоты. Кандидат проверяем
+ * локальным окном назад с длинной выдержкой. */
+#define RSSI_LAG_US 1500
+#define CONFIRM_DWELL_US 2500
+#define CONFIRM_MAX_BINS 12
 
 static struct Ctx {
   FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
@@ -62,14 +79,17 @@ static struct Ctx {
   uint8_t savedVfo;
   uint8_t scanVfo;    /* VFO, которым сканируем (BK) */
   uint32_t savedFreq; /* частота сканирующего VFO на входе */
-  uint8_t dwellIdx = 2;
+  uint8_t dwellIdx = 1;
   uint32_t stepCount;
   uint32_t lastCpsTime;
   uint32_t stepsPerSec;
   uint32_t curF;        /* текущая позиция */
   uint16_t floorRssi;   /* noise floor (сырой RSSI) */
+  uint16_t holdThr;     /* порог удержания по длинной выдержке */
   bool sweepDone;       /* проход завершён — рисуем строку водопада */
   bool isListening;     /* HOLD: стоим и слушаем */
+  bool menuWasOpen;     /* меню закрылось — перерисовать спектр */
+  bool paintHeld;       /* кадр HOLD нарисован — экран не трогаем */
   bool scanning = true; /* false = пауза (ручная перестройка) */
   bool waterfall = true;
   bool dacOn;
@@ -84,18 +104,27 @@ static struct Ctx {
   uint8_t closedSteps;
   uint32_t lastSpRender;
   uint32_t lastWfRender;
+  /* TEMP: тест помех от дисплея. */
+  bool dbg;
+  uint8_t dbgFlags;
+  uint32_t dbgUntil;
+  uint32_t dbgSteps;
+  uint16_t dbgHits;
 } ctx;
 
 
-/* скорость сканирования: выдержка на частоте до замера RSSI */
-/* На 8 МГц накладные расходы SPI/GPIO давали эффективную паузу в сотни мкс;
- * на 150 МГц её нет — RSSI после перестройки не успевает устояться.
- * По умолчанию 1000 мкс, UP/DOWN меняет (отображается в центре над спектром). */
+/* скорость сканирования: выдержка на частоте до замера RSSI.
+ * Быстрый проход идёт на короткой выдержке (по умолчанию 250 мкс): RSSI
+ * успевает показать сигнал, но с задержкой ~1 мс, поэтому найденный
+ * кандидат подтверждается окном назад (CONFIRM_DWELL_US). UP/DOWN меняет
+ * выдержку быстрого прохода (отображается в центре над спектром). */
 static const uint16_t DWELL_US[] = {250, 500, 1000, 2000, 4000};
 #define DWELL_N (sizeof(DWELL_US) / sizeof(DWELL_US[0]))
 
 
 /* состояние сканирования */
+
+static void primeStart();
 
 static void onRangeChanged() {
   WF_Reset();
@@ -120,6 +149,7 @@ static void onRangeChanged() {
   ctx.stepCount = 0;
   ctx.lastCpsTime = millis();
   ctx.stepsPerSec = 0;
+  primeStart();
 }
 
 /* Шаг сканирования: меняем шаг VFO сканера (на выходе вернём) и
@@ -129,6 +159,31 @@ static void changeStep(int8_t d) {
   v->step = static_cast<Step>((v->step + STEP_COUNT + d) % STEP_COUNT);
   onRangeChanged();
 }
+
+/* ── Меню-оверлей: шаг и скорость скана ── */
+
+static const char *menuStepValue(void) {
+  return STEP_NAMES[vfos[currentVfo].step];
+}
+
+static const char *menuSpeedValue(void) {
+  static char buf[10];
+  snprintf(buf, sizeof(buf), "%uus", (unsigned)DWELL_US[ctx.dwellIdx]);
+  return buf;
+}
+
+static void menuSpeedChange(int8_t dir) {
+  int i = (int)ctx.dwellIdx + dir;
+  if (i >= 0 && i < (int)DWELL_N)
+    ctx.dwellIdx = (uint8_t)i;
+}
+
+static const MenuItem SCAN_MENU_ITEMS[] = {
+    {"Step", menuStepValue, changeStep},
+    {"Speed", menuSpeedValue, menuSpeedChange},
+};
+#define SCAN_MENU_COUNT \
+  ((uint8_t)(sizeof(SCAN_MENU_ITEMS) / sizeof(SCAN_MENU_ITEMS[0])))
 
 static void onStartEntered(uint32_t f) {
   ctx.range.start = f;
@@ -176,6 +231,7 @@ static void advance() {
   if (ctx.curF > ctx.range.end) {
     ctx.curF = ctx.range.start;
     ctx.sweepDone = true;
+    primeStart();
   }
   vfos[currentVfo].rxF = ctx.curF;
 }
@@ -185,7 +241,62 @@ static void tuneHere() {
   /* фильтр диапазона (VHF/UHF/...) — без этого остаётся от VFO и сигнал
    * вне его диапазона ослаблен; внутри — кэш по band, почти бесплатно */
   BK4819_SelectFilterByFrequency(ctx.curF);
+  /* pulse (не precise): полный сброс REG_30 гасит тракт и на короткой
+   * выдержке RSSI ещё не поднимается. Импульс VCO_CALIB перестраивает
+   * PLL, не выключая приём — на 250 мкс сигнал уже виден. */
   BK4819_TuneTo(ctx.curF, false);
+}
+
+/* После большого скачка частоты (старт диапазона, переход 470→400) RSSI/АРУ
+ * выходят на режим за десятки мс. При короткой выдержке первые ~1 МГц
+ * выглядят как всплеск и дают ложные подтверждения — прогреваем заранее. */
+static void primeStart() {
+  ctx.curF = ctx.range.start;
+  vfos[currentVfo].rxF = ctx.curF;
+  BK4819_SelectFilterByFrequency(ctx.curF);
+  BK4819_TuneTo(ctx.curF, false);
+  delay_ms(20);
+}
+
+/* Локальная проверка кандидата: сигнал из быстрого прохода мог «уехать»
+ * на несколько шагов вперёд из-за инерции RSSI. Смотрим окно назад от
+ * текущей частоты с длинной выдержкой и берём настоящий пик. */
+static bool confirmHit(uint32_t *bestF, uint16_t *bestRssi) {
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  uint32_t dwell = DWELL_US[ctx.dwellIdx];
+  uint8_t back = (uint8_t)((RSSI_LAG_US + dwell - 1) / dwell + 2);
+  if (back > CONFIRM_MAX_BINS)
+    back = CONFIRM_MAX_BINS;
+
+  uint16_t best = 0, second = 0;
+  uint16_t n = 0;
+  uint32_t bestFreq = ctx.curF;
+  for (int8_t i = (int8_t)back; i >= 0; i--) {
+    uint32_t f = ctx.curF - (uint32_t)i * step;
+    if (f < ctx.range.start)
+      continue;
+    vfos[currentVfo].rxF = f;
+    BK4819_SelectFilterByFrequency(f);
+    BK4819_TuneTo(f, false);
+    delay_us(CONFIRM_DWELL_US);
+    uint16_t r = BK4819_GetRSSI();
+    n++;
+    if (r > best) {
+      second = best;
+      best = r;
+      bestFreq = f;
+    } else if (r > second) {
+      second = r;
+    }
+  }
+  *bestF = bestFreq;
+  *bestRssi = best;
+  if (n < 3)
+    return false;
+  /* Пик должен быть заметно выше *второго* максимума окна. Среднее
+   * размывается широким всплеском на старте диапазона; второй максимум
+   * надёжнее отсекает одиночный шумовой выброс. */
+  return best >= (uint16_t)(second + SQL_PEAK_MARGIN);
 }
 
 /* Один шаг сканирования: замер, решение, движение.
@@ -193,9 +304,21 @@ static void tuneHere() {
  * Раньше порог брался из Std() и был в разы ниже RSSI — всё считалось
  * «открытым» и сканер висел в HOLD/паузах. */
 static void scanStep() {
-  tuneHere();
-  delay_us(DWELL_US[ctx.dwellIdx]);
+  bool listening = ctx.isListening;
+  /* В HOLD приёмник уже стоит на частоте сигнала: не дёргаем VCO и не
+   * щёлкаем звуком на каждой итерации главного цикла. Порог удержания
+   * снят на длинной выдержке — шкала RSSI там другая, чем в быстром
+   * проходе. */
+  if (!listening) {
+    tuneHere();
+    delay_us(DWELL_US[ctx.dwellIdx]);
+  } else {
+    vfos[currentVfo].rxF = ctx.curF;
+    delay_us(CONFIRM_DWELL_US);
+  }
   uint16_t rssi = BK4819_GetRSSI();
+  if (ctx.dbg)
+    ctx.dbgSteps++;
 
   /* калибровка шума после смены диапазона: быстрое усреднение, без поиска.
    * Иначе заниженная первая выборка давала порог ниже шума — «всё открыто»,
@@ -214,8 +337,7 @@ static void scanStep() {
     ctx.floorRssi = rssi;
   uint16_t thr = ctx.floorRssi + SQL_MARGIN;
 
-  /* гистерезис: уже открытый канал закрываем чуть ниже порога */
-  bool open = ctx.isListening ? (rssi + SQL_HYST >= thr) : (rssi >= thr);
+  bool open = listening ? (rssi + SQL_HYST >= ctx.holdThr) : (rssi >= thr);
   if (ctx.curF % 1300000 == 0)
     open = false; /* гармоники ПЧ — мусор */
 
@@ -229,12 +351,37 @@ static void scanStep() {
     skipped = true;
   }
 
+  uint32_t measF = ctx.curF;
+  uint16_t hitRssi = rssi;
   if (open && !ctx.isListening) {
-    /* подтверждение: повторный замер через паузу */
-    delay_ms(SQL_DELAY_MS);
-    open = BK4819_GetRSSI() >= thr;
-    if (!open && ctx.floorRssi < 0xFFFF - SQL_MARGIN)
+    uint32_t bestF;
+    uint16_t bestRssi;
+    open = confirmHit(&bestF, &bestRssi);
+    if (open) {
+      ctx.curF = bestF;
+      hitRssi = bestRssi;
+      ctx.holdThr = bestRssi > 2 * SQL_HYST ? (uint16_t)(bestRssi - 2 * SQL_HYST)
+                                           : bestRssi;
+      tuneHere(); /* слушаем уже точную частоту */
+    } else if (ctx.floorRssi < 0xFFFF - SQL_MARGIN) {
       ctx.floorRssi++; /* ложное срабатывание — порог выше */
+    }
+    /* чёрный список проверяем и по уточнённой частоте */
+    if (open &&
+        LOOT_IsSkipped(ctx.curF, StepFrequencyTable[vfos[currentVfo].step] / 2,
+                       ctx.monitorMode)) {
+      open = false;
+      skipped = true;
+    }
+    /* TEMP: тест помех от дисплея — фиксируем каждое подтверждённое
+     * открытие и идём дальше, не залипая в HOLD. */
+    if (open && ctx.dbg) {
+      uart_printf("HIT %lu %u\r\n", (unsigned long)(ctx.curF / 100),
+                  (unsigned)hitRssi);
+      ctx.dbgHits++;
+      open = false;
+      skipped = true;
+    }
   }
 
   if (!open && !skipped) {
@@ -250,7 +397,7 @@ static void scanStep() {
     }
   }
 
-  Measurement m = {.f = ctx.curF, .rssi = rssi, .noise = 0, .open = open};
+  Measurement m = {.f = measF, .rssi = rssi, .noise = 0, .open = open};
   SP_AddPoint(&m);
   ctx.stepCount++;
 
@@ -260,7 +407,7 @@ static void scanStep() {
       ctx.listenUntil = millis() + LISTEN_TIMEOUT_MS;
     }
     /* учёт находки: добавить/обновить, копить длительность */
-    LOOT_Hit(ctx.curF, rssi, vfos[currentVfo].modulation, vfos[currentVfo].bw,
+    LOOT_Hit(ctx.curF, hitRssi, vfos[currentVfo].modulation, vfos[currentVfo].bw,
              vfos[currentVfo].radio);
     setAudio(true);
     if (millis() > ctx.listenUntil) {
@@ -300,6 +447,9 @@ public:
     ctx.savedVfo = currentVfo;
     ctx.savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
+    /* Внутри сканера VFO гоняется по частотам; в сохранение должен попасть
+     * снимок на входе, пока MENU не заберёт частоту обратно в VFO. */
+    Store_PinRadio();
     if (vfos[currentVfo].radio != RADIO_BK4819A &&
         vfos[currentVfo].radio != RADIO_BK4819B)
       currentVfo = 0;
@@ -313,15 +463,41 @@ public:
     SP_ResetLevel();
 
     initNumVals();
-    onRangeChanged();
     ctx.scanChip = vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0;
     BK4819_SelectChip(ctx.scanChip);
+    /* TEMP: тест помех — погасить вторую микросхему BK и SI4732. */
+    if (ctx.dbg) {
+      if (ctx.dbgFlags & 1) {
+        BK4819_SelectChip(1);
+        BK4819_WriteRegister(BK4819_REG_30, 0x0000);
+        BK4819_WriteRegister(0x37, 0x1D00);
+        BK4819_SelectChip(ctx.scanChip);
+      }
+      if (ctx.dbgFlags & 2)
+        SI47XX_PowerDown();
+    }
+    /* Полоса канала из VFO: после WFM в REG_43 остаётся широкая полоса,
+     * и скан «слышит» соседние каналы. AFC на время скана выключен, иначе
+     * слабую несущую уводит с сетки. */
+    BK4819_SetFilterBandwidth(
+        static_cast<BK4819_FilterBandwidth_t>(vfos[ctx.scanVfo].bw));
+    BK4819_SetAFC(0);
+    onRangeChanged(); /* включает primeStart: прогрев на range.start */
     ctx.dacOn = false;
     Radio_ScanAudio(false);
     ctx.captureOnExit = false;
   }
 
   void update() override {
+    if (ctx.dbg && (int32_t)(millis() - ctx.dbgUntil) >= 0) {
+      uart_printf("SCANDONE hits=%u steps=%lu\r\n", (unsigned)ctx.dbgHits,
+                  (unsigned long)ctx.dbgSteps);
+      ctx.dbg = false;
+      st7789_set_mute(false);
+      Mode_SetPaint(true);
+      Mode_Switch(MODE_VFO);
+      return;
+    }
     NumVal_Update(&ctx.numVal[0]);
     NumVal_Update(&ctx.numVal[1]);
     bool editing = NumVal_IsEditing(&ctx.numVal[0]) || NumVal_IsEditing(&ctx.numVal[1]);
@@ -344,15 +520,37 @@ public:
   }
 
   void render() override {
+    bool menuOpen = MenuOverlay_IsOpen();
+    bool editing = NumVal_IsEditing(&ctx.numVal[0]) ||
+                   NumVal_IsEditing(&ctx.numVal[1]);
+
+    /* На открытом шумодаве экран больше не обновляем: каждый flush SPI1
+     * дисплея даёт помеху в 437–441 МГц, её слышно в динамике. Кадр HOLD
+     * рисуем один раз при входе в прослушивание. */
+    if (ctx.isListening && !menuOpen && !editing) {
+      if (ctx.paintHeld)
+        return;
+      ctx.paintHeld = true;
+    } else {
+      ctx.paintHeld = false;
+    }
+
     STATUSLINE_render();
 
     NumVal_Render(&ctx.numVal[0]);
     NumVal_Render(&ctx.numVal[1]);
+    if (ctx.menuWasOpen && !menuOpen) {
+      /* Меню закрылось: его пиксели в зоне спектра нужно заменить. */
+      SP_Invalidate(UI_SPECTRUM_H);
+      ctx.lastSpRender = 0;
+    }
+    ctx.menuWasOpen = menuOpen;
 
     uint32_t now = millis();
     if (now - ctx.lastSpRender >= 300) {
       SP_Render(&ctx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
       ctx.lastSpRender = now;
+      MenuOverlay_Invalidate(); /* прямой DMA мог затереть область меню */
     }
     if (ctx.sweepDone) { /* строка водопада — раз за полный проход */
       ctx.sweepDone = false;
@@ -398,9 +596,13 @@ public:
     PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
             text_style(ctx.monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
             "L%u%s", (unsigned)LOOT_Size(), ctx.monitorMode ? " MON" : "");
+
+    MenuOverlay_Render();
   }
 
   void exit() override {
+    MenuOverlay_Close();
+    ctx.menuWasOpen = false;
     setAudio(false);
     LOOT_Standby();
     /* BK остаётся настроенным на последнюю частоту скана (и её фильтр
@@ -417,10 +619,18 @@ public:
     currentVfo = ctx.savedVfo;
     Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
                                дальше решает шумодав в VFO (Radio_Update) */
+    Store_UnpinRadio();
     lv_port_set_direct_areas(false);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    if (MenuOverlay_IsOpen()) {
+      if (MenuOverlay_Key(k, state))
+        return true;
+      LOOTLIST_OpenFrom(MODE_SCANNER); /* STAR закрыл меню */
+      return true;
+    }
+
     /* пока идёт ввод — все клавиши редактору (сначала начало, затем конец) */
     if (NumVal_t *ev = editingNumVal()) {
       if (NumVal_Key(ev, k, state))
@@ -430,8 +640,9 @@ public:
 
     if (state == KEY_LONG_PRESSED) {
       switch (k) {
-      case KEY_MENU: /* список находок */
-        LOOTLIST_OpenFrom(MODE_SCANNER);
+      case KEY_MENU: /* меню-оверлей: шаг и скорость */
+        MenuOverlay_Open(SCAN_MENU_ITEMS, SCAN_MENU_COUNT, 0, UI_STATUS_H,
+                         LCD_WIDTH / 2, 41, true);
         return true;
       case KEY_SIDE1: /* водопад вкл/выкл */
         ctx.waterfall = !ctx.waterfall;
@@ -461,6 +672,9 @@ public:
       return true;
     case KEY_EXIT:
       Mode_Switch(MODE_VFO);
+      return true;
+    case KEY_STAR: /* список находок */
+      LOOTLIST_OpenFrom(MODE_SCANNER);
       return true;
     case KEY_SIDE1: /* в чёрный список и дальше */
       if (gLastActiveLoot) {
@@ -518,3 +732,24 @@ public:
 
 ScannerMode scannerModeInstance;
 Mode &MODE_SCANNER = scannerModeInstance;
+
+/* TEMP: тест помех от дисплея. */
+void SCANNER_DebugStart(uint32_t secs, bool mute, uint8_t flags) {
+  ctx.dbg = true;
+  ctx.dbgFlags = flags;
+  ctx.dbgHits = 0;
+  ctx.dbgSteps = 0;
+  ctx.dbgUntil = millis() + secs * 1000u;
+  ctx.scanning = true;
+  ctx.isListening = false;
+  ctx.range.start = 400 * MHZ;
+  ctx.range.end = 470 * MHZ;
+  vfos[currentVfo].step = STEP_25_0kHz;
+  st7789_set_mute(mute);
+  Mode_SetPaint(false); /* замер: дисплей не должен добавлять помеху */
+  Mode_Switch(MODE_SCANNER);
+  uart_printf("SCANDBG %u..%u sec=%lu mute=%u flags=%u\r\n",
+              (unsigned)(ctx.range.start / MHZ),
+              (unsigned)(ctx.range.end / MHZ), (unsigned long)secs,
+              (unsigned)mute, (unsigned)flags);
+}

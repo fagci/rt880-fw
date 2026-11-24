@@ -22,6 +22,8 @@ volatile uint32_t tick_ms;
 uint16_t g_bat_cv = 372;
 extern "C" uint16_t battery_voltage_cv(void) { return g_bat_cv; }
 extern "C" void audio_path_set(uint8_t) {}
+extern "C" void uart_printf(const char *, ...) {}
+void st7789_set_mute(bool) {}
 
 static bool g_ant_main;
 extern "C" void ant_sw(bool hf) { g_ant_main = hf; }
@@ -135,6 +137,7 @@ bool BK4819_GetFrequencyScanResult(uint32_t *f) { *f = 43312500; return true; }
 uint16_t BK4819_GetFilter(void) { return 0; }
 bool SI47XX_Acquire(SI47XX_MODE) { return true; }
 void SI47XX_Init(void) {}
+void SI47XX_PowerDown() {}
 void SI47XX_SetAutomaticGainControl(uint8_t, uint8_t) {}
 void SI47XX_SetVolume(uint8_t) {}
 void SI47XX_SetBandwidth(SI47XX_FilterBW, bool) {}
@@ -162,4 +165,6 @@ bool SI47XX_IsSSB(void) { return true; }
 
 /* В превью нет внешней W25Q32 — сохранение состояния не нужно. */
 void Store_MarkDirty(void) {}
+void Store_PinRadio(void) {}
+void Store_UnpinRadio(void) {}
 bool Store_ApplyRadio(void) { return false; }

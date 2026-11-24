@@ -14,6 +14,7 @@
  *   длинный 5 — добавить частоту VFO (на момент входа) в каналы;
  *   длинный 0 — удалить выбранный;
  *   длинный 9 — чёрный список каналов в loot (вручную);
+ *   STAR      — список находок;
  *   EXIT      — в VFO, снимок VFO восстанавливается.
  *
  * В скане:
@@ -698,6 +699,9 @@ public:
       }
       return true;
     }
+    case KEY_STAR: /* список находок */
+      LOOTLIST_OpenFrom(MODE_CHANNELS);
+      return true;
     case KEY_EXIT:
       Mode_Switch(MODE_VFO);
       return true;

@@ -52,6 +52,16 @@ typedef struct __attribute__((packed)) {
   uint32_t bandMem[STORE_BANDS_MAX];
 } StoreFixed;
 
+/* Радио-часть состояния на входе в сканирующий режим (см. Store_PinRadio). */
+typedef struct __attribute__((packed)) {
+  uint8_t currentVfo;
+  int8_t filter;
+  uint32_t rxF[DEVICE_VFO_COUNT];
+  uint8_t step[DEVICE_VFO_COUNT];
+  uint8_t mod[DEVICE_VFO_COUNT];
+  uint8_t bw[DEVICE_VFO_COUNT];
+} StoreRadio;
+
 /* Заголовок записи каналов: данные лежат с offset STORE_CH_DATA_OFF,
  * заголовок пишется последним. 20 байт. */
 typedef struct __attribute__((packed)) {
@@ -79,6 +89,8 @@ static uint32_t s_dirtyAt;
 static uint8_t s_last; /* последняя целая запись */
 static uint8_t s_next; /* куда писать следующую */
 static uint32_t s_seq = 1;
+static bool s_radioPinned;
+static StoreRadio s_pinRadio;
 
 /* Состояние кольца каналов. */
 static bool s_chValid;
@@ -234,6 +246,20 @@ void Store_MarkDirty(void) {
   s_dirtyAt = millis();
 }
 
+void Store_PinRadio(void) {
+  s_pinRadio.currentVfo = currentVfo;
+  s_pinRadio.filter = filterIndex;
+  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
+    s_pinRadio.rxF[i] = vfos[i].rxF;
+    s_pinRadio.step[i] = (uint8_t)vfos[i].step;
+    s_pinRadio.mod[i] = vfos[i].modulation;
+    s_pinRadio.bw[i] = vfos[i].bw;
+  }
+  s_radioPinned = true;
+}
+
+void Store_UnpinRadio(void) { s_radioPinned = false; }
+
 static bool save_record(void) {
   if (!W25Q_Present())
     return false;
@@ -241,15 +267,26 @@ static bool save_record(void) {
   StoreFixed f;
   memset(&f, 0, sizeof(f));
   f.lootCount = LOOT_Size();
-  f.currentVfo = currentVfo;
   f.squelch = squelchLevel;
-  f.filter = filterIndex;
   f.flags = (gThemeLight ? 1u : 0u) | (ant_is_main() ? 2u : 0u);
-  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
-    f.rxF[i] = vfos[i].rxF;
-    f.step[i] = (uint8_t)vfos[i].step;
-    f.mod[i] = vfos[i].modulation;
-    f.bw[i] = vfos[i].bw;
+  if (s_radioPinned) {
+    f.currentVfo = s_pinRadio.currentVfo;
+    f.filter = s_pinRadio.filter;
+    for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
+      f.rxF[i] = s_pinRadio.rxF[i];
+      f.step[i] = s_pinRadio.step[i];
+      f.mod[i] = s_pinRadio.mod[i];
+      f.bw[i] = s_pinRadio.bw[i];
+    }
+  } else {
+    f.currentVfo = currentVfo;
+    f.filter = filterIndex;
+    for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
+      f.rxF[i] = vfos[i].rxF;
+      f.step[i] = (uint8_t)vfos[i].step;
+      f.mod[i] = vfos[i].modulation;
+      f.bw[i] = vfos[i].bw;
+    }
   }
   f.bandCount = Band_Count();
   if (f.bandCount > STORE_BANDS_MAX)

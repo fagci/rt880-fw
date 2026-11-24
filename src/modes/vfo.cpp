@@ -21,6 +21,7 @@
 #include "../radio.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_helpers.h"
+#include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
 #include "../ui/statusline.h"
 #include "mode.h"
@@ -88,6 +89,39 @@ static Color fgAd(Color c) { return TC(c); }
 static void onFreqEntered(uint32_t f) {
   Radio_TuneToAuto(f);
 }
+
+/* ── Меню VFO: шаг и фильтр (не на весь экран) ── */
+
+static const char *stepValue(void) { return STEP_NAMES[vfos[currentVfo].step]; }
+
+static void stepChange(int8_t dir) {
+  VFO *v = &vfos[currentVfo];
+  v->step = static_cast<Step>((v->step + STEP_COUNT + dir) % STEP_COUNT);
+}
+
+static const char *filterValue(void) {
+  static const char *const NAMES[] = {"AUTO", "HF", "VHF", "UHF", "800"};
+  int i = filterIndex + 1;
+  if (i < 0 || i > 4)
+    i = 0;
+  return NAMES[i];
+}
+
+static void filterChange(int8_t dir) {
+  if (dir < 0) { /* Radio_NextFilter листает только вперёд */
+    for (uint8_t i = 0; i < 4; ++i)
+      Radio_NextFilter();
+  } else {
+    Radio_NextFilter();
+  }
+}
+
+static const MenuItem VFO_MENU_ITEMS[] = {
+    {"Step", stepValue, stepChange},
+    {"Filter", filterValue, filterChange},
+};
+#define VFO_MENU_COUNT \
+  ((uint8_t)(sizeof(VFO_MENU_ITEMS) / sizeof(VFO_MENU_ITEMS[0])))
 
 static void initNumVals() {
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
@@ -180,6 +214,7 @@ public:
   }
 
   void exit() override {
+    MenuOverlay_Close();
     if (vfoCtx.s_scr) {
       lv_obj_del(vfoCtx.s_scr);
       vfoCtx.s_scr = NULL;
@@ -309,11 +344,19 @@ public:
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
        радио-применение (патч SSB): переключение VFO отзывается
        мгновенно, загрузка патча идёт уже после кадра. */
+    MenuOverlay_Render();
     lv_timer_handler();
     Radio_ApplyPending();
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    if (MenuOverlay_IsOpen()) {
+      if (MenuOverlay_Key(k, state))
+        return true;
+      LOOTLIST_OpenFrom(MODE_VFO); /* STAR закрыл меню */
+      return true;
+    }
+
     if (NumVal_Key(&vfoCtx.numVal[currentVfo], k, state))
       return true;
 
@@ -331,6 +374,11 @@ public:
 
     if (state == KEY_EVT_LONG_PRESS) {
       switch (k) {
+      case KEY_MENU: /* меню-оверлей: шаг и фильтр */
+        if (!NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
+          MenuOverlay_Open(VFO_MENU_ITEMS, VFO_MENU_COUNT, 0, STATUS_H,
+                           LCD_WIDTH / 2, 41, false);
+        return true;
       case KEY_4:
         Mode_Switch(MODE_FC);
         return true;
@@ -413,8 +461,8 @@ public:
         return true;
       Radio_NextBand(-1);
       return true;
-    case KEY_STAR: /* шаг перестройки */
-      Radio_NextStep();
+    case KEY_STAR: /* список находок (шаг — в длинном MENU) */
+      LOOTLIST_OpenFrom(MODE_VFO);
       return true;
     case KEY_HASH: /* модуляция */
       vfos[currentVfo].modulation =

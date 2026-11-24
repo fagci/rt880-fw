@@ -23,6 +23,10 @@
 #define BAT_Y ((UI_STATUS_H - BAT_H) / 2)
 #define BAT_MIN 600
 #define BAT_MAX 840
+/* Батарея «дрыгается»: ADC шумит. Читаем не чаще раза в 500 мс и усредняем
+ * по 8 отсчётам (окно ~4 с). */
+#define BAT_SAMPLE_MS 500
+#define BAT_AVG_N 8
 
 static lv_obj_t *s_root;
 static lv_obj_t *s_batFrame;
@@ -33,6 +37,12 @@ static lv_obj_t *s_antText;
 static lv_obj_t *s_lockText;
 static lv_obj_t *s_title;
 static uint16_t s_prevBatDraw;
+static uint16_t s_batBuf[BAT_AVG_N];
+static uint8_t s_batIdx;
+static uint8_t s_batCnt;
+static uint32_t s_batLastMs;
+static uint16_t s_batCv;
+static bool s_batInit;
 static bool s_antShown;
 static bool s_lockShown;
 static const char *s_titleText = "";
@@ -108,7 +118,20 @@ void STATUSLINE_render(void) {
       lv_label_set_text_static(s_lockText, locked ? "LOCK" : " ");
   }
 
-  uint16_t bat = battery_voltage_cv();
+  uint32_t now = millis();
+  if (!s_batInit || now - s_batLastMs >= BAT_SAMPLE_MS) {
+    s_batLastMs = now;
+    s_batInit = true;
+    s_batBuf[s_batIdx] = battery_voltage_cv();
+    s_batIdx = (uint8_t)((s_batIdx + 1) % BAT_AVG_N);
+    if (s_batCnt < BAT_AVG_N)
+      s_batCnt++;
+    uint32_t sum = 0;
+    for (uint8_t i = 0; i < s_batCnt; i++)
+      sum += s_batBuf[i];
+    s_batCv = (uint16_t)(sum / s_batCnt);
+  }
+  uint16_t bat = s_batCv;
   /* гистерезис 2 cV: без него ADC-шум дёргает перерисовку каждый кадр */
   if (s_prevBatDraw && bat >= s_prevBatDraw - 1 && bat <= s_prevBatDraw + 1)
     return;

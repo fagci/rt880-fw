@@ -40,7 +40,12 @@ static void clock_init(void) {
   }
   Prof_Mark(PROF_HEXT);
 
-  crm_pll_config(src, 150, 1, CRM_PLL_FR_4);
+  /* 135, а не 150 МГц. Помеха ходит за тактом SPI дисплея/APB1:
+   * на 144 (SPI 48) она была на 432, на 120 (SPI 30) — на 450. Нужен
+   * такт, у которого гармоники обходят 440–470: SPI = APB1 = 135/4 =
+   * 33.75 МГц, 13-я = 438.75, 14-я = 472.5 — полоса ровно между ними.
+   * Ядро 3×135 = 405, 4×135 = 540. */
+  crm_pll_config(src, 135, 1, CRM_PLL_FR_4);
   crm_clock_source_enable(CRM_CLOCK_SOURCE_PLL, TRUE);
   if (!wait_flag(CRM_PLL_STABLE_FLAG, 200000)) {
     g_clockStage |= 0x80;
@@ -50,7 +55,7 @@ static void clock_init(void) {
   g_clockStage = 3;
 
   crm_ahb_div_set(CRM_AHB_DIV_1);
-  crm_apb1_div_set(CRM_APB1_DIV_2);
+  crm_apb1_div_set(CRM_APB1_DIV_4);
   crm_apb2_div_set(CRM_APB2_DIV_1);
 
   crm_auto_step_mode_enable(TRUE);

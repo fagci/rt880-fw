@@ -18,6 +18,10 @@ void Mode_Init(void);
 void Mode_Switch(Mode &mode);
 void Mode_Update(void);
 void Mode_Render(void);
+/* Пауза отрисовки (замеры по UART): пока false — render() не вызывается,
+ * дисплей молчит и не добавляет помеху к RSSI. */
+void Mode_SetPaint(bool on);
+bool Mode_PaintPaused(void);
 uint16_t Mode_RenderInterval(void);
 void Mode_Key(KEY_Code_t key, Key_State_t state);
 bool Mode_KeyLocked(void);

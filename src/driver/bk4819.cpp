@@ -72,33 +72,36 @@ static BK4819_Chip g_chips[2] = {
 
 static BK4819_Chip *g_bk = &g_chips[0];
 
-// период полутакта SPI в нс
-// Полупериод SPI. Отлаживалось на ядре 8 МГц, где одна bk_delay() занимала
-// ~10 тактов ≈ 1 мкс (read: данные BK выходят с задержкой после спада SCK).
-// На 150 МГц 125 нс давало мусор в чтении (спектр не рисуется) — берём 1 мкс.
-#define BK_SPI_HALF_PERIOD_NS 1000u
+// Период полутакта SPI. Даташит: SCK до 8 МГц, высокий/низкий >=25 нс;
+// запас 150 нс на 150 МГц. На 150 МГц 1 мкс на бит давал ~72 мкс на запись
+// регистра, и перестройка со сбросом REG_30 стоила ~300 мкс — это половина
+// времени скана при короткой выдержке.
+#define BK_SPI_HALF_PERIOD_NS 150u
 
-// Пауза между спадом SCK и выборкой SDA при ЧТЕНИИ. BK4819 выдаёт бит с
-// задержкой после спада SCK: на 150 МГц при 1 мкс единицы терялись (замер:
-// запись 0xBDF1, чтение 0x9CF0), при 3 и 10 мкс читается верно. На 8 МГц
-// накладные расходы кода давали недостающую паузу. Запись остаётся на 1 мкс.
-#define BK_SPI_READ_SAMPLE_NS 3000u
+// Пауза между спадом SCK и выборкой SDA при ЧТЕНИИ. BK выдаёт бит после
+// спада, но на этой плате линия SDA поднимается медленно: при 1.5 мкс/бит
+// чтение уже мусор, при 2.0 — верно. 2.5 мкс — запас.
+#define BK_SPI_READ_SAMPLE_NS 2500u
 
-static uint32_t s_bkHalfNs = BK_SPI_HALF_PERIOD_NS;
-static uint32_t s_bkReadNs = BK_SPI_READ_SAMPLE_NS;
+// tNXT из даташита: от спада SCK (конец адреса) до следующего подъёма >=1 мкс.
+#define BK_SPI_ADDR_GAP_NS 1000u
 
-static inline void bk_delay_ns(uint32_t ns) {
-  // cycles = (CoreClock_MHz * ns) / 1000
-  // умножаем сначала, чтобы не терять точность при целочисленном делении
+static inline uint32_t bk_ns_to_cycles(uint32_t ns) {
   uint32_t cycles = (SystemCoreClock / 1000000UL * ns) / 1000u;
-  if (cycles == 0)
-    cycles = 1; // минимум 1 цикл
+  return cycles ? cycles : 1; // минимум 1 цикл
+}
+
+static uint32_t s_bkHalfCycles = bk_ns_to_cycles(BK_SPI_HALF_PERIOD_NS);
+static uint32_t s_bkReadCycles = bk_ns_to_cycles(BK_SPI_READ_SAMPLE_NS);
+static uint32_t s_bkAddrGapCycles = bk_ns_to_cycles(BK_SPI_ADDR_GAP_NS);
+
+static inline void bk_delay_cycles(uint32_t cycles) {
   uint32_t start = DWT->CYCCNT;
   while ((DWT->CYCCNT - start) < cycles)
     ;
 }
 
-static inline void bk_delay(void) { bk_delay_ns(s_bkHalfNs); }
+static inline void bk_delay(void) { bk_delay_cycles(s_bkHalfCycles); }
 
 static void gpio_set_output(gpio_type *port, uint16_t pin) {
   gpio_init_type g;
@@ -210,7 +213,7 @@ static uint16_t read_u16(void) {
     PIN_SET(sck_port, sck_pin);
     bk_delay();
     PIN_CLR(sck_port, sck_pin);
-    bk_delay_ns(s_bkReadNs); /* данные BK появляются с задержкой после спада */
+    bk_delay_cycles(s_bkReadCycles); /* данные BK после спада SCK */
     v <<= 1;
     if (PIN_GET(sda_port, sda_pin))
       v |= 1;
@@ -279,6 +282,7 @@ static uint16_t read_raw(uint8_t reg) {
   bk_delay();
   PIN_CLR(g_bk->scn_port, g_bk->scn_pin);
   write_u8(reg | 0x80);
+  bk_delay_cycles(s_bkAddrGapCycles); /* tNXT: адрес -> данные */
   uint16_t v = read_u16();
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   bk_delay();
@@ -358,15 +362,27 @@ static BandState_t getBand(uint32_t f) {
 }
 
 void BK4819_Init(void) {
+  /* Пересчитать тайминги здесь: статические инициализаторы выполняются до
+   * настройки 150 МГц, и s_*Cycles на старте могли быть нулевыми — тогда
+   * SPI писал/читал мусор, BK «немел» до первой ручной команды. */
+  s_bkHalfCycles = bk_ns_to_cycles(BK_SPI_HALF_PERIOD_NS);
+  s_bkReadCycles = bk_ns_to_cycles(BK_SPI_READ_SAMPLE_NS);
+  s_bkAddrGapCycles = bk_ns_to_cycles(BK_SPI_ADDR_GAP_NS);
   g_bk->reg30_cached = false;
+  /* После переинициализации/сброса чипа кэш частоты и модуляции больше не
+   * соответствует железу — следующий тюн обязан записать их заново. */
+  g_bk->freqCacheLow = 0xFFFFFFFFu;
+  g_bk->freqCacheHigh = 0xFFFFFFFFu;
+  g_bk->lastModulation = (ModulationType)0xFF;
   lastBand = BAND_UNSET; // REG_33 сейчас будет обнулён, кэш должен совпадать
 
   PIN_SET(g_bk->scn_port, g_bk->scn_pin);
   PIN_SET(g_bk->sck_port, g_bk->sck_pin);
   PIN_SET(g_bk->sda_port, g_bk->sda_pin);
 
-  BK4819_WriteRegister(BK4819_REG_00, 0x8000);
-  BK4819_WriteRegister(BK4819_REG_00, 0x0000);
+  /* Soft reset (REG_00=1) не используем: с быстрым SPI он иногда оставлял
+   * чип без ID (REG_00=0) и с залипшим PLL. После включения питания у BK
+   * значения по умолчанию, а всё нужное ниже перезаписывается. */
   BK4819_WriteRegister(BK4819_REG_37, 0x1D0F);
 
   g_bk->gpioOutState = 0;
@@ -497,7 +513,7 @@ uint32_t BK4819_GetFrequency(void) {
          BK4819_ReadRegister(BK4819_REG_38);
 }
 
-void BK4819_SetFrequency(uint32_t freq) {
+static void BK4819_SetFrequency(uint32_t freq) {
   uint16_t low = freq & 0xFFFF;
   uint16_t high = (freq >> 16) & 0xFFFF;
 
@@ -513,6 +529,10 @@ void BK4819_SetFrequency(uint32_t freq) {
 }
 
 void BK4819_TuneTo(uint32_t freq, bool precise) {
+  /* Частота 0/вне диапазона: импульс VCO_CALIB на нуле вешает PLL
+   * (REG_30 залипает в 0x0430 до снятия питания). Не трогаем чип. */
+  if (freq < BK4819_F_MIN || freq > BK4819_F_MAX)
+    return;
   BK4819_SetFrequency(freq);
 
   uint16_t reg = BK4819_ReadRegister(BK4819_REG_30);
@@ -527,6 +547,12 @@ void BK4819_TuneTo(uint32_t freq, bool precise) {
 void BK4819_RX_TurnOn(void) {
   BK4819_WriteRegister(BK4819_REG_36, 0x0000);
   BK4819_WriteRegister(BK4819_REG_37, 0x1F0F);
+  /* Включать VCO-калибровку при нулевых REG_38/39 нельзя: PLL залипает
+   * в REG_30=0x0430. Даём валидную опору до импульса. */
+  g_bk->freqCacheLow = 0xFFFFFFFFu;
+  g_bk->freqCacheHigh = 0xFFFFFFFFu;
+  BK4819_SetFrequency(14550000);
+  delay_us(1000);
   BK4819_WriteRegister(BK4819_REG_30, 0x0200);
 
   BK4819_WriteRegister(
@@ -536,6 +562,8 @@ void BK4819_RX_TurnOn(void) {
           BK4819_REG_30_ENABLE_DISC_MODE | BK4819_REG_30_ENABLE_PLL_VCO |
           BK4819_REG_30_DISABLE_PA_GAIN | BK4819_REG_30_DISABLE_MIC_ADC |
           BK4819_REG_30_DISABLE_TX_DSP | BK4819_REG_30_ENABLE_RX_DSP);
+  /* Дать VCO-калибровке завершиться до следующей перестройки. */
+  delay_us(1500);
 }
 
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
