@@ -39,7 +39,13 @@ jobs:
       - name: Prepare release files
         run: |
           set -euo pipefail
-          version="$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_REF_NAME" = "main" ]; then
+            version="latest"
+          else
+            version="$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+          fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
           mkdir -p dist
           cp build/rt880-install.bin "dist/RT880-full-install-${version}.bin"
@@ -68,9 +74,27 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-      - name: Release
+      - name: Release (tag)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # Rolling-релиз: каждый push в main обновляет assets в Releases.
+      - name: Release (main, latest)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (main)
+          fail_on_unmatched_files: true
+          files: dist/*
+          body: |
+            Автосборка `main` от ${{ github.sha }}.
+
+            - `RT880-full-install-latest.bin` — 246 КиБ, полная установка/recovery (PTT/--boot).
+            - `RT880-fast-app-latest.bin` — приложение для `flash.py --fast`.
+
+            Инструкции — в `README-INSTALL.txt`, хэши — в `SHA256SUMS.txt`.
