@@ -13,12 +13,14 @@
 
 /* Шрифты (tools/gen_fonts.sh): S — Cozette 13 px / 1 bpp (пиксельный,
  * ноль перечёркнут); M — JetBrains Mono Medium 14 px;
- * XL — JetBrains Mono ExtraBold 38 px. В M/XL точка в нуле убрана.
- * Все моноширинные. */
-extern const lv_font_t ui_font_s, ui_font_m, ui_font_xl;
+ * L — JetBrains Mono ExtraBold 26 px (буквы, имена каналов);
+ * XL — JetBrains Mono ExtraBold 38 px (только цифры частоты).
+ * В M/L/XL точка в нуле убрана. Все моноширинные. */
+extern const lv_font_t ui_font_s, ui_font_m, ui_font_l, ui_font_xl;
 typedef const lv_font_t *Font;
 #define F_S (&ui_font_s)
 #define F_M (&ui_font_m)
+#define F_L (&ui_font_l)
 #define F_XL (&ui_font_xl)
 
 typedef enum { POS_L, POS_C, POS_R } TextPos;

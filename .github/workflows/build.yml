@@ -1,0 +1,77 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi make python3
+
+      - name: Python syntax
+        run: python3 -m py_compile flash.py tools/mkimage.py
+
+      - name: Build firmware
+        run: make -j"$(nproc)"
+
+      - name: Build stage-2
+        run: make boot2
+
+      - name: Build install image
+        run: make install-image
+
+      - name: Build host preview
+        run: make -C tools/preview -j"$(nproc)"
+
+      - name: Prepare release files
+        run: |
+          set -euo pipefail
+          version="$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          mkdir -p dist
+          cp build/rt880-install.bin "dist/RT880-full-install-${version}.bin"
+          cp build/rt880-fw-by-fagci.bin "dist/RT880-fast-app-${version}.bin"
+          cp flash.py README.md dist/
+          cat > dist/README-INSTALL.txt <<'EOF'
+          RT880-full-install-*.bin — полная установка/восстановление (246 КиБ).
+          Стоковый загрузчик, 115200: PTT при включении, затем
+            python3 flash.py /dev/ttyUSB0 RT880-full-install-*.bin
+          или из работающего приложения:
+            python3 flash.py --boot /dev/ttyUSB0 RT880-full-install-*.bin
+
+          RT880-fast-app-*.bin — обычное обновление приложения (нужен уже
+          установленный stage-2), 921600:
+            python3 flash.py --fast /dev/ttyUSB0 RT880-fast-app-*.bin
+
+          Если fast-прошивка прервалась — повторите --fast: stage-2 сам
+          останется в fast mode и переподключится. Если сломан сам stage-2 —
+          только full-install через PTT.
+          EOF
+          (cd dist && sha256sum ./*.bin > SHA256SUMS.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rt880-firmware-${{ env.VERSION }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

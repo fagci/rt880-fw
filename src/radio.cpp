@@ -8,11 +8,15 @@
 #include "helper/log.h"
 #include "helper/measurements.h"
 #include "helper/store.h"
+#include "helper/tone.h"
 #include "misc.h"
 #include "ui/graphics.h"
 #include <string.h>
 
 VFO vfos[DEVICE_VFO_COUNT] = {{}, {}, {}};
+VFOChannel vfoChannels[DEVICE_VFO_COUNT] = {{}, {}, {}};
+/* Частотное состояние VFO на время канального режима. */
+static VFO vfoSaved[DEVICE_VFO_COUNT];
 
 uint8_t currentVfo = 0;
 
@@ -196,6 +200,18 @@ static uint8_t vfoChip(uint8_t idx) {
   return (vfos[idx].radio == RADIO_BK4819B) ? 1 : 0;
 }
 
+/* Частота для тракта: логическая + коррекция диапазона из флеш-списка.
+ * Логическая частота (rxF) остаётся неизменной — по ней работают границы
+ * диапазонов, поиск и отображение. */
+static uint32_t hwFreq(uint32_t f10) {
+  int32_t f = (int32_t)f10 + Band_Corr10(f10);
+  if (f < 1530)
+    f = 1530;
+  if (f > 134000000)
+    f = 134000000;
+  return (uint32_t)f;
+}
+
 /* precise=true: полное применение (смена VFO, ручной ввод).
    precise=false: только частота (сканирование, мониторинг). */
 static void applyVfo(bool precise) {
@@ -210,7 +226,7 @@ static void applyVfo(bool precise) {
   if (v->radio == RADIO_SI4732) {
     siEnsure(v); /* может откатить v->radio на BK */
     if (v->radio == RADIO_SI4732) {
-      SI47XX_TuneTo(v->rxF); /* единицы 10 Гц — как и раньше */
+      SI47XX_TuneTo(hwFreq(v->rxF)); /* единицы 10 Гц */
       SI47XX_SetAutomaticGainControl(modToSi(v->modulation) == SI47XX_FM ? 0 : 1, 0);
     }
   }
@@ -219,7 +235,7 @@ static void applyVfo(bool precise) {
     uint8_t chip = vfoChip(currentVfo);
     BK4819_SelectChip(chip);
     BK4819_SelectFilterByFrequency(v->rxF);
-    BK4819_TuneTo(v->rxF, precise);
+    BK4819_TuneTo(hwFreq(v->rxF), precise);
     if (precise) {
       /* WFM на BK — свой широкий REG_43; в FM не подменяем */
       BK4819_SetModulation(
@@ -237,6 +253,26 @@ static void applyVfo(bool precise) {
 
   if (precise)
     applyMute(!s_bootMute);
+}
+
+/* Канал за VFO: приёмник B без антенны не используем, как в CH. */
+static Radio channelRadio(uint8_t r) {
+  if (r == RADIO_BK4819B)
+    r = RADIO_BK4819A;
+  if (r > RADIO_SI4732)
+    r = RADIO_BK4819A;
+  return (Radio)r;
+}
+
+static void applyChannelFields(VFO *v, const VFOChannel *c) {
+  v->rxF = c->f;
+  v->modulation = static_cast<ModulationType>(c->modulation & 7);
+  v->bw = c->bw;
+  v->radio = channelRadio(c->radio);
+  v->radioManual = true;
+  const BandPlan *b = Band_Find(c->f);
+  if (b)
+    v->step = static_cast<Step>(b->step);
 }
 
 /* Перехваченный BK слушаем, пока открыт шумодав; после MON_RETURN_MS
@@ -297,12 +333,16 @@ static void monitorTick(void) {
   uint8_t cand[DEVICE_VFO_COUNT];
   uint8_t n = 0;
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
-    if (i == currentVfo || !vfos[i].monitor)
+    /* Канальный режим участвует в multiwatch сам, частотный — по метке. */
+    bool chMode = VFO_ChannelMode(i);
+    if (i == currentVfo || (!vfos[i].monitor && !chMode))
       continue;
-    if (vfos[i].radioManual && !deviceCovers(vfos[i].radio, vfos[i].rxF))
-      vfos[i].radioManual = false;
-    if (!vfos[i].radioManual)
-      vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
+    if (!chMode) {
+      if (vfos[i].radioManual && !deviceCovers(vfos[i].radio, vfos[i].rxF))
+        vfos[i].radioManual = false;
+      if (!vfos[i].radioManual)
+        vfos[i].radio = Radio_PickDevice(vfos[i].rxF, vfos[i].modulation);
+    }
     if (vfos[i].radio == RADIO_SI4732 || vfos[i].radio == ar)
       continue;
     cand[n++] = i;
@@ -320,7 +360,7 @@ static void monitorTick(void) {
   /* Настраиваем кандидата полностью: при несовпадении модуляции/полосы с
    * тем, что осталось на BK, шумодав ложно открывается без сигнала. */
   BK4819_SelectFilterByFrequency(m->rxF);
-  BK4819_TuneTo(m->rxF, false);
+  BK4819_TuneTo(hwFreq(m->rxF), false);
   BK4819_SetModulation(static_cast<ModulationType>(m->modulation));
   BK4819_SetAGC(m->modulation != MOD_AM, m->gainIndex);
   if (m->modulation != MOD_WFM)
@@ -361,6 +401,8 @@ void Radio_Init(void) {
   inited = true;
 
   memset(vfos, 0, sizeof(vfos));
+  memset(vfoChannels, 0, sizeof(vfoChannels));
+  memset(vfoSaved, 0, sizeof(vfoSaved));
 
   /* Дефолты без SI на старте: SSB-патч грузится лениво (один раз за
      включение) при первом переходе на КВ, чтобы старт был мгновенным */
@@ -403,6 +445,7 @@ void Radio_Init(void) {
   bkDacOn[0] = bkDacOn[1] = false;
   s_bootMute = true;
   Store_ApplyRadio(); /* последние VFO/шумодав/фильтр/диапазоны */
+  VFO_ApplySavedChannelModes();
   applyVfo(true);
   s_bootMute = false;
 }
@@ -421,9 +464,17 @@ void Radio_Update(void) {
 
   monitorTick();
 
-  /* monitorTick мог переключить кристаллы — вернём контекст активного */
-  if (vfos[currentVfo].radio != RADIO_SI4732)
-    BK4819_SelectChip(vfoChip(currentVfo));
+  /* monitorTick мог переключить кристаллы — вернём контекст активного
+   * и обновим субтоны/DTMF уже по фактическому приёмнику. */
+  Radio now = vfos[currentVfo].radio;
+  if (now != RADIO_SI4732) {
+    uint8_t chip = vfoChip(currentVfo);
+    BK4819_SelectChip(chip);
+    sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+    Tone_Update(true, chip, vfos[currentVfo].rxF, sqOpen);
+  } else {
+    Tone_Update(false, 0, vfos[currentVfo].rxF, sqOpen);
+  }
 }
 
 /* Звук сканера. Железо задаём ЯВНО и приводим в соответствие учёт
@@ -489,9 +540,22 @@ void Radio_TuneTo(uint32_t f, bool precise) {
   applyVfo(precise);
 }
 
+/* Шумодав диапазона применяется при входе в него; BAND_SQL_NONE — оставить
+ * текущий (заводские записи так и сделаны). */
+static void applyBandSquelch(const BandPlan *b) {
+  if (b && b->squelch <= 10)
+    Radio_SetSquelch(b->squelch);
+}
+
 void Radio_TuneToAuto(uint32_t f) {
-  if (!Radio_ApplyBandPlan(f))
+  const BandPlan *b = Band_Find(f);
+  if (!b)
     vfos[currentVfo].modulation = MOD_FM;
+  else {
+    vfos[currentVfo].modulation = b->mod;
+    vfos[currentVfo].step = static_cast<Step>(b->step);
+    applyBandSquelch(b);
+  }
   vfos[currentVfo].rxF = f;
   applyVfo(true);
 }
@@ -500,28 +564,35 @@ void Radio_TuneStep(int8_t dir) {
   VFO *v = &vfos[currentVfo];
   int64_t step = StepFrequencyTable[v->step];
   int64_t nf = (int64_t)v->rxF + step * dir;
-  const BandPlan *a = Band_Find(v->rxF);
+  int8_t ai = Band_Index(v->rxF);
 
   /* внутри диапазона шаг зацикливается: вверх за край — на начало,
    * вниз за начало — на последнюю точку сетки у края */
-  if (a && a->loop) {
-    int64_t lo = (int64_t)a->startKhz * 100, hi = (int64_t)a->endKhz * 100;
-    if (nf >= hi)
-      nf = lo;
-    else if (nf < lo)
-      nf = lo + ((hi - 1 - lo) / step) * step;
-    Radio_TuneTo((uint32_t)nf, false);
-    return;
+  if (ai >= 0) {
+    const BandPlan *a = &Band_At((uint8_t)ai);
+    if (a->loop) {
+      int64_t lo = (int64_t)a->startKhz * 100, hi = (int64_t)a->endKhz * 100;
+      if (nf >= hi)
+        nf = lo;
+      else if (nf < lo)
+        nf = lo + ((hi - 1 - lo) / step) * step;
+      Radio_TuneTo((uint32_t)nf, false);
+      return;
+    }
   }
 
-  /* вне «петли» (общие диапазоны): вошли в другой — берём его модуляцию и шаг */
+  /* вне «петли» (общие диапазоны): вошли в другой — берём его модуляцию,
+   * шаг и шумодав. Band_At отдаёт общий снимок, поэтому сравниваем
+   * индексы, а не указатели. */
   if (nf < 0)
     nf = 0;
   const BandPlan *b = Band_Find((uint32_t)nf);
-  bool changed = b && a != b;
+  int8_t bi = b ? Band_Index((uint32_t)nf) : -1;
+  bool changed = b && ai != bi;
   if (changed) {
     v->modulation = b->mod;
     v->step = static_cast<Step>(b->step);
+    applyBandSquelch(b);
   }
   Radio_TuneTo((uint32_t)nf, changed); /* смена модуляции — только precise */
 }
@@ -591,10 +662,18 @@ void Radio_NextGroup(void) {
 
   int8_t t = Band_GroupLast(ng);
   if (t < 0) {
-    for (uint8_t i = 0; i < Band_Count(); i++)
-      if (Band_At(i).loop && Band_At(i).cat == ng &&
-          (t < 0 || Band_At(i).startKhz < Band_At(t).startKhz))
+    for (uint8_t i = 0; i < Band_Count(); i++) {
+      /* Band_At отдаёт общий снимок: сначала копируем поля, потом
+       * сравниваем с Band_At(t) — иначе два вызова в одном выражении
+       * затирают друг друга. */
+      const BandPlan &bp = Band_At(i);
+      bool loop = bp.loop;
+      uint8_t cat = bp.cat;
+      uint32_t s = bp.startKhz;
+      if (loop && cat == ng &&
+          (t < 0 || s < (uint32_t)Band_At((uint8_t)t).startKhz))
         t = i;
+    }
   }
   if (t >= 0)
     gotoBand(t);
@@ -624,6 +703,124 @@ void Radio_ToggleMonitor(uint8_t idx) {
    * активен (monitorTick пропускает currentVfo), и начнёт мониториться,
    * когда пользователь переключится на другой. */
   vfos[idx].monitor = !vfos[idx].monitor;
+}
+
+const VFOChannel *VFO_GetChannel(uint8_t idx) {
+  if (idx >= DEVICE_VFO_COUNT ||
+      !(vfoChannels[idx].flags & VFO_CH_VALID))
+    return nullptr;
+  return &vfoChannels[idx];
+}
+
+bool VFO_HasChannel(uint8_t idx) { return VFO_GetChannel(idx) != nullptr; }
+
+bool VFO_ChannelMode(uint8_t idx) {
+  return idx < DEVICE_VFO_COUNT &&
+         (vfoChannels[idx].flags & VFO_CH_MODE);
+}
+
+/* Только настройка тракта: monitor/gain принадлежат VFO, а не каналу. */
+static void copyTuning(VFO *v, const VFO *s) {
+  v->rxF = s->rxF;
+  v->step = s->step;
+  v->modulation = s->modulation;
+  v->bw = s->bw;
+  v->radio = s->radio;
+  v->radioManual = s->radioManual;
+}
+
+bool VFO_SetChannelMode(uint8_t idx, bool on, bool retune) {
+  if (idx >= DEVICE_VFO_COUNT)
+    return false;
+  if (on == VFO_ChannelMode(idx))
+    return true;
+  if (on) {
+    const VFOChannel *c = VFO_GetChannel(idx);
+    if (!c)
+      return false;
+    vfoSaved[idx] = vfos[idx];
+    vfoChannels[idx].flags |= VFO_CH_MODE;
+    applyChannelFields(&vfos[idx], c);
+  } else {
+    copyTuning(&vfos[idx], &vfoSaved[idx]);
+    vfoChannels[idx].flags &= (uint8_t)~VFO_CH_MODE;
+  }
+  if (retune && idx == currentVfo)
+    applyVfo(true);
+  return true;
+}
+
+bool VFO_ToggleChannelMode(uint8_t idx) {
+  return VFO_SetChannelMode(idx, !VFO_ChannelMode(idx));
+}
+
+void VFO_ApplySavedChannelModes(void) {
+  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
+    if (!(vfoChannels[i].flags & VFO_CH_MODE))
+      continue;
+    const VFOChannel *c = VFO_GetChannel(i);
+    if (!c) {
+      vfoChannels[i].flags &= (uint8_t)~VFO_CH_MODE;
+      continue;
+    }
+    vfoSaved[i] = vfos[i];
+    applyChannelFields(&vfos[i], c);
+  }
+}
+
+const VFO *VFO_FrequencyState(uint8_t idx) {
+  if (idx >= DEVICE_VFO_COUNT)
+    return nullptr;
+  return VFO_ChannelMode(idx) ? &vfoSaved[idx] : &vfos[idx];
+}
+
+void VFO_AssignChannel(uint8_t idx, uint32_t f, uint8_t mod, uint8_t bw,
+                       uint8_t radio, const char *name) {
+  if (idx >= DEVICE_VFO_COUNT)
+    return;
+  VFOChannel *c = &vfoChannels[idx];
+  bool chMode = (c->flags & VFO_CH_MODE) != 0;
+  memset(c, 0, sizeof(*c));
+  c->f = f;
+  c->modulation = mod & 7;
+  c->bw = bw;
+  if (c->bw > 9)
+    c->bw = 0;
+  c->radio = (uint8_t)channelRadio(radio);
+  c->flags = VFO_CH_VALID;
+  if (name) {
+    for (uint8_t i = 0; i < VFO_CH_NAME_LEN - 1 && name[i]; ++i) {
+      uint8_t ch = (uint8_t)name[i];
+      c->name[i] = (ch < 32 || ch > 126 || ch == '#') ? ' ' : (char)ch;
+    }
+  }
+  if (chMode) {
+    c->flags |= VFO_CH_MODE;
+    applyChannelFields(&vfos[idx], c);
+    if (idx == currentVfo)
+      applyVfo(true);
+  }
+}
+
+void VFO_ClearChannel(uint8_t idx) {
+  if (idx >= DEVICE_VFO_COUNT)
+    return;
+  if (VFO_ChannelMode(idx))
+    VFO_SetChannelMode(idx, false);
+  memset(&vfoChannels[idx], 0, sizeof(vfoChannels[idx]));
+}
+
+/* Скопировать частоту/параметры канала в собственное состояние VFO. */
+bool VFO_CopyChannelToVfo(uint8_t idx) {
+  const VFOChannel *c = VFO_GetChannel(idx);
+  if (!c)
+    return false;
+  if (VFO_ChannelMode(idx))
+    VFO_SetChannelMode(idx, false, false);
+  applyChannelFields(&vfos[idx], c);
+  if (idx == currentVfo)
+    applyVfo(true);
+  return true;
 }
 
 void Radio_NextStep(void) {

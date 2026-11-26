@@ -28,7 +28,9 @@ bool MenuOverlay_IsOpen(void);
 /* true — клавиша обработана; STAR закрывает меню и возвращает false,
  * чтобы режим открыл loot. */
 bool MenuOverlay_Key(KEY_Code_t key, Key_State_t state);
-void MenuOverlay_Render(void);
+/* true — меню действительно перерисовалось (был dirty): это SPI-заливка,
+ * после неё режиму нужно выдержать паузу перед замером. */
+bool MenuOverlay_Render(void);
 /* Режим нарисовал напрямую (DMA) полосу y1..y2 поверх части меню —
  * перерисовать только пересечение с окном меню. Без прямых заливок меню
  * не трогаем: лишние flush — это помеха в 437–441 МГц. */

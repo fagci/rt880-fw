@@ -264,9 +264,12 @@ void MenuOverlay_Open(const MenuItem *items, uint8_t count, lv_coord_t x,
 
 bool MenuOverlay_IsOpen(void) { return ctx.open; }
 
-void MenuOverlay_Render(void) {
-  if (ctx.open && ctx.dirty)
+bool MenuOverlay_Render(void) {
+  if (ctx.open && ctx.dirty) {
     refresh();
+    return true;
+  }
+  return false;
 }
 
 void MenuOverlay_InvalidateBand(int16_t y1, int16_t y2) {

@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
   lv_port_init();
   { lv_mem_monitor_t m; lv_mem_monitor(&m); fprintf(stderr,"mem total=%u free=%u\n",(unsigned)m.total_size,(unsigned)m.free_size); }
   Radio_Init();
-  g_bat_cv = 372;
+  g_bat_cv = 744;
   /* немного находок для экрана списка */
   uint32_t fr[] = {43312500, 14550000, 16309300, 43350000, 14800000, 17025000, 12712500};
   for (int i = 0; i < 7; i++) {

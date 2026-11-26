@@ -8,8 +8,6 @@
 static RadioMenuApply s_apply;
 
 static const char *const FILTER_NAMES[] = {"AUTO", "HF", "VHF", "UHF", "800"};
-static const char *const BW_NAMES[] = {"6k",  "7k",  "9k",   "10k", "12k",
-                                       "14k", "17k", "20k",  "23k", "26k"};
 
 static char s_buf[8];
 

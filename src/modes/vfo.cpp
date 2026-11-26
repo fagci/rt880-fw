@@ -15,10 +15,13 @@
 #include "../helper/lootlist.h"
 #include "../helper/measurements.h"
 #include "../helper/names.h"
+#include "../helper/store.h"
+#include "../helper/tone.h"
 #include "../helper/unit_fmt.h"
 #include "../bands.h"
 #include "../misc.h"
 #include "../radio.h"
+#include "../ui/band_colors.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_helpers.h"
 #include "../ui/menu_overlay.h"
@@ -44,7 +47,15 @@
 
 #define VFO_INFO_Y 6   /* строка диапазон / модуляция (M) */
 #define VFO_FREQ_Y 26  /* верх строки частоты (XL) */
+#define VFO_NAME_Y 34  /* имя канала: базовая линия как у частоты (L) */
 #define VFO_SUB_Y 64   /* строка чип / шаг — сразу под частотой (S) */
+#define VFO_BADGE_W 44 /* «BK AUTO» / «MBK VHF» */
+#define VFO_TONE_X 52  /* CTCSS/DCS/DTMF — сразу перед AFC */
+#define VFO_TONE_W 92
+#define VFO_AFC_X 144 /* поправка AFC — между субтонами и шагом */
+#define VFO_AFC_W 54
+#define VFO_STEP_X 198
+#define VFO_STEP_W (COL_RIGHT - VFO_STEP_X)
 #define VFO_SMETER_Y 84 /* S-метр: квадратики */
 #define VFO_SMETER_H 8
 #define VFO_CELLS 16
@@ -63,12 +74,20 @@ struct {
   lv_obj_t *s_scr; /* корневой контейнер экрана */
   lv_obj_t *s_meter; /* общий S-метр активного ряда (рисуется в draw-cb) */
   lv_obj_t *s_freqLbl[DEVICE_VFO_COUNT];
+  lv_obj_t *s_chNameLbl[DEVICE_VFO_COUNT]; /* имя закреплённого канала */
   lv_obj_t *s_extraLbl[DEVICE_VFO_COUNT];
   lv_obj_t *s_badgeLbl[DEVICE_VFO_COUNT];
   lv_obj_t *s_modLbl[DEVICE_VFO_COUNT];
   lv_obj_t *s_stepLbl[DEVICE_VFO_COUNT];
   lv_obj_t *s_bandLbl[DEVICE_VFO_COUNT];
+  lv_obj_t *s_afcLbl; /* общий на активный ряд */
+  lv_obj_t *s_toneLbl; /* CTCSS/DCS/DTMF активного ряда */
   const char *s_prevBand[DEVICE_VFO_COUNT];
+  char s_bandText[DEVICE_VFO_COUNT][24];
+  char s_prevChName[DEVICE_VFO_COUNT][VFO_CH_NAME_LEN];
+  bool s_prevChValid[DEVICE_VFO_COUNT];
+  bool s_prevChMode[DEVICE_VFO_COUNT];
+  uint32_t s_prevFreq[DEVICE_VFO_COUNT];
   lv_obj_t *s_peak;
   lv_obj_t *s_dbmLbl;
   lv_obj_t *s_cursor;
@@ -85,6 +104,9 @@ struct {
   Color s_prevDbmColor;
   int16_t s_prevDbm = 0x7FFF;
   uint8_t s_prevExtra[DEVICE_VFO_COUNT];
+  int16_t s_prevAfc;
+  char s_afcBuf[12];
+  char s_toneShown[20];
   bool s_inited;
 } vfoCtx;
 
@@ -104,7 +126,17 @@ static void setHidden(lv_obj_t *o, bool hidden) {
 /* Цвет с учётом глобальной темы */
 static Color fgAd(Color c) { return TC(c); }
 
+/* Ручная настройка выводит VFO из канального режима; закреплённый канал
+ * остаётся, чтобы в него можно было вернуться тем же длинным нажатием. */
+static void leaveChannelMode(uint8_t idx) {
+  if (!VFO_ChannelMode(idx))
+    return;
+  VFO_SetChannelMode(idx, false);
+  Store_MarkDirty();
+}
+
 static void onFreqEntered(uint32_t f) {
+  leaveChannelMode(currentVfo);
   Radio_TuneToAuto(f);
 }
 
@@ -151,8 +183,9 @@ static void initNumVals() {
 /* ─── Построение экрана ─── */
 
 /* S-метр — светодиодная линейка: у каждого квадратика свой цвет зоны.
- * Потухшие квадратики остаются приглушённого цвета своей зоны, зажжённые —
- * полным, частичный — промежуточным. */
+ * Потухшие квадратики остаются приглушённого цвета своей зоны. Ячейка —
+ * виртуальный светодиод: горит всегда целиком, а яркость отражает долю её
+ * перекрытия баром (50% ширины — 50% яркости). */
 static uint16_t meterZoneColor(uint8_t c) {
   if (c < 8) /* S1..S7 */
     return C_GREEN;
@@ -183,9 +216,8 @@ static void meterDrawCb(lv_event_t *e) {
       continue;
     if (fw > VFO_CELL_W)
       fw = VFO_CELL_W;
-    d.bg_opa =
-        fw < VFO_CELL_W ? (lv_opa_t)LV_OPA_60 : (lv_opa_t)LV_OPA_COVER;
-    cell.x2 = (lv_coord_t)(cell.x1 + fw - 1);
+    /* Светодиод зажигается целиком, яркость — доля его перекрытия. */
+    d.bg_opa = (lv_opa_t)((fw * 255 + VFO_CELL_W / 2) / VFO_CELL_W);
     lv_draw_rect(dc, &d, &cell);
   }
 }
@@ -208,16 +240,35 @@ static void buildScreen(void) {
                            FREQ_DIGITS_RIGHT,
                            VFO_FREQ_POS == POS_L ? LV_TEXT_ALIGN_LEFT
                                                  : LV_TEXT_ALIGN_RIGHT);
+    /* Имя закреплённого канала — на месте крупной частоты. */
+    vfoCtx.s_chNameLbl[i] = lvLabel(vfoCtx.s_scr, F_L, C_WHITE, MARGIN,
+                                    sy + VFO_NAME_Y, FREQ_RIGHT - MARGIN,
+                                    LV_TEXT_ALIGN_LEFT);
+    if (vfoCtx.s_chNameLbl[i])
+      lv_obj_add_flag(vfoCtx.s_chNameLbl[i], LV_OBJ_FLAG_HIDDEN);
     vfoCtx.s_extraLbl[i] = lvLabel(vfoCtx.s_scr, F_M, C_WHITE, FREQ_RIGHT + 4,
                             sy + VFO_FREQ_Y + FontAscent(F_XL) -
                                 FontAscent(F_M),
                             COL_RIGHT - FREQ_RIGHT - 4, LV_TEXT_ALIGN_LEFT);
 
-    vfoCtx.s_badgeLbl[i] = lvLabel(vfoCtx.s_scr, F_S, C_YELLOW, MARGIN, sy + VFO_SUB_Y, 60,
-                            LV_TEXT_ALIGN_LEFT);
-    vfoCtx.s_stepLbl[i] = lvLabel(vfoCtx.s_scr, F_S, C_YELLOW, COL_RIGHT - 80,
-                           sy + VFO_SUB_Y, 80, LV_TEXT_ALIGN_RIGHT);
+    vfoCtx.s_badgeLbl[i] = lvLabel(vfoCtx.s_scr, F_S, C_YELLOW, MARGIN, sy + VFO_SUB_Y,
+                            VFO_BADGE_W, LV_TEXT_ALIGN_LEFT);
+    vfoCtx.s_stepLbl[i] = lvLabel(vfoCtx.s_scr, F_S, C_YELLOW, VFO_STEP_X,
+                           sy + VFO_SUB_Y, VFO_STEP_W, LV_TEXT_ALIGN_RIGHT);
   }
+
+  vfoCtx.s_toneLbl = lvLabel(vfoCtx.s_scr, F_S, C_CYAN, VFO_TONE_X,
+                              STATUS_H + VFO_SUB_Y, VFO_TONE_W,
+                              LV_TEXT_ALIGN_RIGHT);
+  if (vfoCtx.s_toneLbl) {
+    lv_obj_add_flag(vfoCtx.s_toneLbl, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_static(vfoCtx.s_toneLbl, "");
+  }
+  vfoCtx.s_afcLbl = lvLabel(vfoCtx.s_scr, F_S, C_CYAN, VFO_AFC_X,
+                             STATUS_H + VFO_SUB_Y, VFO_AFC_W,
+                             LV_TEXT_ALIGN_RIGHT);
+  if (vfoCtx.s_afcLbl)
+    lv_obj_add_flag(vfoCtx.s_afcLbl, LV_OBJ_FLAG_HIDDEN);
 
   /* S-метр: один объект с квадратиками, шкала, peak hold и дБм. */
   vfoCtx.s_meter = lvBox(vfoCtx.s_scr, 0, 0, VFO_SMETER_W, VFO_SMETER_H,
@@ -248,12 +299,17 @@ static void layoutMeter(uint8_t i) {
     lv_obj_invalidate(vfoCtx.s_meter);
   }
   vfoCtx.s_meterW = 0;
+  if (vfoCtx.s_toneLbl)
+    lv_obj_set_pos(vfoCtx.s_toneLbl, VFO_TONE_X, sy + VFO_SUB_Y);
+  if (vfoCtx.s_afcLbl)
+    lv_obj_set_pos(vfoCtx.s_afcLbl, VFO_AFC_X, sy + VFO_SUB_Y);
   if (vfoCtx.s_dbmLbl)
     lv_obj_set_y(vfoCtx.s_dbmLbl, sy + VFO_DBM_Y);
   if (vfoCtx.s_peak)
     lv_obj_set_y(vfoCtx.s_peak, sy + VFO_SMETER_Y - 1);
   vfoCtx.s_prevDbm = 0x7FFF;
   vfoCtx.s_prevDbmColor = 0;
+  vfoCtx.s_prevAfc = 0x7FFF;
   vfoCtx.s_lastMeterMs = millis() - VFO_METER_MS;
 }
 
@@ -270,13 +326,17 @@ static void setRowActive(uint8_t i, bool active) {
   if (vfoCtx.s_freqLbl[i])
     lv_obj_set_style_text_color(vfoCtx.s_freqLbl[i], lvColor(fg),
                                 LV_PART_MAIN);
+  if (vfoCtx.s_chNameLbl[i])
+    lv_obj_set_style_text_color(vfoCtx.s_chNameLbl[i], lvColor(fg),
+                                LV_PART_MAIN);
   if (vfoCtx.s_extraLbl[i])
     lv_obj_set_style_text_color(vfoCtx.s_extraLbl[i], lvColor(fg),
                                 LV_PART_MAIN);
   if (vfoCtx.s_bandLbl[i])
-    lv_obj_set_style_text_color(vfoCtx.s_bandLbl[i],
-                                lvColor(active ? C_CYAN : C_GRAY),
-                                LV_PART_MAIN);
+    lv_obj_set_style_text_color(
+        vfoCtx.s_bandLbl[i],
+        lvColor(active ? Band_Palette565(Band_Color(vfos[i].rxF)) : C_GRAY),
+        LV_PART_MAIN);
   if (vfoCtx.s_modLbl[i])
     lv_obj_set_style_text_color(vfoCtx.s_modLbl[i],
                                 lvColor(active ? C_GREEN : C_GRAY),
@@ -313,8 +373,14 @@ public:
     vfoCtx.s_lastMeterMs = millis() - VFO_METER_MS;
     vfoCtx.s_prevDbm = 0x7FFF;
     vfoCtx.s_prevDbmColor = 0;
+    vfoCtx.s_prevAfc = 0x7FFF;
+    vfoCtx.s_toneShown[0] = 0;
     memset(vfoCtx.s_prevExtra, 0xFF, sizeof(vfoCtx.s_prevExtra));
     memset(vfoCtx.s_prevBand, 0, sizeof(vfoCtx.s_prevBand));
+    memset(vfoCtx.s_prevChName, 0, sizeof(vfoCtx.s_prevChName));
+    memset(vfoCtx.s_prevChValid, 0, sizeof(vfoCtx.s_prevChValid));
+    memset(vfoCtx.s_prevChMode, 0, sizeof(vfoCtx.s_prevChMode));
+    memset(vfoCtx.s_prevFreq, 0, sizeof(vfoCtx.s_prevFreq));
     vfoCtx.s_prevStep = 0xFF;
     vfoCtx.s_inited = false;
   }
@@ -371,19 +437,29 @@ public:
         setHidden(vfoCtx.s_cursor, true);
       }
 
+      const VFOChannel *vc = VFO_GetChannel(i);
+      const char *cn = vc ? vc->name : "";
+      bool chActive = vc != nullptr && VFO_ChannelMode(i);
+      bool chChanged = (vc != nullptr) != vfoCtx.s_prevChValid[i] ||
+                       (vc && strcmp(cn, vfoCtx.s_prevChName[i]) != 0) ||
+                       chActive != vfoCtx.s_prevChMode[i];
+      bool showName = chActive && !editing;
+
       if (vfoCtx.s_badgeLbl[i] &&
           (first || vfos[i].modulation != vfoCtx.s_prevMod[i] ||
            vfos[i].monitor != vfoCtx.s_prevMon[i] ||
-           vfos[i].radio != vfoCtx.s_prevRadio[i] || filterIndex != vfoCtx.s_prevFlt[i])) {
+           vfos[i].radio != vfoCtx.s_prevRadio[i] ||
+           filterIndex != vfoCtx.s_prevFlt[i] || chChanged)) {
         static const char *const BADGE[2][5] = {
             {"BK AUTO", "BK HF", "BK VHF", "BK UHF", "BK 800"},
             {"MBK AUTO", "MBK HF", "MBK VHF", "MBK UHF", "MBK 800"},
         };
+        bool mon = vfos[i].monitor || VFO_ChannelMode(i);
         const char *bdg;
         if (vfos[i].radio == RADIO_SI4732)
-          bdg = vfos[i].monitor ? "MSI" : "SI";
+          bdg = mon ? "MSI" : "SI";
         else
-          bdg = BADGE[vfos[i].monitor ? 1 : 0][filterIndex + 1];
+          bdg = BADGE[mon ? 1 : 0][filterIndex + 1];
         lv_label_set_text_static(vfoCtx.s_badgeLbl[i], bdg);
         lv_label_set_text_static(vfoCtx.s_modLbl[i], MOD_NAMES[vfos[i].modulation]);
         vfoCtx.s_prevMod[i] = vfos[i].modulation;
@@ -392,14 +468,51 @@ public:
         vfoCtx.s_prevFlt[i] = filterIndex;
       }
 
-      /* название диапазона плана (40m, AIR, FM BC...) */
+      /* Диапазон: с закреплённым каналом крупную частоту заменяет имя, а
+       * собственная частота VFO остаётся мелким текстом в этой строке. */
       if (vfoCtx.s_bandLbl[i]) {
         const char *bn = Band_Name(vfos[i].rxF);
-        if (first || bn != vfoCtx.s_prevBand[i]) {
-          lv_label_set_text_static(vfoCtx.s_bandLbl[i], bn);
+        if (first || bn != vfoCtx.s_prevBand[i] || chChanged ||
+            vfos[i].rxF != vfoCtx.s_prevFreq[i]) {
+          if (chActive) {
+            char fbuf[12];
+            fmt_mhz3(fbuf, sizeof(fbuf), vfos[i].rxF);
+            snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
+                     "%s %s", bn, fbuf);
+          } else if (vc) {
+            snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
+                     "%s | %s", bn, vc->name[0] ? vc->name : "CH");
+          } else {
+            snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]), "%s",
+                     bn);
+          }
+          lv_label_set_text_static(vfoCtx.s_bandLbl[i], vfoCtx.s_bandText[i]);
+          if (active)
+            lv_obj_set_style_text_color(
+                vfoCtx.s_bandLbl[i],
+                lvColor(Band_Palette565(Band_Color(vfos[i].rxF))),
+                LV_PART_MAIN);
           vfoCtx.s_prevBand[i] = bn;
+          vfoCtx.s_prevFreq[i] = vfos[i].rxF;
         }
       }
+
+      if (vfoCtx.s_chNameLbl[i]) {
+        if (chChanged)
+          lv_label_set_text_static(vfoCtx.s_chNameLbl[i],
+                                   vc && vc->name[0] ? vc->name : "CH");
+        setHidden(vfoCtx.s_chNameLbl[i], !showName);
+      }
+      setHidden(vfoCtx.s_freqLbl[i], showName);
+      if (vfoCtx.s_extraLbl[i])
+        setHidden(vfoCtx.s_extraLbl[i], showName);
+
+      vfoCtx.s_prevChValid[i] = vc != nullptr;
+      vfoCtx.s_prevChMode[i] = chActive;
+      if (vc)
+        memcpy(vfoCtx.s_prevChName[i], cn, VFO_CH_NAME_LEN);
+      else
+        memset(vfoCtx.s_prevChName[i], 0, VFO_CH_NAME_LEN);
 
       if (vfoCtx.s_stepLbl[i]) {
         if (active) {
@@ -416,6 +529,18 @@ public:
         }
       }
 
+      /* CTCSS/DCS/DTMF активного приёмника — рядом с AFC. */
+      if (active) {
+        char tone[20];
+        Tone_GetStatus(tone, sizeof(tone));
+        if (strcmp(tone, vfoCtx.s_toneShown)) {
+          strcpy(vfoCtx.s_toneShown, tone);
+          if (vfoCtx.s_toneLbl)
+            lv_label_set_text_static(vfoCtx.s_toneLbl, vfoCtx.s_toneShown);
+        }
+        setHidden(vfoCtx.s_toneLbl, tone[0] == 0);
+      }
+
       /* S-метр активного VFO: квадратики по dBm, шкала S1..S9+, peak hold,
        * рядом — значение в дБм без подписи. У SI своих измерений пока нет;
        * обновляем раз в 250 мс. */
@@ -428,9 +553,13 @@ public:
           uint8_t wR = 0;
           Color cR = C_GREEN;
           int16_t dbm = 0;
+          int16_t afc = 0;
+          bool rx = false;
           if (haveMeter) {
             BK4819_SelectChip(vfos[i].radio == RADIO_BK4819B ? 1 : 0);
             uint16_t rssi = BK4819_GetRSSI();
+            afc = BK4819_GetAFCValue();
+            rx = (squelchLevel == 0) || BK4819_IsSquelchOpen();
             dbm = Rssi2DBm(rssi);
             const uint8_t *r2 = rssi2s[vfos[i].rxF >= 30 * MHZ ? 1 : 0];
             int lo = -(int)r2[0];
@@ -471,17 +600,38 @@ public:
             }
             if (vfoCtx.s_dbmLbl)
               setHidden(vfoCtx.s_dbmLbl, false);
+            if (vfoCtx.s_afcLbl) {
+              if (rx) {
+                if (afc != vfoCtx.s_prevAfc) {
+                  vfoCtx.s_prevAfc = afc;
+                  if (afc)
+                    snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC %+d",
+                             (int)afc);
+                  else
+                    snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC 0");
+                  lv_label_set_text_static(vfoCtx.s_afcLbl, vfoCtx.s_afcBuf);
+                }
+                setHidden(vfoCtx.s_afcLbl, false);
+              } else {
+                /* Без приёма AFC не информативен. */
+                setHidden(vfoCtx.s_afcLbl, true);
+              }
+            }
           } else {
             if (vfoCtx.s_peak)
               setHidden(vfoCtx.s_peak, true);
             if (vfoCtx.s_dbmLbl)
               setHidden(vfoCtx.s_dbmLbl, true);
+            if (vfoCtx.s_afcLbl)
+              setHidden(vfoCtx.s_afcLbl, true);
           }
         } else if (!haveMeter) {
           if (vfoCtx.s_peak)
             setHidden(vfoCtx.s_peak, true);
           if (vfoCtx.s_dbmLbl)
             setHidden(vfoCtx.s_dbmLbl, true);
+          if (vfoCtx.s_afcLbl)
+            setHidden(vfoCtx.s_afcLbl, true);
         }
       }
 
@@ -520,16 +670,24 @@ public:
       return true;
     }
 
+    /* Ввод частоты/шаг/смена диапазона — ручная настройка, канал снимаем. */
+    if (state == KEY_EVT_RELEASE && k >= KEY_0 && k <= KEY_9 &&
+        !NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
+      leaveChannelMode(currentVfo);
+
     if (NumVal_Key(&vfoCtx.numVal[currentVfo], k, state))
       return true;
 
     if (state == KEY_LONG_PRESSED_CONT) {
       switch (k) {
       case KEY_UP:
+        leaveChannelMode(currentVfo);
         Radio_TuneStep(+1);
         return true;
       case KEY_DOWN:
+        leaveChannelMode(currentVfo);
         Radio_TuneStep(-1);
+        return true;
       default:
         break;
       }
@@ -557,13 +715,14 @@ public:
         Mode_Switch(MODE_RADIO);
         return true;
       case KEY_SIDE1: /* группа диапазонов: вещание → SSB → службы */
+        leaveChannelMode(currentVfo);
         Radio_NextGroup();
         return true;
       case KEY_SIDE2: /* фильтр: AUTO → HF → VHF → UHF → 800 */
         Radio_NextFilter();
         return true;
-      case KEY_8: /* список находок */
-        LOOTLIST_OpenFrom(MODE_VFO);
+      case KEY_8: /* список диапазонов: правка плана во флеше */
+        Mode_Switch(MODE_BANDLIST);
         return true;
       case KEY_9: { /* текущая частота — в белый список находок */
         VFO *v = &vfos[currentVfo];
@@ -580,15 +739,22 @@ public:
       case KEY_HASH: /* приёмник: AUTO ↔ BK/SI, если чип поддерживает */
         Radio_NextReceiver();
         return true;
-      case KEY_1: /* multiwatch: закрепить/снять VFO 1 */
-        Radio_ToggleMonitor(0);
+      case KEY_1: /* канальный VFO — выключить; активный — включить;
+                     остальные — multiwatch */
+      case KEY_2:
+      case KEY_3: {
+        uint8_t idx = (uint8_t)(k - KEY_1);
+        if (VFO_ChannelMode(idx)) {
+          VFO_SetChannelMode(idx, false);
+          Store_MarkDirty();
+        } else if (idx == currentVfo) {
+          if (VFO_SetChannelMode(idx, true))
+            Store_MarkDirty();
+        } else {
+          Radio_ToggleMonitor(idx);
+        }
         return true;
-      case KEY_2: /* multiwatch: закрепить/снять VFO 2 */
-        Radio_ToggleMonitor(1);
-        return true;
-      case KEY_3: /* multiwatch: закрепить/снять VFO 3 */
-        Radio_ToggleMonitor(2);
-        return true;
+      }
       default:
         break;
       }
@@ -606,9 +772,11 @@ public:
       initNumVals();
       return true;
     case KEY_UP:
+      leaveChannelMode(currentVfo);
       Radio_TuneStep(+1);
       return true;
     case KEY_DOWN:
+      leaveChannelMode(currentVfo);
       Radio_TuneStep(-1);
       return true;
     case KEY_SIDE1: /* BK: принудительно открыть/закрыть шумодав; SI: диапазон */
@@ -616,11 +784,13 @@ public:
         Radio_ToggleSquelchForce();
         return true;
       }
+      leaveChannelMode(currentVfo);
       Radio_NextBand(+1);
       return true;
     case KEY_SIDE2: /* на BK диапазоны не листаем; SI — предыдущий */
       if (vfos[currentVfo].radio != RADIO_SI4732)
         return true;
+      leaveChannelMode(currentVfo);
       Radio_NextBand(-1);
       return true;
     case KEY_STAR: /* список находок (шаг — в длинном MENU) */

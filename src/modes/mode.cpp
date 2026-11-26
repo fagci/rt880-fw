@@ -2,6 +2,7 @@
 #include "../driver/board.h"
 #include "../driver/st7789.h"
 #include "../helper/store.h"
+#include "../helper/tone.h"
 #include "../ui/graphics.h"
 #include "../ui/spectrum.h"
 #include "../ui/statusline.h"
@@ -13,6 +14,7 @@ static Mode *next = nullptr;
 static bool s_displayOff;
 static bool s_keyLocked;
 static bool s_paintPaused;
+static bool s_displayRxGate;
 
 void Mode_Switch(Mode &mode) {
   next = &mode;
@@ -20,6 +22,7 @@ void Mode_Switch(Mode &mode) {
 
 void Mode_Update() {
   if (next) {
+    Tone_Reset();
     if (current)
       current->exit();
     /* Лейблы пула (Printf*) живут между режимами: их LVGL перерисует поверх
@@ -64,6 +67,8 @@ void Mode_Render() {
 
 void Mode_SetPaint(bool on) { s_paintPaused = !on; }
 bool Mode_PaintPaused(void) { return s_paintPaused; }
+void Mode_SetDisplayRxGate(bool on) { s_displayRxGate = on; }
+bool Mode_DisplayRxGate(void) { return s_displayRxGate; }
 
 uint16_t Mode_RenderInterval() {
   return current ? current->renderIntervalMs() : 50;

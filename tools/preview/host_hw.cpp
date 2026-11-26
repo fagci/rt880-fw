@@ -19,7 +19,7 @@ extern "C" uint32_t millis(void) { return g_now_ms; }
 extern "C" void delay_us(uint32_t) {}
 extern "C" void delay_ms(uint32_t) {}
 volatile uint32_t tick_ms;
-uint16_t g_bat_cv = 372;
+uint16_t g_bat_cv = 744;
 extern "C" uint16_t battery_voltage_cv(void) { return g_bat_cv; }
 extern "C" void audio_path_set(uint8_t) {}
 extern "C" void uart_printf(const char *, ...) {}
@@ -131,8 +131,24 @@ void BK4819_WriteRegister(uint8_t, uint16_t) {}
 uint16_t BK4819_ReadRegister(uint8_t) { return 0; }
 uint16_t BK4819_ReadRegisterRaw(uint8_t) { return 0; }
 uint8_t BK4819_GetAFC(void) { return 0; }
+int16_t BK4819_GetAFCValue(void) { return 0; }
+void BK4819_EnableCxCSSScan(void) {}
+void BK4819_DisableCxCSSScan(void) {}
+BK4819_CssScanResult_t BK4819_GetCxCSSScanResult(uint32_t *cdcss,
+                                                 uint16_t *ctcss) {
+  if (cdcss)
+    *cdcss = 0;
+  if (ctcss)
+    *ctcss = 0;
+  return BK4819_CSS_RESULT_NOT_FOUND;
+}
+void BK4819_EnableDTMF(void) {}
+void BK4819_DisableDTMF(void) {}
+uint8_t BK4819_GetDTMF_5TONE_Code(void) { return 0; }
 void BK4819_SelectFilterByFrequency(uint32_t) {}
 void BK4819_TuneTo(uint32_t f, bool) { g_tuneF = f; }
+void BK4819_RxSuspend(void) {}
+void BK4819_RxResume(void) {}
 uint16_t BK4819_GetRSSI(void) { return host_signal_rssi(g_tuneF); }
 bool BK4819_IsSquelchOpen(void) { return host_signal_rssi(g_tuneF) > (uint16_t)((-95 + 160) * 2); }
 void BK4819_EnableFrequencyScanEx2(FreqScanTime, uint16_t) {}

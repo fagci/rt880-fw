@@ -1,6 +1,11 @@
 #include "bands.h"
+#include "driver/board.h"
+#include "helper/store.h"
 #include "misc.h"
 #include "radio.h"
+
+#include <stdio.h>
+#include <string.h>
 
 /* Единственный источник вещательных КВ-полос (кГц, конец исключительный). */
 #define BC_SW_BANDS(X)                                                         \
@@ -29,8 +34,9 @@ const uint8_t BC_BAND_COUNT = sizeof(BC_BANDS) / sizeof(BC_BANDS[0]);
 #define SVC(a, b, m, st, nm) {a, b, m, st, nm, CAT_SVC, true}
 #define BC_PLAN_ROW(nm, a, b) BC(a, b, MOD_AM, STEP_5_0kHz, nm " BC"),
 
-/* Первое совпадение выигрывает; общие диапазоны (loop=false) — в конце.
- * V/UHF: пока везде FM и шаг 25 кГц (авиа — AM). */
+/* Заводской план: шаблон для первой правки и запасной вариант, если
+ * пользовательский список пуст. Первое совпадение выигрывает; общие
+ * диапазоны (loop=false) — в конце. */
 static const BandPlan PLAN[] = {
     /* вещание: ДВ/СВ и все КВ-вещательные */
     BC(153, 279, MOD_AM, STEP_9_0kHz, "LW"),
@@ -60,27 +66,199 @@ static const BandPlan PLAN[] = {
     {30000, 1340000, MOD_FM, STEP_25_0kHz, "V/UHF", CAT_NONE, false},
 };
 #define PLAN_N (sizeof(PLAN) / sizeof(PLAN[0]))
+static_assert(PLAN_N <= BAND_MAX, "PLAN must fit BAND_MAX");
+
+/* ─── Пользовательский список ─── */
+static BandRec s_user[BAND_MAX];
+static uint8_t s_count;
+static bool s_inited;
+static bool s_dirty;
+static uint32_t s_dirtyAt;
+static BandPlan s_scratch;
 
 /* последняя частота в каждом диапазоне — при возврате SIDE1/2 */
-static uint32_t s_bandMem[PLAN_N];
+static uint32_t s_bandMem[BAND_MAX];
 /* последний диапазон, где были в группе — при переключении группы */
 static int8_t s_groupLast[CAT_COUNT] = {-1, -1, -1};
 
-uint8_t Band_Count(void) { return (uint8_t)PLAN_N; }
+#define BAND_SAVE_DELAY_MS 2500u
 
-const BandPlan &Band_At(uint8_t i) { return PLAN[i]; }
+static uint8_t catColor(uint8_t cat) {
+  switch (cat) {
+  case CAT_BC:
+    return 3; /* жёлтый */
+  case CAT_HAM:
+    return 1; /* зелёный */
+  case CAT_SVC:
+    return 2; /* голубой */
+  default:
+    return 2; /* голубой: общие HF/V-UHF не должны выглядеть «неактивными» */
+  }
+}
+
+static void nameCopy(char *dst, const char *src) {
+  if (!src)
+    src = "";
+  strncpy(dst, src, BAND_NAME_LEN - 1);
+  dst[BAND_NAME_LEN - 1] = 0;
+}
+
+static bool sanitizeRec(BandRec *r) {
+  if (r->endKhz <= r->startKhz || r->startKhz < 1 || r->endKhz > 1340000u)
+    return false;
+  if (r->mod > MOD_WFM)
+    r->mod = MOD_FM;
+  if (r->step >= STEP_COUNT)
+    r->step = STEP_25_0kHz;
+  if (r->cat != CAT_NONE && r->cat >= CAT_COUNT)
+    r->cat = CAT_NONE;
+  if (r->color >= 8)
+    r->color = catColor(r->cat);
+  if (r->squelch > 10 && r->squelch != BAND_SQL_NONE)
+    r->squelch = BAND_SQL_NONE;
+  r->name[BAND_NAME_LEN - 1] = 0;
+  if (!r->name[0])
+    nameCopy(r->name, "BAND");
+  return true;
+}
+
+static void seedFactory(void) {
+  s_count = 0;
+  for (uint8_t i = 0; i < PLAN_N && s_count < BAND_MAX; ++i) {
+    const BandPlan &p = PLAN[i];
+    BandRec *r = &s_user[s_count++];
+    memset(r, 0, sizeof(*r));
+    r->startKhz = p.startKhz;
+    r->endKhz = p.endKhz;
+    r->corr10 = 0;
+    r->mod = p.mod;
+    r->step = p.step;
+    r->cat = p.cat;
+    r->color = catColor(p.cat);
+    r->squelch = BAND_SQL_NONE;
+    nameCopy(r->name, p.name);
+  }
+}
+
+static void clearMemory(void) {
+  memset(s_bandMem, 0, sizeof(s_bandMem));
+  for (uint8_t c = 0; c < CAT_COUNT; ++c)
+    s_groupLast[c] = -1;
+}
+
+void Band_Init(void) {
+  if (s_inited)
+    return;
+  s_inited = true;
+  s_count = 0;
+  s_dirty = false;
+  clearMemory();
+
+#ifdef HOST_PREVIEW
+  seedFactory();
+#else
+  uint16_t n = 0;
+  if (Store_BandsLoad(&n)) {
+    for (uint16_t i = 0; i < n && s_count < BAND_MAX; ++i) {
+      BandRec r;
+      if (!Store_BandsRead(i, &r))
+        break;
+      if (sanitizeRec(&r))
+        s_user[s_count++] = r;
+    }
+  }
+  if (!s_count)
+    seedFactory();
+#endif
+}
+
+void Band_Reset(void) {
+  s_inited = true;
+  s_dirty = false;
+  clearMemory();
+  seedFactory();
+}
+
+static void ensureInit(void) {
+  if (!s_inited)
+    Band_Init();
+}
+
+#ifndef HOST_PREVIEW
+static bool saveAll(void) {
+  if (!Store_BandsWriteBegin())
+    return false;
+  for (uint8_t i = 0; i < s_count; ++i) {
+    if (!Store_BandsWritePut(&s_user[i])) {
+      Store_BandsWriteAbort();
+      return false;
+    }
+  }
+  if (!Store_BandsWriteCommit(s_count)) {
+    Store_BandsWriteAbort();
+    return false;
+  }
+  return true;
+}
+#endif
+
+void Band_Touch(void) {
+  s_dirty = true;
+  s_dirtyAt = millis();
+}
+
+void Band_Poll(void) {
+  if (!s_dirty)
+    return;
+  if (millis() - s_dirtyAt < BAND_SAVE_DELAY_MS)
+    return;
+#ifdef HOST_PREVIEW
+  s_dirty = false;
+#else
+  if (saveAll())
+    s_dirty = false;
+  else
+    s_dirtyAt = millis();
+#endif
+}
+
+uint8_t Band_Count(void) {
+  ensureInit();
+  return s_count;
+}
+
+const BandPlan &Band_At(uint8_t i) {
+  ensureInit();
+  memset(&s_scratch, 0, sizeof(s_scratch));
+  s_scratch.name = "";
+  if (i >= s_count)
+    return s_scratch;
+  const BandRec &r = s_user[i];
+  s_scratch.startKhz = r.startKhz;
+  s_scratch.endKhz = r.endKhz;
+  s_scratch.mod = r.mod;
+  s_scratch.step = r.step;
+  s_scratch.name = r.name;
+  s_scratch.cat = r.cat;
+  s_scratch.loop = (r.cat != CAT_NONE);
+  s_scratch.corr10 = r.corr10;
+  s_scratch.squelch = r.squelch;
+  s_scratch.color = r.color;
+  return s_scratch;
+}
 
 int8_t Band_Index(uint32_t f) {
+  ensureInit();
   uint32_t khz = f / 100; /* 10 Гц → кГц */
-  for (uint8_t i = 0; i < PLAN_N; i++)
-    if (khz >= PLAN[i].startKhz && khz < PLAN[i].endKhz)
+  for (uint8_t i = 0; i < s_count; i++)
+    if (khz >= s_user[i].startKhz && khz < s_user[i].endKhz)
       return (int8_t)i;
   return -1;
 }
 
 const BandPlan *Band_Find(uint32_t f) {
   int8_t i = Band_Index(f);
-  return i < 0 ? nullptr : &PLAN[i];
+  return i < 0 ? nullptr : &Band_At((uint8_t)i);
 }
 
 const char *Band_Name(uint32_t f) {
@@ -99,10 +277,75 @@ bool Band_Range(uint32_t f, uint32_t *start, uint32_t *end) {
   return true;
 }
 
-uint32_t Band_Mem(uint8_t i) { return s_bandMem[i]; }
+int16_t Band_Corr10(uint32_t f) {
+  const BandPlan *b = Band_Find(f);
+  return b ? b->corr10 : 0;
+}
 
-void Band_MemSet(uint8_t i, uint32_t f) { s_bandMem[i] = f; }
+uint8_t Band_Squelch(uint32_t f) {
+  const BandPlan *b = Band_Find(f);
+  return b ? b->squelch : BAND_SQL_NONE;
+}
 
-int8_t Band_GroupLast(uint8_t cat) { return s_groupLast[cat]; }
+uint8_t Band_Color(uint32_t f) {
+  const BandPlan *b = Band_Find(f);
+  return b ? b->color : 7;
+}
 
-void Band_GroupLastSet(uint8_t cat, int8_t i) { s_groupLast[cat] = i; }
+const BandRec *Band_Rec(uint16_t i) {
+  ensureInit();
+  return i < s_count ? &s_user[i] : nullptr;
+}
+
+BandRec *Band_RecEdit(uint16_t i) {
+  ensureInit();
+  return i < s_count ? &s_user[i] : nullptr;
+}
+
+int16_t Band_Add(const BandRec *rec) {
+  ensureInit();
+  if (!rec || s_count >= BAND_MAX)
+    return -1;
+  BandRec r = *rec;
+  if (!sanitizeRec(&r))
+    return -1;
+  s_user[s_count] = r;
+  Band_Touch();
+  return (int16_t)s_count++;
+}
+
+bool Band_Delete(uint16_t i) {
+  ensureInit();
+  if (i >= s_count || s_count <= 1)
+    return false;
+  for (uint16_t k = i; k + 1 < s_count; ++k)
+    s_user[k] = s_user[k + 1];
+  s_count--;
+  clearMemory(); /* индексы сдвинулись — память диапазонов/групп не годна */
+  Band_Touch();
+  return true;
+}
+
+uint32_t Band_Mem(uint8_t i) {
+  return i < BAND_MAX ? s_bandMem[i] : 0;
+}
+
+void Band_MemSet(uint8_t i, uint32_t f) {
+  if (i < BAND_MAX)
+    s_bandMem[i] = f;
+}
+
+int8_t Band_GroupLast(uint8_t cat) {
+  if (cat >= CAT_COUNT)
+    return -1;
+  int8_t v = s_groupLast[cat];
+  if (v < 0 || v >= (int8_t)Band_Count() || s_user[v].cat != cat)
+    return -1; /* диапазон удалён или сменил категорию */
+  return v;
+}
+
+void Band_GroupLastSet(uint8_t cat, int8_t i) {
+  if (cat >= CAT_COUNT)
+    return;
+  s_groupLast[cat] = (i >= 0 && i < (int8_t)Band_Count()) ? i : -1;
+}

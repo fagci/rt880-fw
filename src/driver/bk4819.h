@@ -68,6 +68,13 @@ typedef enum {
   FILTER_800 = 0x40 >> BK4819_GPIO5_UHF800_RX,
 } Filter;
 
+/* Результат скана субтонов (REG_68/69/6A). */
+typedef enum {
+  BK4819_CSS_RESULT_NOT_FOUND,
+  BK4819_CSS_RESULT_CTCSS,
+  BK4819_CSS_RESULT_CDCSS,
+} BK4819_CssScanResult_t;
+
 typedef struct {
   uint16_t regValue;
   uint8_t gainDb;
@@ -77,6 +84,10 @@ extern const Gain gainTable[32];
 
 void BK4819_Init(void);
 void BK4819_Idle(void);
+/* Погасить/вернуть тракт приёма (RX_LINK/AF/RX DSP) на время SPI-кадра
+ * дисплея: PLL/VCO остаются, частота не меняется. */
+void BK4819_RxSuspend(void);
+void BK4819_RxResume(void);
 
 void BK4819_WriteRegister(uint8_t reg, uint16_t data);
 uint16_t BK4819_ReadRegister(uint8_t reg);
@@ -91,6 +102,18 @@ void BK4819_SetAGC(bool useDefault, uint8_t gainIndex);
 uint8_t BK4819_GetGainDb(uint8_t gainIndex);
 void BK4819_SetAFC(uint8_t level);
 uint8_t BK4819_GetAFC();
+/* Текущая поправка AFC: знаковое значение REG_6D (как в k1-fw). */
+int16_t BK4819_GetAFCValue(void);
+
+/* CTCSS/DCS: включить скан субтонов, затем прочитать результат.
+ * Скан неблокирующий: между Enable и чтением REG_68/69 нужно ~0.6 с. */
+void BK4819_EnableCxCSSScan(void);
+void BK4819_DisableCxCSSScan(void);
+BK4819_CssScanResult_t BK4819_GetCxCSSScanResult(uint32_t *pCdcssFreq,
+                                                 uint16_t *pCtcssFreq);
+void BK4819_EnableDTMF(void);
+void BK4819_DisableDTMF(void);
+uint8_t BK4819_GetDTMF_5TONE_Code(void);
 
 uint16_t BK4819_GetRSSI(void);
 uint8_t BK4819_GetSNR(void);

@@ -13,6 +13,7 @@
 #include "store.h"
 #include "at32f423.h"
 #include "bootprof.h"
+#include "boot_layout.h"
 
 #include <string.h>
 
@@ -483,7 +484,12 @@ static void run(const char *cmd) {
     dump_boot();
   else if (strcmp(cmd, "boot") == 0)
     enter_loader();
-  else if (strcmp(cmd, "reboot") == 0) {
+  else if (strcmp(cmd, "fastboot") == 0) {
+    *(volatile uint32_t *)BOOT2_MAGIC_ADDR = BOOT2_MAGIC;
+    uart_puts("FASTBOOT\r\n");
+    uart_flush();
+    NVIC_SystemReset();
+  } else if (strcmp(cmd, "reboot") == 0) {
     uart_puts("REBOOT\r\n");
     uart_flush();
     NVIC_SystemReset();
@@ -527,7 +533,7 @@ static void run(const char *cmd) {
     lv_port_stats_reset();
     uart_puts("LVSTAT RESET\r\n");
   } else if (strcmp(cmd, "help") == 0)
-    uart_puts("boot\r\nreboot\r\nprof\r\ndumpboot\r\nflashmap\r\n"
+    uart_puts("boot\r\nfastboot\r\nreboot\r\nprof\r\ndumpboot\r\nflashmap\r\n"
               "flashdump <addr> <len>\r\nstore\r\nstorewipe\r\n"
               "paint 0|1\r\nlv [reset]\r\n"
               "bk r|w|chip|filter|bw|afc|agc|ant|tune|scan|stop|res|"

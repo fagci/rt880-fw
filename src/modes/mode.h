@@ -22,6 +22,10 @@ void Mode_Render(void);
  * дисплей молчит и не добавляет помеху к RSSI. */
 void Mode_SetPaint(bool on);
 bool Mode_PaintPaused(void);
+/* Анализатор/сканер: любой LVGL-flush — это SPI, его шум попадает в приём.
+ * Главный цикл на время flush гасит RX и перекалибрует VCO. */
+void Mode_SetDisplayRxGate(bool on);
+bool Mode_DisplayRxGate(void);
 uint16_t Mode_RenderInterval(void);
 void Mode_Key(KEY_Code_t key, Key_State_t state);
 bool Mode_KeyLocked(void);

@@ -75,6 +75,13 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	$(OBJCOPY) -O ihex $< $@
 
+# stage-2 (fast-прошивка) и общий образ для стокового загрузчика.
+boot2:
+	$(MAKE) -C boot2
+
+install-image: all boot2
+	python3 tools/mkimage.py $(BUILD)/boot2.bin $(BUILD)/$(TARGET).bin $(BUILD)/rt880-install.bin
+
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c -MMD -MP $(CXXFLAGS) $< -o $@
@@ -98,4 +105,4 @@ $(BUILD)/%.o: %.s
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean
+.PHONY: all clean boot2 install-image

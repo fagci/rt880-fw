@@ -7,6 +7,7 @@
 #include "keyboard.h"
 #include "st7789.h"
 #include "uart.h"
+#include "boot_layout.h"
 
 volatile uint32_t tick_ms = 0;
 
@@ -205,13 +206,17 @@ uint16_t rt880_adc_read_keyin(void) {
 }
 
 void board_init(void) {
-  SCB->VTOR = 0x08002800; // таблица векторов не на 0x08000000
+  SCB->VTOR = APP_BASE; // таблица векторов не на 0x08000000
 
   /* Если загрузчик всё же ушёл в приложение, PB6 остался залоченным выходом
    * в ноль после software-входа. Снимается только сбросом. */
   crm_periph_clock_enable(CRM_GPIOB_PERIPH_CLOCK, TRUE);
   if (GPIOB->wpr & GPIO_PINS_6)
     NVIC_SystemReset();
+
+  /* Загрузчик/stage-2 мог оставить PRIMASK; без этого не работают
+   * SysTick (LVGL) и прерывание консоли USART6. */
+  __enable_irq();
 
   clock_init();
   Prof_Mark(PROF_CLOCK);

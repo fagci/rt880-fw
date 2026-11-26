@@ -343,6 +343,41 @@ static inline uint16_t scale_freq(const uint16_t freq) {
 
 void BK4819_Idle(void) { BK4819_WriteRegister(BK4819_REG_30, 0x0000); }
 
+/* ── RX suspend на время кадра дисплея ──────────────────────── */
+/* Снимаем только приёмный тракт, PLL/VCO и частота остаются: после кадра
+ * достаточно вернуть регистр и дать АРУ/RSSI пару миллисекунд. */
+static uint16_t s_rxSaved;
+static bool s_rxSuspendValid;
+
+static const uint16_t RX_TRACK_MASK =
+    BK4819_REG_30_ENABLE_VCO_CALIB | BK4819_REG_30_ENABLE_PLL_VCO |
+    BK4819_REG_30_ENABLE_RX_LINK | BK4819_REG_30_ENABLE_AF_DAC |
+    BK4819_REG_30_ENABLE_DISC_MODE | BK4819_REG_30_ENABLE_RX_DSP;
+
+void BK4819_RxSuspend(void) {
+  if (s_rxSuspendValid)
+    return;
+  uint16_t reg = BK4819_ReadRegisterRaw(BK4819_REG_30);
+  if (reg == 0xFFFF) /* шина не ответила — не трогаем чип */
+    return;
+  s_rxSaved = reg;
+  s_rxSuspendValid = true;
+  BK4819_WriteRegister(BK4819_REG_30, (uint16_t)(reg & ~RX_TRACK_MASK));
+}
+
+void BK4819_RxResume(void) {
+  if (!s_rxSuspendValid)
+    return;
+  s_rxSuspendValid = false;
+  /* Возвращаем тракт и заново запускаем калибровку VCO: кадр мог прервать
+   * калибровку, начатую последним TuneTo, иначе приём остаётся обесцененным
+   * до следующей перестройки (в «still» её может не быть). */
+  BK4819_WriteRegister(BK4819_REG_30,
+                       (uint16_t)(s_rxSaved & ~BK4819_REG_30_ENABLE_VCO_CALIB));
+  BK4819_WriteRegister(BK4819_REG_30, s_rxSaved);
+  delay_us(1500);
+}
+
 /* ── Filter band tracking ───────────────────────────────────── */
 
 typedef enum {
@@ -515,6 +550,11 @@ uint8_t BK4819_GetAFC() {
     return 8 - ((afc >> 11) & 0b111);
   }
   return 0;
+}
+
+/* Знаковая поправка AFC из REG_6D: как BK4819_GetAFCValue в k1-fw. */
+int16_t BK4819_GetAFCValue() {
+  return ((int16_t)BK4819_ReadRegister(0x6D) * 5) / 6;
 }
 
 uint32_t BK4819_GetFrequency(void) {
@@ -862,11 +902,44 @@ void BK4819_ExitSubAu(void) {
 
 void BK4819_EnableDTMF(void) {
   BK4819_WriteRegister(BK4819_REG_21, 0x06D8);
+  /* Порог 24, до 14 символов, биты 15/6 — как в k1-fw. */
   BK4819_WriteRegister(BK4819_REG_24,
-                       BK4819_REG_24_ENABLE | BK4819_REG_24_SELECT_DTMF | 1);
+                       (1U << 15) | (24U << 7) | (1U << 6) |
+                           BK4819_REG_24_ENABLE | BK4819_REG_24_SELECT_DTMF |
+                           (14U << 0));
 }
 
 void BK4819_DisableDTMF(void) { BK4819_WriteRegister(BK4819_REG_24, 0); }
+
+uint8_t BK4819_GetDTMF_5TONE_Code(void) {
+  return (BK4819_ReadRegister(BK4819_REG_0B) >> 8) & 0x0F;
+}
+
+/* Скан неизвестного CTCSS/DCS: REG_51 = 0x0300 (режим полосы субтонов).
+ * Чип заполняет REG_68/69/6A примерно за 0.6 с; на обычном приёме
+ * возвращаем REG_51 в 0. */
+void BK4819_EnableCxCSSScan(void) {
+  BK4819_WriteRegister(BK4819_REG_51, 0x0300);
+}
+
+void BK4819_DisableCxCSSScan(void) { BK4819_WriteRegister(BK4819_REG_51, 0); }
+
+BK4819_CssScanResult_t BK4819_GetCxCSSScanResult(uint32_t *pCdcssFreq,
+                                                 uint16_t *pCtcssFreq) {
+  uint16_t high = BK4819_ReadRegister(BK4819_REG_69);
+  if ((high & 0x8000) == 0) {
+    uint16_t low = BK4819_ReadRegister(BK4819_REG_6A);
+    *pCdcssFreq = ((uint32_t)(high & 0xFFF) << 12) | (low & 0xFFF);
+    return BK4819_CSS_RESULT_CDCSS;
+  }
+  uint16_t low = BK4819_ReadRegister(BK4819_REG_68);
+  if ((low & 0x8000) == 0) {
+    /* Частота CTCSS в десятых герца: REG_68 / 20.64888 * 10. */
+    *pCtcssFreq = (uint16_t)(((uint32_t)(low & 0x1FFF) * 4843) / 10000);
+    return BK4819_CSS_RESULT_CTCSS;
+  }
+  return BK4819_CSS_RESULT_NOT_FOUND;
+}
 
 void BK4819_SetCTCSSFrequency(uint16_t freq) {
   BK4819_WriteRegister(BK4819_REG_51, BK4819_REG_51_ENABLE_CxCSS |

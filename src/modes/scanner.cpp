@@ -9,7 +9,11 @@
  * - закрытая частота — сразу дальше; каждые 64 закрытых шага порог
  *   дрейфует вниз;
  * - частоты-кратные 1.3 МГц (гармоники ПЧ) пропускаются;
- * - каждый замер попадает в спектр (SP_AddPoint), водопад — по строке.
+ * - каждый замер попадает в спектр (SP_AddPoint), водопад — по строке;
+ * - во время прохода экран не перерисовывается: SPI-заливки дисплея дают
+ *   помеху в 437–441 МГц. Спектр — на границе прохода/по смене диапазона,
+ *   текст (частота/состояние) — не реже раза в 500 мс, иначе он «виснет»;
+ *   после любого кадра следующий замер — с паузой на восстановление тракта.
  *
  * Только BK4819: используется VFO на BK (при необходимости временно
  * переключаемся на него, восстанавливаем на выходе).
@@ -87,10 +91,15 @@ static struct Ctx {
   uint32_t curF;        /* текущая позиция */
   uint16_t floorRssi;   /* noise floor (сырой RSSI) */
   uint16_t holdThr;     /* порог удержания по длинной выдержке */
-  bool sweepDone;       /* проход завершён — рисуем строку водопада */
+  bool sweepDone;       /* проход завершён — рисуем кадр */
   bool isListening;     /* HOLD: стоим и слушаем */
   bool menuWasOpen;     /* меню закрылось — перерисовать спектр */
   bool paintHeld;       /* кадр HOLD нарисован — экран не трогаем */
+  bool wasMeasuring;    /* прошлый кадр замеряли — нужен кадр на переходе */
+  bool redraw;          /* клавиша изменила экран — нарисовать сразу */
+  bool spiGuard;        /* после кадра — выдержать паузу перед замером */
+  uint16_t guardUs;     /* пауза для первого замера после кадра, мкс */
+  uint32_t lastFrameMs; /* последний нарисованный кадр — не реже раза в 500 мс */
   bool scanning = true; /* false = пауза (ручная перестройка) */
   bool waterfall = true;
   bool dacOn;
@@ -121,6 +130,12 @@ static struct Ctx {
  * выдержку быстрого прохода (отображается в центре над спектром). */
 static const uint16_t DWELL_US[] = {250, 500, 1000, 2000, 4000};
 #define DWELL_N (sizeof(DWELL_US) / sizeof(DWELL_US[0]))
+
+/* Экран рисуется прямым SPI и даёт помеху в 437–441 МГц. Замер на стенде
+ * (harm next, 438.775 МГц после кадра): при выдержке 500 мкс RSSI +39 ед.,
+ * 2500 мкс +13, 5000 мкс — уже как без кадра. Первому замеру после кадра
+ * даём 5 мс на восстановление тракта/АРУ. */
+#define SPI_SETTLE_US 5000
 
 
 /* состояние сканирования */
@@ -421,10 +436,20 @@ static void scanStep() {
    * проходе. */
   if (!listening) {
     tuneHere();
-    delay_us(DWELL_US[ctx.dwellIdx]);
+    /* После кадра экрана выдержка не короче SPI_SETTLE_US: SPI-помеха уже
+     * кончилась, но RSSI-фильтр BK ещё не восстановился. */
+    uint16_t dwell = DWELL_US[ctx.dwellIdx];
+    if (ctx.guardUs > dwell)
+      dwell = ctx.guardUs;
+    ctx.guardUs = 0;
+    delay_us(dwell);
   } else {
     vfos[currentVfo].rxF = ctx.curF;
-    delay_us(CONFIRM_DWELL_US);
+    uint16_t dwell = CONFIRM_DWELL_US;
+    if (ctx.guardUs > dwell)
+      dwell = ctx.guardUs;
+    ctx.guardUs = 0;
+    delay_us(dwell);
   }
   uint16_t rssi = BK4819_GetRSSI();
   if (ctx.dbg)
@@ -597,6 +622,15 @@ public:
     ctx.dacOn = false;
     Radio_ScanAudio(false);
     ctx.captureOnExit = false;
+    /* Первый кадр после входа рисуем сразу (wasMeasuring мы ещё не замеряли),
+     * дальше — только на границе прохода. */
+    ctx.wasMeasuring = false;
+    ctx.paintHeld = false;
+    ctx.redraw = false;
+    ctx.spiGuard = false;
+    ctx.guardUs = 0;
+    ctx.lastFrameMs = millis();
+    Mode_SetDisplayRxGate(true);
   }
 
   void update() override {
@@ -613,6 +647,9 @@ public:
     NumVal_Update(&ctx.numVal[1]);
     bool editing = NumVal_IsEditing(&ctx.numVal[0]) || NumVal_IsEditing(&ctx.numVal[1]);
     if (ctx.scanning && !editing) {
+      /* После кадра экрана первый замер — с паузой на восстановление тракта. */
+      ctx.guardUs = ctx.spiGuard ? SPI_SETTLE_US : 0;
+      ctx.spiGuard = false;
       /* пачка шагов — иначе один шаг на итерацию главного цикла (LVGL,
        * рендер) даёт единицы-десятки шагов/с */
       for (uint8_t i = 0; i < BATCH_STEPS; i++) {
@@ -635,16 +672,35 @@ public:
     bool editing = NumVal_IsEditing(&ctx.numVal[0]) ||
                    NumVal_IsEditing(&ctx.numVal[1]);
 
+    /* Во время прохода экран не трогаем: каждый flush SPI1 дисплея даёт
+     * помеху в 437–441 МГц, и замеры становятся грязнее. Кадр обновляем на
+     * границе прохода (sweepDone), по клавише, изменившей экран (redraw), и
+     * не реже раза в 500 мс — иначе частота на экране выглядит «зависшей».
+     * Один кадр на переходе в замер — чтобы после HOLD/меню/паузы не остался
+     * старый экран. */
+    bool measuring = ctx.scanning && !ctx.isListening && !menuOpen && !editing;
+    bool measuringStart = measuring && !ctx.wasMeasuring;
+    ctx.wasMeasuring = measuring;
+    uint32_t now = millis();
+    if (measuring && !ctx.sweepDone && !measuringStart && !ctx.redraw &&
+        now - ctx.lastFrameMs < 500)
+      return;
+
     /* На открытом шумодаве экран больше не обновляем: каждый flush SPI1
      * дисплея даёт помеху в 437–441 МГц, её слышно в динамике. Кадр HOLD
      * рисуем один раз при входе в прослушивание. */
+    bool firstHold = false;
     if (ctx.isListening && !menuOpen && !editing) {
       if (ctx.paintHeld)
         return;
       ctx.paintHeld = true;
+      firstHold = true;
     } else {
       ctx.paintHeld = false;
     }
+
+    ctx.lastFrameMs = now;
+    ctx.redraw = false;
 
     STATUSLINE_render();
 
@@ -657,17 +713,27 @@ public:
     }
     ctx.menuWasOpen = menuOpen;
 
-    uint32_t now = millis();
-    if (now - ctx.lastSpRender >= 300) {
+    /* Спектр — только на границе прохода и по прямому запросу (смена
+     * диапазона/шага/уровней, кадр HOLD) — и никогда посреди прохода:
+     * большой SPI между замерами даёт помеху 437–441 МГц и периодические
+     * всплески. Кадр раз в 500 мс обновляет только текст (частоту/состояние). */
+    if (ctx.sweepDone || ctx.lastSpRender == 0 || firstHold ||
+        (!measuring && now - ctx.lastSpRender >= 300)) {
+      BK4819_RxSuspend(); /* кадр не должен попадать в приём */
       SP_Render(&ctx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
+      BK4819_RxResume();
       ctx.lastSpRender = now;
+      ctx.spiGuard = true; /* следующий замер — после паузы на восстановление */
       /* прямой DMA затёр только полосу спектра — меню перерисует пересечение */
       MenuOverlay_InvalidateBand(UI_SPECTRUM_Y, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1);
     }
     if (ctx.sweepDone) { /* строка водопада — раз за полный проход */
       ctx.sweepDone = false;
-      if (ctx.waterfall)
+      if (ctx.waterfall) {
+        BK4819_RxSuspend();
         WF_Render(UI_WATERFALL_Y, true);
+        BK4819_RxResume();
+      }
       SP_Begin(); /* пересчитать автоуровни по завершённому проходу */
     }
 
@@ -710,6 +776,8 @@ public:
             text_style(ctx.monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R, F_S),
             "L%u%s", (unsigned)LOOT_Size(), ctx.monitorMode ? " MON" : "");
 
+    /* Текст/меню — LVGL: реальный SPI-flush делает lv_timer_handler, его
+     * гасит главный цикл (Mode_DisplayRxGate). */
     MenuOverlay_Render();
   }
 
@@ -735,6 +803,7 @@ public:
                                дальше решает шумодав в VFO (Radio_Update) */
     Store_UnpinRadio();
     lv_port_set_direct_areas(false);
+    Mode_SetDisplayRxGate(false);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
@@ -765,9 +834,11 @@ public:
           FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
                    C_BLACK);
         }
+        ctx.redraw = true;
         return true;
       case KEY_5: /* сброс пикового удержания */
         SP_ResetPeaks();
+        ctx.redraw = true;
         return true;
       default:
         return false;
@@ -794,12 +865,14 @@ public:
       if (gLastActiveLoot) {
         LOOT_BlacklistLast();
         releaseHold();
+        ctx.redraw = true; /* метка в строке находки — сразу, не через 500 мс */
       }
       return true;
     case KEY_SIDE2: /* в белый список и дальше */
       if (gLastActiveLoot) {
         LOOT_WhitelistLast();
         releaseHold();
+        ctx.redraw = true;
       }
       return true;
     case KEY_5: /* ввод границ: сначала начало, затем конец */
@@ -808,16 +881,20 @@ public:
     case KEY_1: /* выдержка на частоте + */
       if (ctx.dwellIdx + 1 < (int)DWELL_N)
         ctx.dwellIdx++;
+      ctx.redraw = true;
       return true;
     case KEY_7: /* выдержка на частоте − */
       if (ctx.dwellIdx > 0)
         ctx.dwellIdx--;
+      ctx.redraw = true;
       return true;
     case KEY_3: /* шаг сканирования + */
       changeStep(+1);
+      ctx.redraw = true;
       return true;
     case KEY_9: /* шаг сканирования − */
       changeStep(-1);
+      ctx.redraw = true;
       return true;
     case KEY_UP:
       if (!ctx.scanning) { /* ручная перестройка в паузе */
@@ -825,6 +902,7 @@ public:
         tuneHere();
       } else {
         changeStep(+1);
+        ctx.redraw = true;
       }
       return true;
     case KEY_DOWN:
@@ -835,6 +913,7 @@ public:
         tuneHere();
       } else {
         changeStep(-1);
+        ctx.redraw = true;
       }
       return true;
     default:

@@ -78,17 +78,40 @@ static uint8_t chRadio(uint8_t r) {
   return r == RADIO_BK4819B ? (uint8_t)RADIO_BK4819A : r;
 }
 
+/* Имя не должно ломать recolor LVGL и строку списка. */
+static void chSanitize(CH *ch) {
+  ch->modulation &= 7;
+  ch->bw &= 15;
+  if (ch->bw > 9)
+    ch->bw = 0;
+  ch->radio = chRadio(ch->radio & 3);
+  ch->blacklist = ch->blacklist ? 1 : 0;
+  ch->name[CH_NAME_LEN - 1] = 0;
+  for (uint8_t i = 0; i < CH_NAME_LEN - 1; ++i) {
+    uint8_t c = (uint8_t)ch->name[i];
+    if (!c) {
+      memset(&ch->name[i], 0, CH_NAME_LEN - i);
+      break;
+    }
+    if (c < 32 || c > 126 || c == '#')
+      ch->name[i] = ' ';
+  }
+}
+
 static bool writeError(void) {
   backendAbort();
   return false;
 }
 
 /* Потоковая перезапись всего списка: skip — выбросить, flip — снять/поставить
- * blacklist. Читает старую запись и пишет новую, массива в RAM нет. */
-static bool rewriteList(int16_t skip, int16_t flip, uint16_t mask) {
+ * blacklist, repl — заменить запись. Читает старую запись и пишет новую,
+ * массива в RAM нет. */
+static bool rewriteList(int16_t skip, int16_t flip, int16_t repl,
+                        const CH *rep) {
   if (!backendBegin())
     return false;
   uint16_t n = 0;
+  CH put;
   for (uint16_t i = 0; i < ctx.count; ++i) {
     CH ch;
     if (!backendRead(i, &ch))
@@ -97,14 +120,18 @@ static bool rewriteList(int16_t skip, int16_t flip, uint16_t mask) {
       continue;
     if (i == flip)
       ch.blacklist = !ch.blacklist;
-    if (!backendPut(&ch))
+    if (i == repl && rep)
+      ch = *rep;
+    put = ch;
+    chSanitize(&put);
+    if (!backendPut(&put))
       return writeError();
     n++;
   }
-  if (!backendCommit(n, mask))
+  if (!backendCommit(n, ctx.mask))
     return writeError();
   ctx.count = n;
-  ctx.mask = mask;
+  ctx.mask &= 0xFFu;
   return true;
 }
 
@@ -144,6 +171,7 @@ static int16_t saveFromLoot(bool blacklist) {
         seen[(uint16_t)li >> 3] |= (uint8_t)(1u << ((uint16_t)li & 7u));
       saved++;
     }
+    chSanitize(&ch);
     if (!backendPut(&ch)) {
       backendAbort();
       return -1;
@@ -165,6 +193,7 @@ static int16_t saveFromLoot(bool blacklist) {
     ch.radio = chRadio(l->radio);
     ch.blacklist = blacklist ? 1 : 0;
     ch.scanlists = blacklist ? 0 : ctx.mask;
+    chSanitize(&ch);
     if (!backendPut(&ch)) {
       backendAbort();
       return -1;
@@ -217,7 +246,7 @@ void CH_Poll(void) {
   if (millis() - ctx.dirtyAt < CH_SAVE_DELAY_MS)
     return;
   /* Тот же список, новая маска: перезапись кольца одним снимком. */
-  if (rewriteList(-1, -1, ctx.mask))
+  if (rewriteList(-1, -1, -1, nullptr))
     ctx.dirty = false;
   else
     ctx.dirtyAt = millis();
@@ -230,7 +259,10 @@ uint16_t CH_GetScanlistMask(void) { return ctx.mask; }
 void CH_SetScanlistMask(uint16_t mask) { ctx.mask = mask & 0xFFu; }
 
 bool CH_Read(uint16_t storageIdx, CH *out) {
-  return backendRead(storageIdx, out);
+  if (!backendRead(storageIdx, out))
+    return false;
+  chSanitize(out);
+  return true;
 }
 
 uint16_t CH_BuildList(uint16_t mask, uint8_t *out, uint16_t max) {
@@ -284,9 +316,7 @@ bool CH_Add(const CH *in) {
     return false;
 
   CH add = *in;
-  add.modulation &= 7;
-  add.bw &= 7;
-  add.radio = chRadio(add.radio);
+  chSanitize(&add);
   add.blacklist = 0;
   if (!add.scanlists)
     add.scanlists = ctx.mask;
@@ -306,7 +336,10 @@ bool CH_Add(const CH *in) {
       add.scanlists = ch.scanlists;
       if (ctx.mask && add.scanlists)
         add.scanlists |= ctx.mask;
+      if (!add.name[0]) /* добавление из VFO имени не знает */
+        memcpy(add.name, ch.name, CH_NAME_LEN);
       ch = add;
+      chSanitize(&ch);
       found = true;
     }
     if (!backendPut(&ch)) {
@@ -332,14 +365,22 @@ bool CH_Add(const CH *in) {
   return true;
 }
 
+bool CH_Update(uint16_t storageIdx, const CH *in) {
+  if (storageIdx >= ctx.count || !in || !in->f)
+    return false;
+  CH ch = *in;
+  chSanitize(&ch);
+  return rewriteList(-1, -1, (int16_t)storageIdx, &ch);
+}
+
 bool CH_Delete(uint16_t storageIdx) {
   if (storageIdx >= ctx.count)
     return false;
-  return rewriteList((int16_t)storageIdx, -1, ctx.mask);
+  return rewriteList((int16_t)storageIdx, -1, -1, nullptr);
 }
 
 bool CH_ToggleBlacklist(uint16_t storageIdx) {
   if (storageIdx >= ctx.count)
     return false;
-  return rewriteList(-1, (int16_t)storageIdx, ctx.mask);
+  return rewriteList(-1, (int16_t)storageIdx, -1, nullptr);
 }

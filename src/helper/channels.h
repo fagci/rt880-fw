@@ -11,25 +11,29 @@
  * только счётчик, текущая маска сканлистов и флаг отложенной записи.
  *
  * Канал: частота (ед. 10 Гц), маска сканлистов, модуляция, полоса,
- * приёмник и флаг blacklist. 8 байт — выровнено под потоковую запись.
+ * приёмник, флаг blacklist и имя. 16 байт — выровнено под потоковую
+ * запись. Формат v1 (8 байт, без имени) читается и переписывается в v2
+ * при первом изменении (Store_Channels*).
  * scanlists == 0 — канал во всех списках; иначе биты 0..7. Маска
  * сканлиста 0 (CH_SCANLIST_ALL) — все каналы. */
 
 #define CH_MAX 200
 #define CH_SCANLIST_COUNT 8
 #define CH_SCANLIST_ALL 0u
+#define CH_NAME_LEN 8 /* 7 символов + NUL */
 
 typedef struct __attribute__((packed)) {
   uint32_t f;             /* частота, ед. 10 Гц */
   uint16_t scanlists;     /* 0 = все списки; иначе биты 0..7 */
   uint8_t modulation : 3; /* MOD_* */
-  uint8_t bw : 3;
-  uint8_t radio : 2; /* Radio */
+  uint8_t bw : 4;         /* BK4819_FilterBandwidth_t 0..9 */
+  uint8_t radio : 2;      /* Radio */
   uint8_t blacklist : 1;
-  uint8_t reserved : 7;
+  uint8_t reserved : 6;
+  char name[CH_NAME_LEN];
 } CH;
 
-static_assert(sizeof(CH) == 8, "CH must be 8 bytes");
+static_assert(sizeof(CH) == 16, "CH must be 16 bytes");
 
 void CH_Init(void);
 /* Сбросить RAM-состояние после Store_Wipe (каналы стёрты). */
@@ -57,6 +61,10 @@ int16_t CH_LoadBlacklistToLoot(void);
 /* Добавить канал (по частоте): существующий обновляется, новый дописывается
  * в конец. Возвращает false при ошибке/переполнении. */
 bool CH_Add(const CH *ch);
+
+/* Заменить канал по индексу хранения (правка формы). Имя/частоту/полосу
+ * и остальные поля — из ch; индекс не меняется. */
+bool CH_Update(uint16_t storageIdx, const CH *ch);
 
 bool CH_Delete(uint16_t storageIdx);
 bool CH_ToggleBlacklist(uint16_t storageIdx);

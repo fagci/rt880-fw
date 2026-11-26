@@ -29,6 +29,7 @@
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
+#include "../ui/band_colors.h"
 #include "../ui/graphics.h"
 #include "../ui/lv_port.h"
 #include "../ui/numval.h"
@@ -76,6 +77,7 @@ typedef struct {
 typedef struct {
   uint32_t start, end, step;
   const char *name;
+  uint8_t color;
 } RxBand;
 
 static struct Ctx {
@@ -217,10 +219,21 @@ static bool applySiMode(uint32_t f) {
   return true;
 }
 
+/* Смещение приёма диапазона: в rxF живёт логическая частота, в чип уходит
+ * скорректированная. */
+static uint32_t hwFreq(uint32_t f) {
+  int32_t v = (int32_t)f + Band_Corr10(f);
+  if (v < 1530)
+    v = 1530;
+  if (v > 134000000)
+    v = 134000000;
+  return (uint32_t)v;
+}
+
 static void tuneTo(uint32_t f) {
   applySiMode(f);
   vfos[currentVfo].rxF = f;
-  SI47XX_TuneTo(f);
+  SI47XX_TuneTo(hwFreq(f));
   if (NumVal_GetValue(&ctx.s_nv) != f)
     NumVal_SetValue(&ctx.s_nv, f);
 }
@@ -233,6 +246,7 @@ static void currentView(RxBand *v) {
     v->end = ctx.s_scanEndF;
     v->step = ctx.s_scanStep;
     v->name = ctx.s_scanName;
+    v->color = Band_Color(v->start);
     return;
   }
 
@@ -243,6 +257,7 @@ static void currentView(RxBand *v) {
     v->end = e;
     v->step = StepFrequencyTable[vfos[currentVfo].step];
     v->name = Band_Name(f);
+    v->color = Band_Color(f);
     return;
   }
 
@@ -251,6 +266,7 @@ static void currentView(RxBand *v) {
   v->end = f + 2500;
   v->step = 100; /* 1 кГц */
   v->name = "HF";
+  v->color = 2;
 }
 
 /* Шаг крупных рисок: 4–7 подписей на ширину шкалы. Значения в 10 Гц. */
@@ -680,7 +696,8 @@ void RadioMode::render() {
   fmt_value(b2, sizeof(b2), v.end - v.step, UMHZ, UNIT_MHZ);
   snprintf(rng, sizeof(rng), "%s-%s", b1, b2);
 
-  PrintfT(8, RX_BAND_Y, text_style(C_CYAN, C_BLACK, POS_L, F_M), "%s",
+  PrintfT(8, RX_BAND_Y,
+          text_style(Band_Palette565(v.color), C_BLACK, POS_L, F_M), "%s",
           v.name);
   PrintfT(LCD_WIDTH - 8, RX_BAND_Y,
           text_style(C_GRAY, C_BLACK, POS_R, F_S), "%s", rng);

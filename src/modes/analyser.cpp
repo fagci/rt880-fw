@@ -63,6 +63,7 @@ struct {
   bool listen;       /* «still»: скан стоит, слушаем частоту курсора */
   bool spectrumDirty; /* перерисовать спектр вне очереди (сброс пиков) */
   bool menuWasOpen;   /* меню закрылось — перерисовать спектр */
+  bool spiGuard;      /* после кадра — выдержать паузу перед замером */
   uint8_t savedHalfW; /* ширина рамки до режима прослушивания */
   uint32_t cursorFreq; /* точная частота курсора (шаг сетки, не пиксель) */
 } anaCtx;
@@ -78,6 +79,12 @@ static const uint16_t ANA_DWELL_US[] = {
  * «уезжает» на 1-2 шага сетки — это меньше одного столбца экрана.
  * 500 мкс даёт ~1.8 с на проход 400–470 МГц шагом 25 кГц вместо ~6.5 с. */
 static uint8_t s_dwellIdx = 5;
+
+/* Экран рисуется прямым SPI и даёт помеху в 437–441 МГц. Замер на стенде
+ * (harm next, 438.775 МГц после кадра): при выдержке 500 мкс RSSI +39 ед.,
+ * 2500 мкс +13, 5000 мкс — уже как без кадра. Первому замеру после кадра
+ * даём 5 мс на восстановление тракта/АРУ. */
+#define SPI_SETTLE_US 5000
 
 static uint32_t xToFreq(uint8_t x);
 
@@ -668,6 +675,7 @@ public:
      * шумодаву, и тогда весь проход шипел бы. Прослушивание (SIDE1) откроет
      * звук принудительно. */
     Radio_ScanAudio(false);
+    Mode_SetDisplayRxGate(true);
   }
 
   void update() override {
@@ -698,8 +706,13 @@ public:
       /* Выдержка на каждой точке, в том числе вне диапазона BK: иначе
        * проход вне приёма шёл бы заметно быстрее показанного времени.
        * На нуле RSSI ещё не успевает отреагировать (горка); выдержка
-       * настраивается 1/7. */
-      const uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
+       * настраивается 1/7. После кадра экрана — не меньше SPI_SETTLE_US. */
+      uint16_t dwell = ANA_DWELL_US[s_dwellIdx];
+      if (anaCtx.spiGuard) {
+        if (dwell < SPI_SETTLE_US)
+          dwell = SPI_SETTLE_US;
+        anaCtx.spiGuard = false;
+      }
       if (dwell)
         delay_us(dwell);
       Measurement m = {
@@ -774,19 +787,23 @@ public:
                  (!want || cursorX0() != anaCtx.prevCursorStart ||
                   cursorX1() != anaCtx.prevCursorEnd);
     bool directDrawn = moved;
+    bool drawSpectrum = moved || anaCtx.spectrumDirty || anaCtx.spectrumReady;
+    bool drawCursor = want && (drawSpectrum || !anaCtx.prevCursorActive);
+    bool direct = drawSpectrum || drawCursor;
+    if (direct)
+      BK4819_RxSuspend(); /* кадр не должен попадать в приём */
     if (moved) {
       eraseCursorZone();
       SP_Invalidate(UI_SPECTRUM_H);
     }
 
     bool spectrumRedrawn = false;
-    /* В прослушивании спектр заморожен — периодически перерисовывать его
-     * нельзя: это лишние миллисекунды и мигание стрелки. Но при движении
-     * курсора/стрелки спектр под ней всё равно нужно восстановить. */
-    if (moved || anaCtx.spectrumDirty || anaCtx.spectrumReady ||
-        (!anaCtx.listen && millis() - lastSpectrumRender >= 500)) {
+    /* Спектр обновляем только по завершённому проходу (spectrumReady), по
+     * dirty (сброс пиков/меню) и при движении курсора. Периодический кадр
+     * посреди прохода — это большой SPI прямо между замерами: помеха
+     * 437–441 МГц «подмешивается» в RSSI, видны периодические всплески. */
+    if (drawSpectrum) {
       SP_Render(&anaCtx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
-      lastSpectrumRender = millis();
       anaCtx.spectrumDirty = false;
       spectrumRedrawn = true;
       directDrawn = true;
@@ -806,11 +823,15 @@ public:
       SP_Begin();
       anaCtx.scanF = anaCtx.range.start;
     }
+    if (direct)
+      BK4819_RxResume();
 
     renderInfo(editFreq, want);
     if (directDrawn)
       MenuOverlay_InvalidateBand(UI_SPECTRUM_Y, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1);
-    MenuOverlay_Render();
+    MenuOverlay_Render(); /* flush — в lv_timer_handler, его гасит главный цикл */
+    if (direct) /* следующий замер — после паузы на восстановление */
+      anaCtx.spiGuard = true;
   }
 
   void exit() override {
@@ -833,6 +854,7 @@ public:
     Radio_ScanAudio(false); /* precise-настройка приоткрыла звук — глушим;
                                дальше решает шумодав в VFO */
     lv_port_set_direct_areas(false);
+    Mode_SetDisplayRxGate(false);
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
@@ -1017,8 +1039,6 @@ private:
             text_style(C_GRAY, C_BLACK, POS_R, F_S), "%lu/s",
             (unsigned long)anaCtx.stepsPerSec);
   }
-
-  uint32_t lastSpectrumRender = 0;
 };
 
 AnalyserMode analyserModeInstance;

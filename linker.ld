@@ -1,7 +1,8 @@
 /* Radtel RT-880 — bare metal linker script
  * Flash total: 256K at 0x08000000
  * Bootloader:  first 0x2800 bytes (10KB)
- * Our code:    starts at 0x08002800
+ * stage-2:     0x08002800..0x080047FF (8KB)
+ * Our code:    starts at 0x08004800
  * RAM:         48K at 0x20000000
  *
  * Для запуска без стокового bootloader — ORIGIN = 0x08000000, LENGTH = 256K
@@ -14,7 +15,7 @@ _estack = 0x2000A000;   /* вершина стека. 0x2000C000 (реальны
 
 MEMORY
 {
-    FLASH (rx)  : ORIGIN = 0x08002800, LENGTH = 256K - 0x2800
+    FLASH (rx)  : ORIGIN = 0x08004800, LENGTH = 256K - 0x4800
     RAM   (rwx) : ORIGIN = 0x20000000, LENGTH = 48K
 }
 

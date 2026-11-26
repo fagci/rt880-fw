@@ -1,5 +1,7 @@
 #include "at32f423.h"
+#include "bands.h"
 #include "driver/board.h"
+#include "driver/bk4819.h"
 #include "driver/gpio.h"
 #include "driver/keyboard.h"
 #include "helper/bootprof.h"
@@ -11,6 +13,17 @@
 #include "ui/graphics.h"
 #include "ui/lv_port.h"
 #include "lvgl.h"
+#include "misc.h"
+
+/* Будет ли этот lv_timer_handler() реально отправлять SPI: есть
+ * невалидированные области и подошёл период refresh-таймера. */
+static bool lvRefreshDue(void) {
+  lv_disp_t *d = lv_disp_get_default();
+  if (!d || d->inv_p == 0)
+    return false;
+  lv_timer_t *rt = _lv_disp_get_refr_timer(d);
+  return !rt || lv_tick_elaps(rt->last_run) >= rt->period;
+}
 
 /* Статические конструкторы: .init_array заполняют crtbegin и компилятор.
  * __libc_init_array звать нельзя — в этом линке _init/_fini без crtn. */
@@ -31,6 +44,7 @@ int main(void) {
   Store_Init();
   Store_ApplyUi();
   CH_Init();
+  Band_Init();
 
   gpio_pin_clr(&PIN_LED_RED);   // past board_init
   gpio_pin_set(&PIN_LED_GREEN);
@@ -54,6 +68,7 @@ int main(void) {
     Console_Poll();
     Store_Poll();
     CH_Poll();
+    Band_Poll();
 
     key_event_t evt;
     while (keyboard_get_event(&evt))
@@ -72,8 +87,17 @@ int main(void) {
     }
 
     /* Рендер LVGL: сам решает, есть ли что перерисовывать.
-       Возвращает время до следующего таймера — можно спать. */
+       Возвращает время до следующего таймера — можно спать. В
+       анализаторе/сканере приём на время flush гасим: SPI дисплея даёт
+       помеху в 437–441 МГц, а VCO после возврата перекалибровываем. */
+    bool gate = Mode_DisplayRxGate() && lvRefreshDue();
+    if (gate)
+      BK4819_RxSuspend();
     uint32_t idle = lv_timer_handler();
+    if (gate) {
+      BK4819_RxResume();
+      delay_us(5000); /* АРУ/RSSI после возврата тракта */
+    }
     if (firstLoop) {
       Prof_Mark(PROF_READY);
       Prof_Print();

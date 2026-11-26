@@ -9,6 +9,7 @@ extern Mode &MODE_BC_SCANNER;
 extern Mode &MODE_RADIO;
 extern Mode &MODE_LOOTLIST;
 extern Mode &MODE_CHANNELS;
+extern Mode &MODE_BANDLIST;
 
 /* Экран списка находок (loot). Открывается коротким STAR во всех режимах
  * (в редакторе частоты STAR — десятичная точка). EXIT — назад в тот режим,

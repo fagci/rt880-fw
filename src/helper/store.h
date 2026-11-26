@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 
+#include "bands.h"
 #include "channels.h"
 
 /* Энергонезависимое состояние в конце внешней W25Q32.
@@ -38,8 +39,9 @@ bool Store_Wipe(void);
 
 /* ── Кольцо каналов (слоты 28..31) ──────────────────────────────────
  * Одна запись — один сектор: заголовок 20 байт, данные с offset 256,
- * count * sizeof(CH). Чтение и запись потоковые: массива каналов в RAM
- * нет. Заголовок пишется последним, поэтому обрыв питания оставляет
+ * count * sizeof(CH). Версия 1 (8 байт, без имени) и версия 2 (16 байт)
+ * читаются; запись всегда v2. Массива каналов в RAM нет, чтение и запись
+ * потоковые. Заголовок пишется последним, поэтому обрыв питания оставляет
  * предыдущий целый снимок. */
 bool Store_ChannelsLoad(uint16_t *count, uint16_t *scanlist);
 bool Store_ChannelsRead(uint16_t idx, CH *ch);
@@ -47,5 +49,16 @@ bool Store_ChannelsWriteBegin(void);
 bool Store_ChannelsWritePut(const CH *ch);
 bool Store_ChannelsWriteCommit(uint16_t count, uint16_t scanlist);
 void Store_ChannelsWriteAbort(void);
+
+/* ── Кольцо диапазонов (слоты 24..27) ──────────────────────────────
+ * Снимок пользовательского плана диапазонов, как у каналов: заголовок
+ * 20 байт, данные с offset 256, count * sizeof(BandRec). Заголовок
+ * пишется последним. */
+bool Store_BandsLoad(uint16_t *count);
+bool Store_BandsRead(uint16_t idx, BandRec *out);
+bool Store_BandsWriteBegin(void);
+bool Store_BandsWritePut(const BandRec *rec);
+bool Store_BandsWriteCommit(uint16_t count);
+void Store_BandsWriteAbort(void);
 
 #endif /* RT880_STORE_H */
