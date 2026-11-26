@@ -4,6 +4,53 @@
 
 Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (requires `arm-none-eabi-gcc`), flash: `flash.py --fast`; install/recovery — `make install-image` + `flash.py --boot`.
 
+## Features
+
+- **Wide-range spectrum analyser** (VFO → long `5`): a full sweep over the
+  whole BK4819 range (15.88–1340 MHz), arbitrary start/end or centre entry,
+  zoom, still/listen marker, peak hold, waterfall with palettes,
+  `Min`/`Max`/`Auto` level window and a BK4819 register menu.
+- **Wide-range scanner** (VFO → `MENU`): arbitrary limits across the whole
+  receiver range, step, dwell, black/white lists; a candidate is an RSSI peak
+  above the calibrated noise floor confirmed by a local window, and finds go
+  to the loot list.
+- **Channel editor and 8 scanlists** (VFO → long `7`): up to 200 channels with
+  name, frequency, modulation, bandwidth, receiver, list mask and blacklist
+  flag; a 7-field form, scanning over the list, a channel pinned behind a VFO.
+- **Band plan editor** (VFO → long `8`): start/end, name, step, modulation,
+  squelch, receive correction, colour and category; the plan drives the VFO
+  step/modulation and the BAND screen.
+- **Loot list** (short `*`): up to 200 finds shared by all scanners, sort by
+  time/duration/blacklist/frequency, whitelist and blacklist marks, transfer
+  to channels; stored in flash.
+- **Seamless SI4732 retuning**: a frequency change is a single `TUNE_FREQ`
+  (FAST) command without re-powering the chip, and the resident continuous
+  patch keeps fine tuning in the chip; in AM/SSB soft mute attenuation is 0,
+  so tuning has no click or mute gap, and LSB ↔ USB is instant. Only a
+  patch-family change (AM ↔ SSB, FM ↔ AM/SSB) re-powers the chip.
+- **Fast flashing**: stage-2 bootloader at 921600, 2 KB blocks, CRC32 — a
+  normal update takes ~8.5 s (`flash.py --fast`); the 246 KB install image
+  restores stage-2, application and metadata for recovery.
+- **Three VFOs and multiwatch**: short `EXIT` cycles the VFOs, each with its
+  own receiver, modulation, step and bandwidth; BK and SI can be pinned for
+  background monitoring (channel mode included); manual receiver selection.
+- **BAND screen and broadcast SW scanner**: LW/MW, broadcast SW, FM 64–108
+  and amateur SSB with an SNR scan and station marks; a separate scanner over
+  the 120–11 m broadcast bands.
+- **BK4819 frequency counter** (VFO → long `4`): catches a transmitter carrier
+  in 0.2–1.6 s, pulls the find to VFO and to the loot list.
+- **Receive path**: S-meter as an LED bar, AFC, CTCSS/DCS/DTMF, band receive
+  correction, antenna relay A1/A2, `AUTO`/HF/VHF/UHF/800 band filters.
+- **UI**: dark/light themes (with an inverted spectrum/waterfall in the light
+  theme), waterfall palettes, keyboard lock, display and backlight off on long
+  `EXIT`.
+- **Non-volatile state**: VFOs, settings, band plan, channels and loot in the
+  W25Q32 ring with CRC32, written 2.5 s after a change and power-loss safe.
+- **UART console** at 115200 on the USB connector: diagnostics, bootloader
+  dump, reboot/jump and cold-boot profiling.
+- **CI releases**: rolling `latest` images on every push to `main`, versioned
+  tags `v*`.
+
 ## Screenshots
 
 General view (VFO) in the dark and light themes:
@@ -13,8 +60,11 @@ General view (VFO) in the dark and light themes:
 | <img src="docs/screenshots/vfo-dark.png" width="240" alt="VFO, dark theme"> | <img src="docs/screenshots/vfo-light.png" width="240" alt="VFO, light theme"> |
 
 The rest are in the sections below. Frames come from the host preview
-(`make -C tools/preview`); after every new feature add its screenshots to the
-matching section, and the general view to this header.
+(`make -C tools/preview`); its receiver is a synthetic "live air" model —
+broadcast, aviation, LMR/repeater, PMR and packet stations with fading and
+bursts over a noisy floor — so the spectrum and waterfall show realistic
+occupancy. After every new feature add its screenshots to the matching
+section, and the general view to this header.
 
 ## Scanner and loot list
 
@@ -244,6 +294,12 @@ bandwidth comes from the VFO.
 |---|---|
 | <img src="docs/screenshots/analyser-dark.png" width="200" alt="Spectrum analyser, dark theme"> | <img src="docs/screenshots/analyser-light.png" width="200" alt="Spectrum analyser, light theme"> |
 
+Waterfall palettes (dark theme; the light theme inverts the palette):
+
+| Gqrx | Viridis | Magma | Turbo | Gray |
+|---|---|---|---|---|
+| <img src="docs/screenshots/analyser-gqrx.png" width="130" alt="Gqrx palette"> | <img src="docs/screenshots/analyser-viridis.png" width="130" alt="Viridis palette"> | <img src="docs/screenshots/analyser-magma.png" width="130" alt="Magma palette"> | <img src="docs/screenshots/analyser-turbo.png" width="130" alt="Turbo palette"> | <img src="docs/screenshots/analyser-gray.png" width="130" alt="Gray palette"> |
+
 | Key | Action |
 |---|---|
 | `UP/DOWN` | cursor (frame) by 5 columns; long — shift the range |
@@ -301,7 +357,7 @@ window.
 
 - **BK4819 A** — the only BK on the antenna (18–660 and 840–1300 MHz, incl. 27 MHz, CB). All V/UHF and FM/other on 18–30 MHz goes here. CB AM (27 MHz) goes through the SI4732 by default; long `#` in VFO forces the receiver to BK and back.
 - **BK4819 B** — per the RT880 V2 schematic its LNAIN input is not connected to the antenna, and the EARO output is disconnected (C433 = NC); its RSSI is low. It is needed for transmit/repeater; while there is no transmit, **B sleeps** (as in stock: `REG_30=0`, `REG_37=0x1D00`, saving about 15–20 mA), the firmware does not select reception on B.
-- **SI4732** — everything below 18 MHz, AM/SSB up to 30 MHz and FM broadcast 64–108 MHz (I2C1, 400 kHz). The SI4732 input is `HF-ANT` (the second connector).
+- **SI4732** — everything below 18 MHz, AM/SSB up to 30 MHz and FM broadcast 64–108 MHz (I2C1, 400 kHz). The SI4732 input is `HF-ANT` (the second connector). Retuning is seamless: a frequency change is a single `TUNE_FREQ` (FAST) command with soft mute attenuation set to 0, so tuning does not click, mute or re-power the chip, and the resident continuous patch keeps fine tuning in the chip (LSB ↔ USB is instant). The continuous patch is reloaded only when the mode family changes (AM ↔ SSB, FM ↔ AM/SSB).
 
 ## UART on the USB connector
 

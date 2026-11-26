@@ -7,6 +7,8 @@
 #include "radio.h"
 #include "ui/graphics.h"
 #include "ui/lv_port.h"
+#include "ui/screen_layout.h"
+#include "ui/spectrum.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -51,7 +53,7 @@ static void screens(const char *tag) {
   snprintf(n, sizeof(n), "%s_scanner", tag); dump(n);
   Mode_Switch(MODE_BC_SCANNER); step(4500);
   snprintf(n, sizeof(n), "%s_bc", tag); dump(n);
-  Mode_Switch(MODE_ANALYSER); step(500);
+  Mode_Switch(MODE_ANALYSER); step(6200); key(KEY_6);
   snprintf(n, sizeof(n), "%s_analyser", tag); dump(n);
   Mode_Switch(MODE_FC); step(80);
   snprintf(n, sizeof(n), "%s_fc", tag); dump(n);
@@ -74,6 +76,25 @@ int main(int argc, char **argv) {
   }
   LOOT_ToggleBlacklist(LOOT_Item(2));
   LOOT_ToggleWhitelist(LOOT_Item(4));
+  if (getenv("SP_TEST")) {
+    /* Кадры анализатора со «живым эфиром» во всех палитрах водопада.
+     * 6200 обновлений ≈ 200 проходов — водопад успевает заполниться. */
+    static const char *pn[SP_PALETTE_COUNT] = {"gqrx", "viridis", "magma",
+                                               "turbo", "gray"};
+    char n[64];
+    Mode_Switch(MODE_ANALYSER);
+    step(300);
+    for (uint8_t p = 0; p < SP_PALETTE_COUNT; p++) {
+      SP_SetPalette(p);
+      WF_Reset();
+      SP_Invalidate(UI_SPECTRUM_H);
+      step(6200);
+      key(KEY_6);
+      snprintf(n, sizeof(n), "analyser-%s", pn[p]);
+      dump(n);
+    }
+    return 0;
+  }
   if (getenv("BC_TEST")) {
     Mode_Switch(MODE_BC_SCANNER); step(4500);
     dump("bc_hold");
