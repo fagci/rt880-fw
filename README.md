@@ -1,261 +1,382 @@
 # rt880-fw
 
-Прошивка для Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Сборка: `make` (нужен `arm-none-eabi-gcc`), прошивка: `flash.py --fast`; установка/recovery — `make install-image` + `flash.py --boot`.
+**[💛 Boosty — support the project](https://boosty.to/fagci)** · **[📦 Releases](https://github.com/fagci/rt880-fw/releases)**
 
-## Сканер и список находок (loot)
+Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (requires `arm-none-eabi-gcc`), flash: `flash.py --fast`; install/recovery — `make install-image` + `flash.py --boot`.
 
-Сканер (VFO → `MENU`) копит найденные частоты в списке (200 записей); список
-и настройки VFO сохраняются во внешней W25Q32 и переживают выключение.
+## Screenshots
 
-| Клавиша | Сканер | Список находок |
+General view (VFO) in the dark and light themes:
+
+| Dark theme | Light theme |
+|---|---|
+| <img src="docs/screenshots/vfo-dark.png" width="240" alt="VFO, dark theme"> | <img src="docs/screenshots/vfo-light.png" width="240" alt="VFO, light theme"> |
+
+The rest are in the sections below. Frames come from the host preview
+(`make -C tools/preview`); after every new feature add its screenshots to the
+matching section, and the general view to this header.
+
+## Scanner and loot list
+
+The scanner (VFO → `MENU`) collects found frequencies in a list (200 entries);
+the list and VFO settings are stored in the external W25Q32 and survive
+power-off.
+
+| Dark theme | Light theme |
+|---|---|
+| <img src="docs/screenshots/scanner-dark.png" width="200" alt="Scanner, dark theme"> | <img src="docs/screenshots/scanner-light.png" width="200" alt="Scanner, light theme"> |
+| <img src="docs/screenshots/loot-dark.png" width="200" alt="Loot list, dark theme"> | <img src="docs/screenshots/loot-light.png" width="200" alt="Loot list, light theme"> |
+
+| Key | Scanner | Loot list |
 |---|---|---|
-| `5` | ввод границ: сначала начало, затем конец | — |
-| `1` / `7` | выдержка на частоте (скорость скана) | — |
-| `3` / `9` | шаг сканирования | — |
-| длинный `5` | сброс пикового удержания | — |
-| `0` / длинный `0` | — | удалить / очистить всё |
-| `*` | открыть список находок | — |
-| `UP/DOWN` | шаг сканирования | выбор строки (приёмник идёт на неё) |
-| `SIDE1` | в чёрный список и дальше | чёрный список вкл/выкл |
-| `SIDE2` | в белый список и дальше | белый список вкл/выкл |
-| длинный `SIDE1` | водопад вкл/выкл | — |
-| `MENU` | частота в VFO и выход | выбранную в VFO и выход |
-| длинный `MENU` | меню: шаг, скорость, модуляция, полоса, шумодав, усиление, AFC, Min/Max/Auto уровня, водопад, палитра | — |
-| `1/2/3/4` | — | сортировка: время / длительность / чёрные / частота |
-| длинный `5` | — | whitelist-находки → каналы |
-| длинный `8` | — | blacklist-находки → каналы (с флагом blacklist) |
-| длинный `9` | — | чёрный список каналов → loot (вручную) |
-| `EXIT` | в VFO | назад |
+| `5` | enter limits: start first, then end | — |
+| `1` / `7` | dwell on a frequency (scan speed) | — |
+| `3` / `9` | scan step | — |
+| long `5` | reset peak hold | — |
+| `0` / long `0` | — | delete / clear all |
+| `*` | open the loot list | — |
+| `UP/DOWN` | scan step | select a row (the receiver tunes to it) |
+| `SIDE1` | add to the blacklist and continue | blacklist on/off |
+| `SIDE2` | add to the whitelist and continue | whitelist on/off |
+| long `SIDE1` | waterfall on/off | — |
+| `MENU` | frequency to VFO and exit | selected to VFO and exit |
+| long `MENU` | menu: step, speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level, waterfall, palette | — |
+| `1/2/3/4` | — | sort: time / duration / blacklist / frequency |
+| long `5` | — | whitelist finds → channels |
+| long `8` | — | blacklist finds → channels (with the blacklist flag) |
+| long `9` | — | channel blacklist → loot (manually) |
+| `EXIT` | to VFO | back |
 
-Длинный `MENU` — меню в левом верхнем углу под статусбаром (половина
-ширины, подсказка + 4 строки, остальное прокручивается; справа — скроллбар):
-спектр и водопад
-продолжают идти. `UP/DOWN` — пункт, `SIDE1` — увеличить, `SIDE2` —
-уменьшить, `MENU/EXIT` — закрыть. В сканере пункты: шаг, скорость,
-модуляция, полоса, шумодав, усиление, AFC, Min/Max/Auto уровня,
-водопад, палитра водопада.
+Long `MENU` — a menu in the top-left corner under the status bar (half the
+width, a hint + 4 rows, the rest scrolls; a scrollbar on the right): the
+spectrum and waterfall keep running. `UP/DOWN` — item, `SIDE1` — increase,
+`SIDE2` — decrease, `MENU/EXIT` — close. In the scanner the items are: step,
+speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level,
+waterfall, waterfall palette.
 
-Список находок — входная точка каналов: длинный `5` на экране loot сохраняет
-whitelist-находки в каналы, длинный `8` — blacklist-находки (с флагом
-blacklist), длинный `9` вручную подгружает чёрный список каналов обратно в
-loot. Каналы и скан по ним — длинный `7` в VFO.
+The loot list is the entry point to channels: long `5` on the loot screen
+saves whitelist finds to channels, long `8` — blacklist finds (with the
+blacklist flag), long `9` manually loads the channel blacklist back into loot.
+Channels and scanning over them — long `7` in VFO.
 
-Активная строка VFO: крупная частота, модуляция у её верхнего края; снизу
-S-метр светодиодной линейкой: квадратики по зонам (зелёная/жёлтая/красная),
-потухшие — приглушённые, peak hold и значение в дБм (без подписи); шаг
-(`25k`, `12.5k`) и приёмник — сразу под частотой. Между приёмником и шагом
-при открытом шумодаве видна поправка AFC (`AFC ±N`), рядом — CTCSS/DCS/DTMF
-(`CT 88.5`, `DCS 023`, цифры `DTMF`). В статуслайне: заголовок, иконка замка
-при блокировке, `A1/A2` и батарея: заливка уровня на всю высоту по серой
-дорожке, напряжение внутри. Неактивные VFO — серым.
+Active VFO row: a large frequency, modulation at its top edge; below, an
+S-meter as an LED bar: squares by zone (green/yellow/red), unlit ones dimmed,
+peak hold and the value in dBm (no label); the step (`25k`, `12.5k`) and the
+receiver — right under the frequency. Between the receiver and the step, with
+the squelch open, the AFC correction is visible (`AFC ±N`), next to it
+CTCSS/DCS/DTMF (`CT 88.5`, `DCS 023`, digits `DTMF`). The status bar has: the
+title, a lock icon when locked, `A1/A2` and the battery: a level fill over the
+full height on a grey track, the voltage inside. Inactive VFOs are grey.
 
-В VFO: длинный `0` — полоса и станции (BAND), длинный `7` — каналы и скан по ним. Длинный `1/2/3`: у канального VFO выключает канальный режим, у активного частотного — включает (если канал закреплён), у остальных — закрепляет/снимает VFO за фоновым multiwatch (метка `MBK`/`MSI`). За каждым VFO может быть закреплён сохранённый канал (длинный `SIDE2` в списке каналов). В канальном режиме VFO настроен на канал: имя крупно, ниже диапазон и частота канала, multiwatch опрашивает его автоматически. В частотном режиме крупно частота VFO, а канал показан мелко как `диапазон | имя`; ручной ввод частоты, шаг или смена диапазона возвращают в частотный режим, закреплённый канал при этом остаётся. Слушаем SI — закреплённый BK всё равно проверяется: открылся шумодав — переходим на BK (только по реальному открытию шумодава; при уровне шумодава 0 мониторинг не работает; BK приоритетнее); после ~1.5 с тишины на BK возвращаемся на прежний активный VFO. Короткий `*` — список находок (в любом режиме, кроме редактора частоты, где `*` — десятичная точка), длинный `MENU` — меню-оверлей VFO слева под статусбаром: шаг, фильтр, приёмник, модуляция, полоса, шумодав, усиление, AFC (`SIDE1` — +, `SIDE2` — −), длинный `8` — список диапазонов (правка плана), длинный `9` — текущую частоту в белый список, длинный `SIDE2` — фильтр (AUTO/HF/VHF/UHF/800), длинный `#` — приёмник AUTO ↔ BK/SI (если чип поддерживает текущую частоту). На BK короткий `SIDE1` принудительно открывает/закрывает шумодав, а `SIDE2` диапазон не листает. В любом режиме короткий `ALARM` — разъём антенны (A1/A2), длинный `ALARM` — светлая/тёмная тема (спектр и водопад в светлой теме
-инвертируются под белый фон). Длинный `EXIT` — выключить дисплей и подсветку клавиатуры; пока они погашены, остальные клавиши игнорируются, включает только повторный длинный `EXIT`. Длинный `STAR` — блокировка клавиатуры (повторно — снять; в статуслайне
-иконка замка).
+In VFO: long `0` — band and stations (BAND), long `7` — channels and scanning
+over them. Long `1/2/3`: for a channel VFO it turns the channel mode off, for
+the active frequency VFO it turns it on (if a channel is pinned), for the rest
+it pins/unpins the VFO for background multiwatch (the `MBK`/`MSI` mark). Each
+VFO can have a saved channel pinned behind it (long `SIDE2` in the channel
+list). In channel mode the VFO is tuned to the channel: the name is large, the
+band and channel frequency below, multiwatch polls it automatically. In
+frequency mode the VFO frequency is large, and the channel is shown small as
+`band | name`; manual frequency entry, a step or a band change return it to
+frequency mode, while the pinned channel stays. We listen to SI — the pinned BK
+is still checked: squelch opened — we switch to BK (only on a real squelch
+opening; at squelch level 0 monitoring does not work; BK has priority); after
+~1.5 s of silence on BK we return to the previous active VFO. Short `*` — the
+loot list (in any mode except the frequency editor, where `*` is the decimal
+point), long `MENU` — the VFO overlay menu on the left under the status bar:
+step, filter, receiver, modulation, bandwidth, squelch, gain, AFC (`SIDE1` —
++, `SIDE2` — −), long `8` — the band list (plan editing), long `9` — the
+current frequency to the whitelist, long `SIDE2` — filter (AUTO/HF/VHF/UHF/800),
+long `#` — receiver AUTO ↔ BK/SI (if the chip supports the current frequency).
+On BK short `SIDE1` forces the squelch open/closed, and `SIDE2` does not step
+bands. In any mode short `ALARM` — the antenna connector (A1/A2), long `ALARM` —
+light/dark theme (in the light theme the spectrum and waterfall are inverted
+for a white background). Long `EXIT` — turn off the display and keyboard
+backlight; while they are off, other keys are ignored, and only a repeated long
+`EXIT` turns them on. Long `STAR` — keyboard lock (repeat to unlock; the lock
+icon in the status bar).
 
-## Каналы и сканлисты (VFO → длинный `7`)
+## Channels and scanlists (VFO → long `7`)
 
-Сохранённые каналы: имя, частота, модуляция, полоса, приёмник, маска
-сканлистов и флаг blacklist. До 200 каналов, порядок — порядок сохранения.
-Сканлистов 8; `0` — ALL. Канал с `scanlists == 0` входит во все списки, иначе —
-в отмеченные биты. Текущий сканлист сохраняется во флеш. Запись канала — 16
-байт (формат v2); старая 8-байтовая запись без имени читается как есть и
-переписывается в v2 при первом изменении списка.
+Saved channels: name, frequency, modulation, bandwidth, receiver, scanlist
+mask and the blacklist flag. Up to 200 channels, in save order. There are 8
+scanlists; `0` — ALL. A channel with `scanlists == 0` belongs to all lists,
+otherwise to the marked bits. The current scanlist is stored in flash. A
+channel record is 16 bytes (format v2); an old 8-byte record without a name is
+read as is and rewritten as v2 on the first list change.
 
-| Клавиша | Список / пауза | Скан |
+| Key | List / pause | Scan |
 |---|---|---|
-| `UP/DOWN` | выбор канала (приёмник настраивается) | пауза и ручной переход |
-| `1`–`8` | переключить бит сканлиста (`ALL` → первый выбор задаёт список) | сменить сканлист и перезапустить |
-| `0` | ALL | ALL и перезапуск |
-| `#` | форма правки выбранного канала | пауза и форма текущего |
-| `MENU` | выбранный канал в VFO и выход | текущий канал в VFO и выход |
-| длинный `MENU` | включить скан | остановить скан |
-| `SIDE1` | blacklist вкл/выкл у выбранного | текущий в blacklist и дальше |
-| длинный `SIDE2` | закрепить/снять канал за VFO, из которого вошли | — |
-| длинный `5` | частоту VFO (до входа) добавить в каналы | — |
-| длинный `0` | удалить выбранный | — |
-| длинный `9` | чёрный список каналов → loot | — |
-| `*` | список находок | — |
-| `EXIT` | в VFO (снимок VFO восстановить) | остановить звук и выйти в VFO |
+| `UP/DOWN` | select a channel (the receiver tunes) | pause and manual step |
+| `1`–`8` | toggle a scanlist bit (`ALL` → the first choice sets the list) | change the scanlist and restart |
+| `0` | ALL | ALL and restart |
+| `#` | edit form of the selected channel | pause and form of the current one |
+| `MENU` | selected channel to VFO and exit | current channel to VFO and exit |
+| long `MENU` | start scanning | stop scanning |
+| `SIDE1` | blacklist on/off for the selected | current to blacklist and continue |
+| long `SIDE2` | pin/unpin the channel behind the VFO it was entered from | — |
+| long `5` | add the VFO frequency (from before entry) to channels | — |
+| long `0` | delete the selected | — |
+| long `9` | channel blacklist → loot | — |
+| `*` | loot list | — |
+| `EXIT` | to VFO (restore the VFO snapshot) | stop the sound and exit to VFO |
 
-В `PAUSE`/`HOLD` сверху крупным шрифтом — имя выбранного канала, ниже
-средним — частота, модуляция и приёмник, ещё ниже — `CH x/y`, сканлист и
-состояние. Во время активного скана шапка скрыта, список занимает весь экран.
+In `PAUSE`/`HOLD` the top shows the selected channel name in a large font,
+below in a medium one — the frequency, modulation and receiver, and below
+that — `CH x/y`, the scanlist and the state. During an active scan the header
+is hidden and the list fills the whole screen.
 
-Форма (`#`): 7 полей — имя, частота, модуляция, полоса, приёмник (`BK-A`/`SI`),
-сканлисты, blacklist. `UP/DOWN` — поле, `SIDE1/SIDE2` — изменить значение,
-`MENU` — ввод частоты (цифры, `*` — точка, `MENU`/`#` — подтвердить) или имени
-(мульти-тап `2..9`, `1` — символы, `0` — пробел/0, `STAR` — backspace,
-`UP/DOWN` — курсор); `#`/`EXIT` — сохранить и назад. На поле сканлистов `1..8`
-переключают биты, `0` — ALL, `SIDE1/SIDE2` — по одному списку/ALL.
+Form (`#`): 7 fields — name, frequency, modulation, bandwidth, receiver
+(`BK-A`/`SI`), scanlists, blacklist. `UP/DOWN` — field, `SIDE1/SIDE2` — change
+the value, `MENU` — enter a frequency (digits, `*` — point, `MENU`/`#` —
+confirm) or a name (multi-tap `2..9`, `1` — symbols, `0` — space/0, `STAR` —
+backspace, `UP/DOWN` — cursor); `#`/`EXIT` — save and back. In the scanlists
+field `1..8` toggle bits, `0` — ALL, `SIDE1/SIDE2` — one list/ALL.
 
-Порядок в списке — порядок сохранения. Длинный `5` в списке добавляет в
-каналы частоту VFO, с которой вошли в режим (совпадение по частоте обновляет
-существующий канал), — так канал можно внести и без loot. Если доступных для
-скана каналов нет, длинный `MENU` оставляет `PAUSE` и показывает
-`NO CHANNELS`.
+The order in the list is the save order. Long `5` in the list adds the VFO
+frequency from which the mode was entered to channels (a frequency match
+updates the existing channel) — so a channel can be added without loot too. If
+there are no channels available for scanning, long `MENU` stays in `PAUSE` and
+shows `NO CHANNELS`.
 
-Скан перебирает каналы текущего сканлиста (blacklist-каналы в списке видны
-в конце с меткой `-`, но в скане пропускаются). BK — по RSSI над шумовым
-полом (первый проход — калибровка по минимуму), SI — по SNR ≥ 6 дБ. RSSI
-на быстром проходе читается через 500 мкс (по умолчанию), а найденный
-кандидат подтверждается локальным окном назад на выдержке 2.5 мс: фильтр
-RSSI BK «тянет» пик на 1-6 шагов вперёд, окно находит настоящую частоту и
-отсекает шум. AFC на время скана выключен, полоса канала — из VFO. На найденном канале звук открывается на HOLD до
-пропадания сигнала или 5 с, дальше скан идёт дальше. Чёрный список каналов
-после перезагрузки сам в loot не вливается — только длинным `9`.
+The scan walks the channels of the current scanlist (blacklist channels are
+visible at the end of the list with a `-` mark, but are skipped during the
+scan). BK — by RSSI above the noise floor (the first pass is calibrated by the
+minimum), SI — by SNR ≥ 6 dB. RSSI on the fast pass is read after 500 µs (the
+default), and a found candidate is confirmed by a local window backwards at a
+2.5 ms dwell: the BK RSSI filter "pulls" the peak 1-6 steps forward, the window
+finds the real frequency and rejects noise. AFC is off during the scan, the
+channel bandwidth comes from the VFO. On a found channel the sound opens in
+HOLD until the signal disappears or for 5 s, then the scan continues. The
+channel blacklist is not merged into loot after a reboot by itself — only with
+long `9`.
 
-## Сканер вещательных КВ (BC SW, VFO → длинный `6`)
+## Broadcast SW scanner (BC SW, VFO → long `6`)
 
-Скан вещательных КВ-диапазонов (120–11 м) по сетке каналов 5 кГц на SI4732 (AM). Первый проход — калибровка шумового пола, затем сканер останавливается на канале с сигналом (HOLD), звук открывается, находка попадает в общий список. На HOLD звук открыт 15 с; RSSI SI во время прослушивания не читается (I2C щёлкает), затем скан продолжается. Выйти можно вручную.
+Scans broadcast shortwave bands (120–11 m) on a 5 kHz channel grid on the
+SI4732 (AM). The first pass calibrates the noise floor, then the scanner stops
+on a channel with a signal (HOLD), the sound opens, and the find goes to the
+shared list. In HOLD the sound is open for 15 s; SI RSSI is not read while
+listening (I2C clicks), then the scan continues. You can exit manually.
 
-| Клавиша | Действие |
+| Dark theme | Light theme |
 |---|---|
-| `UP/DOWN` | канал +/- (скан ставится на паузу, звук включается) |
-| `SIDE1` / `SIDE2` | следующий / предыдущий КВ-диапазон |
-| длинный `#` | пауза / продолжить скан |
-| длинный `1` / `7` | выдержка на канале (15–100 мс, скорость скана) |
-| длинный `SIDE1` | водопад вкл/выкл |
-| длинный `SIDE2` | полоса AM: 6 / 4 / 3 / 2 кГц |
-| длинный `5` | сброс пикового удержания |
-| `MENU` | текущий канал в VFO и выход |
-| `*` / длинный `MENU` | список находок |
-| `EXIT` | выход в VFO |
+| <img src="docs/screenshots/bc-dark.png" width="200" alt="Broadcast SW scanner, dark theme"> | <img src="docs/screenshots/bc-light.png" width="200" alt="Broadcast SW scanner, light theme"> |
 
-Спектр показывает занятость всех каналов диапазона, водопад — по строке за проход. Порог — минимум RSSI за проход плюс 10 дБ; ложное срабатывание подтверждается повторным замером.
-
-## Полоса и станции (BAND, VFO → длинный `0`)
-
-Экран только для SI4732: ДВ/СВ, вещательные КВ, FM 64–108 МГц и любительские SSB-диапазоны (модуляция и шаг — из списка диапазонов, правка — VFO → длинный `8`). Крупно — частота, ниже — шкала полосы; текущая частота отмечена одной стрелкой под шкалой. Длинный `1` сканирует текущую полосу и рисует засечки найденных станций сразу по ходу скана; высота и цвет засечки — SNR. Длинный `2` обходит все вещательные КВ-диапазоны (120–11 м) и показывает их горизонтальными шкалами в столбик: слева метраж полосы без подписей частот, находки — вертикальные цветные полоски разной высоты (SNR 0–30), текущая частота — стрелка. `UP/DOWN` — по найденным станциям, а без скана — шаг по полосе, как в VFO; цифры — ввод частоты (`1048` → 104.8 МГц, `MENU`/`#` — подтвердить), `SIDE1/SIDE2` — соседняя вещательная КВ-полоса. Порог станции — SNR ≥ 6 дБ. В SSB длинный `3`/`9` двигает BFO (шаг 50 Гц), значение видно внизу. `MENU` — выбранную частоту в VFO, `*` — список находок, `EXIT` — выход в VFO; во время ввода первый `EXIT` отменяет его, повторный — выходит в VFO. Шкала при простом прослушивании не перерисовывается.
-
-## Диапазоны (VFO → длинный `8`)
-
-План диапазонов редактируется и хранится во внешней W25Q32 (кольцо 24..27,
-CRC). Заводской `PLAN[]` — шаблон: при первом изменении он копируется в
-пользовательский список, пустая флеш = заводские диапазоны. В списке:
-`UP/DOWN` — выбор, `MENU` — правка, длинный `5` — добавить диапазон в районе
-частоты VFO (на момент входа), длинный `0` — удалить, `*` — находки,
-`EXIT` — в VFO.
-
-Форма: `UP/DOWN` — поле, `SIDE1/SIDE2` — изменить значение, `MENU` — правка
-поля, `EXIT` — назад (изменения сохраняются через 2,5 с). Поля: начало/конец
-(вводятся последовательно, как в анализаторе), имя (мульти-тап `2..9`,
-`1` — символы, `0` — пробел/0, `STAR` — backspace), шаг, модуляция,
-шумодав (`KEEP` — не менять глобальный), коррекция приёма (цифры — величина,
-`SIDE1/SIDE2` — ±100 Гц), цвет (8 оттенков) и категория `BC/HAM/SVC/-`.
-Цвет используется в списке, строке VFO и на экране BAND; шумодав диапазона
-применяется при входе в него.
-
-При вводе частоты VFO сам выставляет модуляцию и шаг диапазона (7.1 МГц — LSB 1 кГц, 7.2 — AM 5 кГц, 64–108 — WFM на SI4732, 118–136 — AM 25 кГц; на V/UHF пока везде FM 25 кГц). `UP/DOWN` зацикливают шаг внутри диапазона (7.2…7.45 → 7.2); в общих диапазонах (HF, V/UHF) зацикливания нет. WFM на BK (`#` до WFM) включает широкую полосу как в k1-fw — можно слушать звук аналогового ТВ на несущей звука, если он ещё вещает.
-
-Диапазоны разбиты на три группы: **BC** (вещание: ДВ, СВ, все КВ-вещательные, FM), **HAM** (любительские SSB) и **SVC** (службы: CB, авиа, 2 м, 70 см, морской, PMR). На SI `SIDE1` / `SIDE2` — следующий / предыдущий диапазон **своей группы**; на BK короткий `SIDE1` — принудительный шумодав, `SIDE2` диапазоны не переключает. Длинный `SIDE1` — следующая группа (на SI и BK). В каждом диапазоне и группе запоминается последняя частота. Название диапазона — в строке VFO.
-
-## Анализатор спектра (VFO → длинный `5`)
-
-Спектр и водопад по диапазону с рамкой-курсором. Границы диапазона над спектром задаются произвольно: `5` — ввод (сначала начало, после подтверждения — конец), `0` — ввод центральной частоты. Сетка скана, границы/зум, курсор и захват в VFO округляются к шагу VFO. Перестройка — с импульсом калибровки VCO (`REG_30`), выдержка по умолчанию 500 мкс: пик из-за инерции RSSI уезжает на 1-2 шага сетки (меньше одного столбца экрана), для слабых сигналов `1`/`7` увеличивает выдержку. AFC на время скана выключен, полоса канала — из VFO.
-
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `UP/DOWN` | курсор (рамка) на 5 колонок; длинное — сдвиг диапазона |
-| `4` / `6` | курсор быстро влево / вправо (на 8 колонок) |
-| `1` / `7` | выдержка на точке (скорость скана) |
-| `3` / `9` | шаг сканирования |
-| `2` / `8` | зум в рамку / отдалить |
-| `5` | **ввод границ**: сначала начало, затем конец |
-| длинный `5` | сброс пикового удержания (peak hold) |
-| длинный `MENU` | меню: шаг, скорость, модуляция, полоса, шумодав, усиление, AFC, Min/Max/Auto уровня, палитра (спектр и водопад идут) |
-| длинный `0` | второе меню: регистры BK4819 (VCO/PLL, фильтры, AGC/AFC, усиление) |
-| `SIDE1` | **still**: скан стоит, слушаем частоту курсора (как маркер в Mayhem); `UP/DOWN` — на шаг сетки (длинное — на 4), `4/6` — на 8 шагов, `2/8` — зум вокруг маркера, `SIDE1` — вернуться к скану |
-| `MENU` | частота курсора — в VFO и выход |
-| `*` | список находок |
-| `EXIT` | выход в VFO без захвата (как во всех режимах) |
+| `UP/DOWN` | channel +/- (the scan pauses, the sound turns on) |
+| `SIDE1` / `SIDE2` | next / previous SW band |
+| long `#` | pause / resume the scan |
+| long `1` / `7` | dwell on a channel (15–100 ms, scan speed) |
+| long `SIDE1` | waterfall on/off |
+| long `SIDE2` | AM bandwidth: 6 / 4 / 3 / 2 kHz |
+| long `5` | reset peak hold |
+| `MENU` | current channel to VFO and exit |
+| `*` / long `MENU` | loot list |
+| `EXIT` | exit to VFO |
 
-Кадр с «still» показывает слева `LISTEN`; звук идёт через обычный шумодав VFO.
+The spectrum shows the occupancy of all channels of the band, the waterfall —
+one row per pass. The threshold is the minimum RSSI over the pass plus 10 dB; a
+false trigger is confirmed by a repeated measurement.
 
-Длинный `0` открывает второе меню анализатора — правку регистров BK4819
-(аналог `analysermenu.c` из `../k1-fw`): VCO/PLL, IF-фильтры, входной тракт,
-ПЧ/DC-фильтр, AFC и AGC. `UP/DOWN` — регистр, `SIDE1`/`SIDE2` — значение,
-`MENU/EXIT` — закрыть. Меню пишет в чип сразу; после экспериментов верните
-рабочие значения или перезагрузите приёмник.
+## Band and stations (BAND, VFO → long `0`)
 
-Общее меню параметров приёмника (длинный `MENU`) есть в VFO, сканере и
-анализаторе: шаг, модуляция, полоса, шумодав, усиление (AUTO/фикс. индекс) и
-AFC; в VFO ещё фильтр и ручной выбор приёмника (AUTO/BK/SI).
+SI4732-only screen: LW/MW, broadcast SW, FM 64–108 MHz and amateur SSB bands
+(modulation and step come from the band list, editing — VFO → long `8`). The
+frequency is large, below is the band scale; the current frequency is marked by
+a single arrow under the scale. Long `1` scans the current band and draws marks
+for found stations as the scan goes; the mark height and colour are the SNR.
+Long `2` walks all broadcast SW bands (120–11 m) and shows them as horizontal
+scales stacked in a column: on the left the band's metre label without
+frequency labels, the finds as vertical coloured bars of different heights
+(SNR 0–30), the current frequency as an arrow. `UP/DOWN` — through found
+stations, and without a scan — step across the band, as in VFO; digits —
+frequency entry (`1048` → 104.8 MHz, `MENU`/`#` — confirm), `SIDE1/SIDE2` — the
+neighbouring broadcast SW band. The station threshold is SNR ≥ 6 dB. In SSB
+long `3`/`9` moves the BFO (50 Hz step), the value is shown at the bottom.
+`MENU` — the selected frequency to VFO, `*` — the loot list, `EXIT` — exit to
+VFO; during entry the first `EXIT` cancels it, the second exits to VFO. The
+scale is not redrawn during plain listening.
 
-## Энергонезависимое состояние
+## Bands (VFO → long `8`)
 
-Внешняя SPI-флеш W25Q32 (U509) на SPI2: `PB12` CS, `PB13` SCK, `PB14` DO,
-`PB15` DI. Стоковые каналы и голосовые файлы занимают начало флеш, поэтому
-под состояние отведён хвост `0x3E0000..0x3FFFFF` (32 сектора по 4 КБ).
-Кольцевая запись хранит частоты/модуляцию/шаг/полосу трёх VFO, текущий VFO,
-шумодав, фильтр, тему, вход антенны, память диапазонов и список находок.
-Слоты 28..31 отведены под отдельное кольцо каналов (запись на сектор:
-заголовок последним, данные с offset 256, CRC32) и текущую маску сканлистов.
-Канал — 16 байт (v2, с именем); запись v1 (8 байт) читается и при первой
-перезаписи списка конвертируется в v2.
-Запись уходит через 2,5 с после последнего изменения, каждый раз в следующий
-сектор с CRC32; при обрыве питания загружается предыдущая целая запись.
-`storewipe` стирает и состояние, и каналы. Начало флеш (стоковые данные) не
-стирается.
+The band plan is edited and stored in the external W25Q32 (ring 24..27, CRC).
+The factory `PLAN[]` is a template: on the first change it is copied into the
+user list, an empty flash = factory bands. In the list: `UP/DOWN` — select,
+`MENU` — edit, long `5` — add a band around the VFO frequency (at the moment of
+entry), long `0` — delete, `*` — loot, `EXIT` — to VFO.
 
-Палитры водопада (`Gqrx`, `Viridis`, `Magma`, `Turbo`, `Gray`) — опорные
-цвета из `../dsp`; выбор в меню сканера/анализатора сохраняется во флеш.
-Столбцы спектра — один пастельный цвет; peak hold в тёмной теме жёлтый.
-Окно уровня спектра — `Min`/`Max` в дБм и `Auto`: Auto один раз подбирает
-окно под текущий кадр (дно под шумом, верх над пиком), как Auto dB в SA
-`../dsp`; то же окно использует водопад.
+Form: `UP/DOWN` — field, `SIDE1/SIDE2` — change the value, `MENU` — edit the
+field, `EXIT` — back (changes are saved after 2.5 s). Fields: start/end
+(entered sequentially, as in the analyser), name (multi-tap `2..9`, `1` —
+symbols, `0` — space/0, `STAR` — backspace), step, modulation, squelch (`KEEP` —
+do not change the global one), receive correction (digits — the value,
+`SIDE1/SIDE2` — ±100 Hz), colour (8 shades) and category `BC/HAM/SVC/-`. The
+colour is used in the list, the VFO row and on the BAND screen; the band's
+squelch is applied when entering it.
 
-## Приёмники платы
+When a frequency is entered, the VFO sets the band's modulation and step itself
+(7.1 MHz — LSB 1 kHz, 7.2 — AM 5 kHz, 64–108 — WFM on the SI4732, 118–136 — AM
+25 kHz; on V/UHF so far everywhere FM 25 kHz). `UP/DOWN` wrap the step inside
+the band (7.2…7.45 → 7.2); in shared bands (HF, V/UHF) there is no wrapping.
+WFM on BK (`#` up to WFM) enables the wide bandwidth as in k1-fw — you can
+listen to analog TV sound on the sound carrier, if it still broadcasts.
 
-- **BK4819 A** — единственный BK на антенне (18–660 и 840–1300 МГц, в т. ч. 27 МГц, CB). Всё V/UHF и FM/прочее на 18–30 МГц идёт сюда. CB AM (27 МГц) по умолчанию идёт через SI4732; длинный `#` в VFO принудительно переключает приёмник на BK и обратно.
-- **BK4819 B** — по схеме RT880 V2 его вход LNAIN не подключён к антенне, а выход EARO отключён (C433 = NC); RSSI на нём низкий. Нужен для передачи/ретранслятора; пока передачи нет, **B спит** (как в стоке: `REG_30=0`, `REG_37=0x1D00`, экономия порядка 15–20 мА), приём на B прошивка не выбирает.
-- **SI4732** — всё ниже 18 МГц, AM/SSB до 30 МГц и FM-вещание 64–108 МГц (I2C1, 400 кГц). Вход SI4732 — `HF-ANT` (второй разъём).
+The bands are split into three groups: **BC** (broadcast: LW, MW, all broadcast
+SW, FM), **HAM** (amateur SSB) and **SVC** (services: CB, aviation, 2 m, 70 cm,
+marine, PMR). On SI `SIDE1` / `SIDE2` — the next / previous band of **its
+group**; on BK short `SIDE1` — forced squelch, `SIDE2` does not switch bands.
+Long `SIDE1` — the next group (on SI and BK). The last frequency is remembered
+in each band and group. The band name is in the VFO row.
 
-## UART на USB-разъёме
+## Spectrum analyser (VFO → long `5`)
 
-Разъём USB у RT-880 — это не USB-устройство, а обычный последовательный порт: PA11/PA12 (ноги 44/45) подключены к D+/D- и в стоке работают как USART6 TX/RX (AF8, кабель CPS). Прошивка настраивает USART6 на 115200 8N1 (`src/driver/uart.cpp`, `uart_init`): приём — в кольцо 256 байт из прерывания, передача — опросом. API: `uart_putc`/`uart_write`/`uart_puts`/`uart_printf`, `uart_getc`/`uart_read`/`uart_available`. OTG на этих ногах отключён.
+Spectrum and waterfall over a range with a cursor frame. The range bounds above
+the spectrum are set arbitrarily: `5` — entry (start first, after confirmation —
+end), `0` — entry of the centre frequency. The scan grid, bounds/zoom, cursor
+and capture in VFO are rounded to the VFO step. Retuning uses the VCO
+calibration pulse (`REG_30`), the default dwell is 500 µs: because of RSSI
+inertia the peak shifts 1-2 grid steps (less than one screen column), for weak
+signals `1`/`7` increases the dwell. AFC is off during the scan, the channel
+bandwidth comes from the VFO.
 
-В главном цикле работает мини-консоль (`src/helper/console.cpp`): `dumpboot` отдаёт 10 КиБ загрузчика `0x08000000..0x080027FF` (заголовок `RT880BOOT <addr> <len> <sum32>` + сырые байты), `boot` переводит PB6 в выход 0 и блокирует его конфигурацию, после чего прыгает в стоковый загрузчик — обход физической проверки «PTT при включении». `fastboot` пишет магию для stage-2 и делает сброс. Снять дамп: `python3 flash.py --dump-boot /dev/ttyUSB0 /tmp/kilo/bootloader.bin`.
-
-`reboot` в консоли делает сброс, после старта печатается `READY <мкс>` и `PROF ...` с этапами от начала `main`; `prof` повторяет последний профиль. Замер cold boot через загрузчик: `python3 bootprof.py /dev/ttyUSB0 --runs 5` (время до `READY` минус `ready` = загрузчик + pre-main; у стокового загрузчика фиксированная задержка 200 мс).
-
-## Раскладка flash и прошивка
-
-| Адрес | Что |
+| Dark theme | Light theme |
 |---|---|
-| `0x08000000..0x080027FF` | стоковый загрузчик, **не трогаем** — recovery по PTT, 115200, 246 кадров |
-| `0x08002800..0x080047FF` | stage-2 (`boot2/`, 8 КиБ): fast-прошивка 921600, CRC32, свои error handlers |
-| `0x08004800..0x0803F7FF` | приложение |
-| `0x0803F800..0x0803FFFF` | метаданные stage-2 (magic, длина/CRC приложения; на загрузке проверяются мета и вектор) |
+| <img src="docs/screenshots/analyser-dark.png" width="200" alt="Spectrum analyser, dark theme"> | <img src="docs/screenshots/analyser-light.png" width="200" alt="Spectrum analyser, light theme"> |
 
-- **Обычное обновление:** `python3 flash.py --fast /dev/ttyUSB0 build/rt880-fw-by-fagci.bin` — 90 блоков по 2 КиБ, ~5.6 с стирания/записи, ~8.5 с с загрузкой. Команда `fastboot` в консоли ставит магию и сбрасывает; stage-2 поднимает 921600.
-- **Установка stage-2 и recovery:** `make install-image` → `build/rt880-install.bin` (ровно 246 КиБ: stage-2 + app + мета) → `python3 flash.py --boot /dev/ttyUSB0 build/rt880-install.bin` (~33 с) либо PTT при включении и `python3 flash.py /dev/ttyUSB0 build/rt880-install.bin`. Стоковый загрузчик стирает весь регион приложения; этот образ возвращает и stage-2, и app, и мету.
-- **Прерванная fast-прошивка:** мета стирается перед первой записью, stage-2 остаётся в fast mode на 921600; повторный `--fast` сам подключится к нему (пробует `fastboot`, затем ENTER на 921600) и восстановит app.
-- **Совсем кирпич (сломан stage-2):** PTT при включении + `build/rt880-install.bin`.
-- `flash.py` в стоковом режиме принимает только полный 246-КиБ образ (`make install-image`), чтобы случайно не залить app.bin поверх stage-2.
-- В релизах GitHub: `RT880-full-install-<tag>.bin` — полная установка/recovery (246 КиБ); `RT880-fast-app-<tag>.bin` — обычное обновление для `--fast`. Рядом `README-INSTALL.txt`, `flash.py` и `SHA256SUMS.txt`.
-
-Диагностика внешней флеш: `store` печатает сохранённое и текущее состояние (включая count/mask/slot каналов), `storewipe` стирает состояние и каналы (начало флеш не трогает), `flashmap` — карту занятости W25Q32 по 64 КиБ (+JEDEC ID), `flashdump <addr> <len>` (адрес и длина в hex) — hex-дамп.
-
-## Антенна и фильтр
-
-- **Антенна:** реле K200 управляется PF0 (`UV/HF ANT-SW`). Короткий `ALARM` переключает `A1` (только второй разъём, V/U-тракт) ↔ `A2` (к ВЧ-тракту добавлена основная антенна). По умолчанию `A1`.
-- **Фильтр:** длинный `SIDE2` в VFO перебирает `AUTO → HF → VHF → UHF → 800`. `AUTO` (по умолчанию) выбирает фильтр по частоте; ручной держится до возврата в `AUTO`.
-- Пины и номера ног сведены в `src/driver/board_pins.h`.
-
-Источники: `research/dual-rx` в [uv98-rust](https://github.com/YaziAranea/uv98-rust), `research/band-switch` и замер RSSI на BK B.
-
-## FC — частотомер BK4819 («быстрый скан», VFO → длинный `4`)
-
-Аппаратный счётчик ловит несущую передатчика на VHF/UHF/800 МГц за 0.2–1.6 с; фильтр платы переключается по диапазону FC, антенное реле FC не трогает (для 800 МГц — `A2` коротким `ALARM`). Находка (2 совпадения в пределах 3 кГц): скан встаёт, приёмник на частоте, звук через шумодав; запись попадает в список находок. Чёрный и белый списки пропускаются.
-
-| Клавиша | Действие |
+| Key | Action |
 |---|---|
-| `1` / `7` | скорость (0.2–1.6 с на проход) |
-| `3` / `9` | шумодав (`SQ 0` = всегда открыт: на находке не залипает, через 5 с скан продолжается) |
-| `5` | порог счётчика (0x244 / 0x580) |
-| `#` / `0` | следующий диапазон / автопереключение (по умолчанию выкл.) |
-| `SIDE1` / `SIDE2` | находку в чёрный / белый список и дальше |
-| `MENU`, `PTT` | частоту находки в VFO и выход |
-| `*` / длинный `MENU` | список находок |
-| `EXIT` | выход без захвата (VFO возвращается на прежнюю частоту) |
+| `UP/DOWN` | cursor (frame) by 5 columns; long — shift the range |
+| `4` / `6` | cursor quickly left / right (by 8 columns) |
+| `1` / `7` | dwell per point (scan speed) |
+| `3` / `9` | scan step |
+| `2` / `8` | zoom to the frame / zoom out |
+| `5` | **enter bounds**: start first, then end |
+| long `5` | reset peak hold |
+| long `MENU` | menu: step, speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level, palette (the spectrum and waterfall keep running) |
+| long `0` | second menu: BK4819 registers (VCO/PLL, filters, AGC/AFC, gain) |
+| `SIDE1` | **still**: the scan stops, we listen to the cursor frequency (like the marker in Mayhem); `UP/DOWN` — by a grid step (long — by 4), `4/6` — by 8 steps, `2/8` — zoom around the marker, `SIDE1` — return to the scan |
+| `MENU` | cursor frequency — to VFO and exit |
+| `*` | loot list |
+| `EXIT` | exit to VFO without capture (as in all modes) |
+
+A "still" frame shows `LISTEN` on the left; the sound goes through the normal
+VFO squelch.
+
+Long `0` opens the analyser's second menu — editing BK4819 registers (an analog
+of `analysermenu.c` from `../k1-fw`): VCO/PLL, IF filters, input path, IF/DC
+filter, AFC and AGC. `UP/DOWN` — register, `SIDE1`/`SIDE2` — value, `MENU/EXIT` —
+close. The menu writes to the chip immediately; after experiments restore the
+working values or reboot the receiver.
+
+The shared receiver parameter menu (long `MENU`) is available in VFO, the
+scanner and the analyser: step, modulation, bandwidth, squelch, gain
+(AUTO/fixed index) and AFC; in VFO also the filter and manual receiver selection
+(AUTO/BK/SI).
+
+## Non-volatile state
+
+External SPI flash W25Q32 (U509) on SPI2: `PB12` CS, `PB13` SCK, `PB14` DO,
+`PB15` DI. Stock channels and voice files occupy the beginning of the flash, so
+the state is given the tail `0x3E0000..0x3FFFFF` (32 sectors of 4 KB). The ring
+record stores the frequencies/modulation/step/bandwidth of three VFOs, the
+current VFO, squelch, filter, theme, antenna input, band memory and the loot
+list. Slots 28..31 are reserved for a separate channel ring (one record per
+sector: header last, data at offset 256, CRC32) and the current scanlist mask.
+A channel is 16 bytes (v2, with a name); a v1 record (8 bytes) is read and
+converted to v2 on the first list rewrite. A write goes out 2.5 s after the
+last change, each time to the next sector with CRC32; after a power loss the
+previous intact record is loaded. `storewipe` erases both the state and the
+channels. The beginning of the flash (stock data) is not erased.
+
+Waterfall palettes (`Gqrx`, `Viridis`, `Magma`, `Turbo`, `Gray`) — reference
+colours from `../dsp`; the choice in the scanner/analyser menu is stored in
+flash. Spectrum columns are a single pastel colour; peak hold in the dark theme
+is yellow. The spectrum level window is `Min`/`Max` in dBm and `Auto`: Auto
+picks the window for the current frame once (the floor under the noise, the top
+above the peak), like Auto dB in the `../dsp` SA; the waterfall uses the same
+window.
+
+## Board receivers
+
+- **BK4819 A** — the only BK on the antenna (18–660 and 840–1300 MHz, incl. 27 MHz, CB). All V/UHF and FM/other on 18–30 MHz goes here. CB AM (27 MHz) goes through the SI4732 by default; long `#` in VFO forces the receiver to BK and back.
+- **BK4819 B** — per the RT880 V2 schematic its LNAIN input is not connected to the antenna, and the EARO output is disconnected (C433 = NC); its RSSI is low. It is needed for transmit/repeater; while there is no transmit, **B sleeps** (as in stock: `REG_30=0`, `REG_37=0x1D00`, saving about 15–20 mA), the firmware does not select reception on B.
+- **SI4732** — everything below 18 MHz, AM/SSB up to 30 MHz and FM broadcast 64–108 MHz (I2C1, 400 kHz). The SI4732 input is `HF-ANT` (the second connector).
+
+## UART on the USB connector
+
+The USB connector on the RT-880 is not a USB device but an ordinary serial port:
+PA11/PA12 (pins 44/45) are connected to D+/D- and in stock work as USART6 TX/RX
+(AF8, CPS cable). The firmware configures USART6 at 115200 8N1
+(`src/driver/uart.cpp`, `uart_init`): receive — into a 256-byte ring from the
+interrupt, transmit — polled. API: `uart_putc`/`uart_write`/`uart_puts`/
+`uart_printf`, `uart_getc`/`uart_read`/`uart_available`. OTG on these pins is
+disabled.
+
+In the main loop a mini-console runs (`src/helper/console.cpp`): `dumpboot`
+returns 10 KB of the bootloader `0x08000000..0x080027FF` (header
+`RT880BOOT <addr> <len> <sum32>` + raw bytes), `boot` turns PB6 into an output 0
+and blocks its configuration, then jumps to the stock bootloader — bypassing the
+physical "PTT at power-on" check. `fastboot` writes the magic for stage-2 and
+resets. Taking a dump: `python3 flash.py --dump-boot /dev/ttyUSB0
+/tmp/kilo/bootloader.bin`.
+
+`reboot` in the console performs a reset, after start `READY <µs>` and `PROF ...`
+are printed with the stages from the beginning of `main`; `prof` repeats the
+last profile. Measuring cold boot through the bootloader: `python3 bootprof.py
+/dev/ttyUSB0 --runs 5` (time to `READY` minus `ready` = bootloader + pre-main;
+the stock bootloader has a fixed 200 ms delay).
+
+## Flash layout and flashing
+
+| Address | What |
+|---|---|
+| `0x08000000..0x080027FF` | stock bootloader, **do not touch** — recovery by PTT, 115200, 246 frames |
+| `0x08002800..0x080047FF` | stage-2 (`boot2/`, 8 KB): fast flashing 921600, CRC32, its own error handlers |
+| `0x08004800..0x0803F7FF` | application |
+| `0x0803F800..0x0803FFFF` | stage-2 metadata (magic, application length/CRC; the meta and vector are checked at boot) |
+
+- **Normal update:** `python3 flash.py --fast /dev/ttyUSB0 build/rt880-fw-by-fagci.bin` — 90 blocks of 2 KB, ~5.6 s of erase/write, ~8.5 s including the upload. The `fastboot` console command sets the magic and resets; stage-2 brings up 921600.
+- **Installing stage-2 and recovery:** `make install-image` → `build/rt880-install.bin` (exactly 246 KB: stage-2 + app + meta) → `python3 flash.py --boot /dev/ttyUSB0 build/rt880-install.bin` (~33 s) or PTT at power-on and `python3 flash.py /dev/ttyUSB0 build/rt880-install.bin`. The stock bootloader erases the whole application region; this image restores stage-2, app and meta.
+- **Interrupted fast flash:** the meta is erased before the first write, stage-2 stays in fast mode at 921600; a repeated `--fast` connects to it by itself (tries `fastboot`, then ENTER at 921600) and restores the app.
+- **Completely bricked (broken stage-2):** PTT at power-on + `build/rt880-install.bin`.
+- `flash.py` in stock mode accepts only the full 246-KB image (`make install-image`) so that app.bin is not accidentally flashed over stage-2.
+- GitHub releases: `RT880-full-install-<tag>.bin` — full install/recovery (246 KB); `RT880-fast-app-<tag>.bin` — the normal update for `--fast`. Next to them `README-INSTALL.txt`, `flash.py` and `SHA256SUMS.txt`.
+
+External flash diagnostics: `store` prints the saved and current state
+(including the channel count/mask/slot), `storewipe` erases the state and
+channels (does not touch the beginning of the flash), `flashmap` — the W25Q32
+occupancy map in 64 KB blocks (+JEDEC ID), `flashdump <addr> <len>` (address and
+length in hex) — a hex dump.
+
+## Antenna and filter
+
+- **Antenna:** relay K200 is driven by PF0 (`UV/HF ANT-SW`). Short `ALARM` switches `A1` (second connector only, V/U path) ↔ `A2` (the main antenna is added to the HF path). Default `A1`.
+- **Filter:** long `SIDE2` in VFO cycles `AUTO → HF → VHF → UHF → 800`. `AUTO` (default) picks the filter by frequency; manual is held until returning to `AUTO`.
+- Pins and pin numbers are summarised in `src/driver/board_pins.h`.
+
+Sources: `research/dual-rx` in [uv98-rust](https://github.com/YaziAranea/uv98-rust), `research/band-switch` and RSSI measurements on BK B.
+
+## FC — BK4819 frequency counter ("fast scan", VFO → long `4`)
+
+The hardware counter catches a transmitter carrier on VHF/UHF/800 MHz in
+0.2–1.6 s; the board filter switches by the FC band, the FC does not touch the
+antenna relay (for 800 MHz — `A2` with short `ALARM`). A find (2 matches within
+3 kHz): the scan stops, the receiver tunes to the frequency, the sound goes
+through the squelch; the record goes to the loot list. The black and white
+lists are skipped.
+
+| Dark theme | Light theme |
+|---|---|
+| <img src="docs/screenshots/fc-dark.png" width="200" alt="BK4819 frequency counter, dark theme"> | <img src="docs/screenshots/fc-light.png" width="200" alt="BK4819 frequency counter, light theme"> |
+
+| Key | Action |
+|---|---|
+| `1` / `7` | speed (0.2–1.6 s per pass) |
+| `3` / `9` | squelch (`SQ 0` = always open: does not stick on a find, after 5 s the scan continues) |
+| `5` | counter threshold (0x244 / 0x580) |
+| `#` / `0` | next band / auto-switch (off by default) |
+| `SIDE1` / `SIDE2` | find to the black / white list and continue |
+| `MENU`, `PTT` | find frequency to VFO and exit |
+| `*` / long `MENU` | loot list |
+| `EXIT` | exit without capture (VFO returns to the previous frequency) |
