@@ -336,14 +336,23 @@ void SP_Begin(void) {
 }
 
 void SP_Init(FRange *r, uint32_t stepSize, uint32_t _bw) {
+  if (!stepSize)
+    stepSize = 1;
+  uint32_t start = r->start, end = r->end;
+  /* Защита от перевёрнутых/нулевых границ: иначе (end-start) переполняется
+   * и f2x возвращает индекс за массивом истории. */
+  if (end <= start)
+    end = start + stepSize;
   filledPoints = 0;
   step = stepSize;
   bw = _bw;
-  range = *r;
-  stepsCount = (r->end - r->start) / stepSize + 1;
+  range.start = start;
+  range.end = end;
+  stepsCount = (end - start) / stepSize + 1;
   SP_ResetHistory();
   SP_Begin();
   ticksRendered = false;
+  forceRedraw = true; /* новая сетка/диапазон: рисуем все столбцы, а не diff */
 }
 
 /* Завершить накопленный пиксель и записать его в историю. */

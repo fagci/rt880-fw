@@ -14,7 +14,6 @@
 static Mode *current = nullptr;
 static Mode *next = nullptr;
 static bool s_displayOff;
-static bool s_keyLocked;
 static bool s_paintPaused;
 static bool s_displayRxGate;
 
@@ -66,6 +65,32 @@ void Mode_Update() {
      * весь экран. */
     WF_Reset();
   }
+  /* BL SQL mode: On — открытие шумодава снимает автозатемнение и сбрасывает
+   * таймер; Open — при закрытии сразу возвращает затемнение (или LowDuty,
+   * если BL time = Off). Пока дисплей погашен, подсветку не трогаем. */
+  static bool s_prevSq;
+  bool sq = Radio_SquelchOpen();
+  if (!s_displayOff) {
+    int32_t sqlMode = Settings_Get(SET_BACKLIGHTONSQUELCH);
+    if (sq && !s_prevSq && sqlMode) {
+      s_lastKeyMs = millis();
+      if (s_dimmed) {
+        s_dimmed = false;
+        st7789_backlight_set(Settings_BacklightHighDuty());
+      }
+    } else if (!sq && s_prevSq && sqlMode == 2) {
+      uint32_t dimMs = Settings_BacklightDimMs();
+      if (dimMs) {
+        /* Следующий тик Mode_Update затемнит по таймеру. */
+        s_lastKeyMs = millis() - dimMs;
+      } else {
+        s_dimmed = true;
+        st7789_backlight_set(Settings_BacklightLowDuty());
+      }
+    }
+  }
+  s_prevSq = sq;
+
   /* Автозатемнение в простое: таймер сбрасывает любая клавиша. */
   uint32_t dimMs = Settings_BacklightDimMs();
   if (!s_displayOff && !s_dimmed && dimMs &&
@@ -91,9 +116,9 @@ uint16_t Mode_RenderInterval() {
   return current ? current->renderIntervalMs() : 50;
 }
 
-bool Mode_KeyLocked(void) { return s_keyLocked; }
+bool Mode_KeyLocked(void) { return Settings_Get(SET_KEYLOCK) != 0; }
 
-void Mode_ToggleKeyLock(void) { s_keyLocked = !s_keyLocked; }
+void Mode_ToggleKeyLock(void) { Settings_Set(SET_KEYLOCK, !Mode_KeyLocked()); }
 
 void Mode_Key(KEY_Code_t key, Key_State_t state) {
   /* Любая клавиша могла изменить VFO/настройки — сохраним после паузы.
@@ -126,6 +151,11 @@ void Mode_Key(KEY_Code_t key, Key_State_t state) {
     return;
   }
 
+  /* Клавишный бипер: до проверки keylock, чтобы заблокированные клавиши
+   * тоже озвучивались; PTT и погашенный дисплей молчат. */
+  if (state == KEY_EVT_PRESS && key != KEY_PTT)
+    Radio_Beep();
+
   /* PTT — глобально, чтобы клавиша не уходила в редакторы/меню. PTT
    * работает и при keylock (как special key в k1-fw); отдельный запрет —
    * Settings → Lock PTT. Передачу разрешаем только из VFO; Radio_TxStart
@@ -150,14 +180,14 @@ void Mode_Key(KEY_Code_t key, Key_State_t state) {
 
   /* Долгая STAR — блокировка клавиатуры в любом режиме. */
   if (state == KEY_LONG_PRESSED && key == KEY_STAR) {
-    s_keyLocked = !s_keyLocked;
+    Mode_ToggleKeyLock();
     return;
   }
 
   /* Отпускание цифры после длинного нажатия драйвер клавиатуры не шлёт
    * (long_sent в keyboard.cpp), поэтому здесь его гасить не нужно. */
 
-  if (s_keyLocked)
+  if (Mode_KeyLocked())
     return;
 
   /* Долгий EXIT — выключить дисплей и подсветку клавиатуры. */

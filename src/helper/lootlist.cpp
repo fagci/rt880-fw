@@ -1,5 +1,6 @@
 #include "lootlist.h"
 #include "../driver/board.h"
+#include "settings.h"
 #include "store.h"
 
 static Loot loot[LOOT_SIZE_MAX];
@@ -108,6 +109,17 @@ Loot *LOOT_Hit(uint32_t f, uint16_t rssi, uint8_t modulation, uint8_t bw,
   }
 
   it->lastTimeOpen = (uint16_t)(now / 1000);
+  /* Счётчик срабатываний: одно открытие шумодава, не каждый тик HOLD.
+   * Порог Auto blacklist — nuisance-частота уходит в чёрный список сама. */
+  if (!it->open) {
+    if (it->hits < 15)
+      it->hits++;
+    int32_t limit = Settings_Get(SET_AUTOBLACKLIST);
+    if (limit > 0 && it->hits >= limit && !it->whitelist && !it->blacklist) {
+      it->blacklist = 1;
+      Store_MarkDirty();
+    }
+  }
   it->open = true;
   it->modulation = modulation;
   it->bw = bw;

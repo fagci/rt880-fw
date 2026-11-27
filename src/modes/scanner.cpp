@@ -9,18 +9,17 @@
  *   (Listen t/o ограничивает общее время HOLD, по умолчанию None);
  * - закрытая частота — дальше; каждые 64 закрытых шага порог дрейфует вниз;
  * - частоты-кратные 1.3 МГц (гармоники ПЧ) пропускаются;
- * - каждый замер попадает в спектр (SP_AddPoint), водопад — по строке;
- * - под спектром — свежие находки (10 строк: частота, «сколько назад»,
- *   пик), внизу — история уровня RSSI во времени (Level in VFO, как
- *   SP_RenderGraph в k1-fw); водопад по умолчанию выключен (long SIDE1),
- *   при нём список и график уступают зону;
+ * - каждый замер идёт в детектор; спектра и водопада в сканере нет —
+ *   короткие участки мультискана всё равно не успевают их заполнить;
+ * - под полями границ — крупная текущая частота и шаг (F_M), ниже свежие
+ *   находки (10 строк: частота, «сколько назад», пик), внизу — история
+ *   уровня RSSI во времени (Level in VFO, как SP_RenderGraph в k1-fw);
  * - во время прохода экран обновляется не чаще раза в 500 мс: SPI-заливки
- *   дисплея дают помеху в 437–441 МГц. Спектр (SP_Render дорисовывает
- *   только изменившиеся столбцы) и текст (частота/состояние) — раз в 500 мс,
- *   полный кадр водопада — на границе прохода; после любого кадра следующий
- *   замер — с паузой на восстановление тракта.
- *   В HOLD дорисовывается только новый столбец графика уровня (прямой DMA):
- *   видно изменение во времени, а полный кадр не заливается.
+ *   дисплея дают помеху в 437–441 МГц. Кадр — на границе прохода, по клавише
+ *   и на переходе в замер; после кадра следующий замер — с паузой на
+ *   восстановление тракта. В HOLD дорисовывается только новый столбец
+ *   графика уровня (прямой DMA): видно изменение во времени, а полный кадр
+ *   не заливается.
  *
  * Только BK4819: используется VFO на BK (при необходимости временно
  * переключаемся на него, восстанавливаем на выходе).
@@ -31,9 +30,9 @@
  *
  * Клавиши текущего скана (элемент 0 списка): 5 — ввод границ (сначала
  * начало, затем конец), MENU — захватить частоту в VFO и выйти, STAR —
- * список находок, MENU длинный — меню (шаг/скорость), EXIT — выход,
- * SIDE1 — в чёрный список последнюю находку (и дальше), SIDE1 длинный —
- * водопад вкл/выкл, SIDE2 — в белый список, 1/7 — выдержка на частоте,
+ * список находок, MENU длинный — главное меню, длинный 3 — меню скана,
+ * EXIT — выход, SIDE1 — в чёрный список последнюю находку (и дальше),
+ * SIDE2 — в белый список, 1/7 — выдержка на частоте,
  * 3/9 — шаг сканирования, UP/DOWN — вход в список находок.
  *
  * В списке (выбранная находка): UP/DOWN — по кругу (за концами — обратно
@@ -57,6 +56,7 @@
 #include "../helper/names.h"
 #include "../helper/settings.h"
 #include "../helper/store.h"
+#include "../helper/tone.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -67,7 +67,6 @@
 #include "../ui/numval.h"
 #include "../ui/radio_menu.h"
 #include "../ui/screen_layout.h"
-#include "../ui/spectrum.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "printf.h"
@@ -75,9 +74,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Раскладка общая с анализатором — src/ui/screen_layout.h. ВАЖНО: ниже
- * UI_WATERFALL_Y начинается аппаратный vscroll: текста и виджетов там быть
- * не должно, иначе они «плывут» вместе с водопадом. */
+/* Раскладка — src/ui/screen_layout.h. Сканер не использует спектр и водопад:
+ * зона под полями границ отдана списку находок, внизу — график уровня. */
 
 #define SQL_MARGIN 10 /* ~5 дБ над шумом (RSSI: 2 ед. = 1 дБ) */
 #define SQL_HYST 4
@@ -86,6 +84,11 @@
  * разная (фильтр/АРУ), и шум на длинной иногда перекрывает порог,
  * посчитанный по быстрым замерам. */
 #define SQL_PEAK_MARGIN 16
+/* Scan mode: TO — HOLD ровно 3 с, SE — строже подтверждение пика. */
+#define SCAN_TO_MS 3000
+#define SCAN_MODE_CO 0
+#define SCAN_MODE_TO 1
+#define SCAN_MODE_SE 2
 #define WARM_STEPS 16 /* калибровка шума: первые шаги скана без поиска сигнала */
 #define BATCH_STEPS 8 /* шагов за проход главного цикла (~5 мс при 500 мкс) */
 /* RSSI-фильтр BK после перестройки тянется ~1 мс: при короткой выдержке
@@ -95,6 +98,7 @@
 #define CONFIRM_DWELL_US 2500
 #define CONFIRM_MAX_BINS 12
 #define LEVEL_MS 250 /* шаг истории уровня в HOLD (240 px = 60 с) */
+#define SKIP_MAX 8   /* nuisance-частоты на сессию скана (в RAM) */
 
 static struct Ctx {
   FRange range = {.start = 400 * MHZ, .end = 470 * MHZ};
@@ -110,7 +114,8 @@ static struct Ctx {
   uint16_t holdThr;     /* порог удержания по длинной выдержке */
   bool sweepDone;       /* проход завершён — рисуем кадр */
   bool isListening;     /* HOLD: стоим и слушаем */
-  bool menuWasOpen;     /* меню закрылось — перерисовать спектр */
+  bool toneOn;          /* детектор субтонов включён на время HOLD */
+  bool menuWasOpen;     /* меню закрылось — перепечатать лейблы */
   bool paintHeld;       /* кадр HOLD нарисован — экран не трогаем */
   bool wasMeasuring;    /* прошлый кадр замеряли — нужен кадр на переходе */
   bool redraw;          /* клавиша изменила экран — нарисовать сразу */
@@ -118,7 +123,6 @@ static struct Ctx {
   uint16_t guardUs;     /* пауза для первого замера после кадра, мкс */
   uint32_t lastFrameMs; /* последний нарисованный кадр — не реже раза в 500 мс */
   bool scanning = true; /* false = пауза (ручная перестройка) */
-  bool waterfall = false; /* по умолчанию список находок, не водопад */
   bool dacOn;
   uint16_t lastRssi;      /* последний RSSI — для графика уровня */
   uint32_t lastLevelMs;   /* последняя выборка графика */
@@ -132,9 +136,7 @@ static struct Ctx {
   uint32_t listenUntil;
   uint32_t closedAt; /* момент закрытия шумодава (0 — сигнал есть) */
   uint8_t closedSteps;
-  uint32_t lastSpRender;
-  uint32_t lastWfRender;
-  /* Список находок под спектром: 0 — текущий скан, 1..N — запись loot.
+  /* Список находок: 0 — текущий скан, 1..N — запись loot.
    * Стрелки ходят по кругу; выход за края возвращает к сканированию. */
   uint16_t listSel;
   uint16_t listTop;
@@ -150,12 +152,24 @@ static struct Ctx {
   uint32_t dbgUntil;
   uint32_t dbgSteps;
   uint16_t dbgHits;
+  /* Nuisance skip: не в чёрный список, а «не сейчас» до выхода из скана. */
+  uint32_t skipF[SKIP_MAX];
+  uint8_t skipCount;
+  /* Мультискан: несколько поддиапазонов за проход (Store v4). */
+  ScanRange multiRanges[STORE_SCAN_RANGE_MAX];
+  uint8_t multiCount;
+  uint8_t multiIdx;
+  bool multiOn;
+  bool rangeMenuOpen;   /* открыт список диапазонов (длинный 2) */
+  bool saveRangeOnEnd;  /* ручной ввод из списка — сохранить по MENU */
+  bool reopenRangeMenu; /* после ввода вернуться в список диапазонов */
+  uint8_t multiEditIdx; /* какой диапазон правим, 0xFF — новый */
 } ctx;
 
 
 /* Выдержка на частоте до замера RSSI — Settings → Scan delay (мкс, шаг
  * 100). Умолчание 1800 мкс — как в k1-fw. 1/7 (и пункт Speed меню
- * сканера) меняют её; значение отображается в центре над спектром. */
+ * сканера) меняют её; значение отображается в строке полей границ. */
 static uint16_t scanDwellUs(void) {
   int32_t v = Settings_Get(SET_SCANDELAY);
   if (v < 100)
@@ -184,7 +198,6 @@ static void adjustScanDelay(int8_t dir) {
 /* состояние сканирования */
 
 static void primeStart();
-static void hideLootList(void);
 
 /* Очередная выборка истории уровня (Level in VFO). Не чаще LEVEL_MS:
  * 240 столбцов при 250 мс — окно 60 с. */
@@ -195,40 +208,33 @@ static void levelTick(uint32_t now) {
   LevelGraph_Add(UI_LEVEL_Y, ctx.lastRssi, UI_LEVEL_H);
 }
 
-static void setWaterfall(bool on) {
-  if (on == ctx.waterfall)
-    return;
-  ctx.waterfall = on;
-  lv_port_set_text_bottom(on ? UI_WATERFALL_Y - 3 : UI_LEVEL_Y - 1);
-  WF_Reset();
-  if (on) {
-    hideLootList(); /* спрятать один раз: WF закрасит зону */
-    WF_Clear(UI_WATERFALL_Y);
-  } else {
-    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
-             C_BLACK);
-    LevelGraph_Reset(UI_LEVEL_Y, UI_LEVEL_H);
-    ctx.lastLevelMs = millis() - LEVEL_MS; /* первый столбец — сразу */
-  }
-  ctx.redraw = true;
-}
-
 static void onRangeChanged() {
-  WF_Reset();
-  /* чистим всё под статусом: мусор прошлого экрана и старый водопад */
-  FillRect(0, UI_STATUS_H, LCD_WIDTH, UI_WATERFALL_Y - UI_STATUS_H, C_BLACK);
-  if (ctx.waterfall) {
-    WF_Clear(UI_WATERFALL_Y);
-  } else {
-    FillRect(0, UI_WATERFALL_Y, LCD_WIDTH, LCD_HEIGHT - UI_WATERFALL_Y,
-             C_BLACK);
-    LevelGraph_Reset(UI_LEVEL_Y, UI_LEVEL_H);
+  /* Границы могли ввести в любом порядке: при start >= end цикл скана
+   * ломается. Нормализуем до primeStart. */
+  const uint32_t maxF = 1340u * MHZ;
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  if (ctx.range.start > maxF)
+    ctx.range.start = maxF;
+  if (ctx.range.end > maxF)
+    ctx.range.end = maxF;
+  if (ctx.range.end <= ctx.range.start) {
+    if (ctx.range.start + step > maxF)
+      ctx.range.start = maxF - step;
+    ctx.range.end = ctx.range.start + step;
   }
-  /* Заливка затёрла и лейблы (границы/частоту/список) — печатаем заново. */
+  /* Диапазон мог смениться не только редактором, но и мультисканом:
+   * NumVal — единственное отображение границ, обновляем оба. */
+  NumVal_SetValue(&ctx.numVal[0], ctx.range.start);
+  NumVal_SetValue(&ctx.numVal[1], ctx.range.end);
+  /* чистим всё под статусом: мусор прошлого экрана (список/график) */
+  FillRect(0, UI_STATUS_H, LCD_WIDTH, LCD_HEIGHT - UI_STATUS_H, C_BLACK);
+  LevelGraph_Reset(UI_LEVEL_Y, UI_LEVEL_H);
+  /* Заливка затёрла и лейблы (границы/частоту/список) — печатаем заново.
+   * Открытое меню тоже стёрто — заставим LVGL перерисовать его целиком. */
   UI_RedrawLabels();
+  if (MenuOverlay_IsOpen())
+    MenuOverlay_InvalidateBand(UI_STATUS_H, LCD_HEIGHT - 1);
   ctx.lastLevelMs = millis() - LEVEL_MS; /* первый столбец — сразу */
-  SP_Init(&ctx.range, StepFrequencyTable[vfos[currentVfo].step],
-          ctx.range.end - ctx.range.start);
   ctx.curF = ctx.range.start;
   ctx.floorRssi = 0;
   ctx.warm = WARM_STEPS;
@@ -246,14 +252,195 @@ static void onRangeChanged() {
 }
 
 /* Шаг сканирования: меняем шаг VFO сканера (на выходе вернём) и
- * перезапускаем скан — спектр строится по новой сетке. */
+ * перезапускаем скан — сетка частот пересобирается. */
 static void changeStep(int8_t d) {
   VFO *v = &vfos[currentVfo];
   v->step = static_cast<Step>((v->step + STEP_COUNT + d) % STEP_COUNT);
   onRangeChanged();
 }
 
-/* ── Меню-оверлей: параметры приёмника, скорость и водопад ── */
+/* ── Мультискан: границы/шаг/модуляция/полоса каждого поддиапазона ── */
+
+static void loadMultiRanges(void) {
+  ctx.multiCount = Store_ScanRanges(ctx.multiRanges, STORE_SCAN_RANGE_MAX);
+  ctx.multiOn = Store_ScanMulti() && ctx.multiCount > 0;
+  ctx.multiIdx = 0;
+}
+
+static void applyMultiRange(uint8_t i) {
+  if (i >= ctx.multiCount)
+    return;
+  const ScanRange *r = &ctx.multiRanges[i];
+  ctx.multiIdx = i;
+  ctx.range.start = r->start;
+  ctx.range.end = r->end;
+  VFO *v = &vfos[ctx.scanVfo];
+  v->step = static_cast<Step>(r->step % STEP_COUNT);
+  v->modulation = static_cast<ModulationType>(r->mod & 7);
+  v->bw = (uint8_t)(r->bw % 10);
+}
+
+/* Переход на следующий участок мультискана: без полной заливки экрана
+ * (она и давала «моргание» на каждой смене) и без сброса порога/прогрева —
+ * иначе короткий участок не успевает дойти до детектора и скан «не видит»
+ * сигналы. Метки границ перерисует NumVal. */
+static void switchMultiRange(uint8_t i) {
+  applyMultiRange(i);
+  BK4819_SelectChip(ctx.scanChip);
+  BK4819_SetModulation(
+      static_cast<ModulationType>(vfos[ctx.scanVfo].modulation));
+  BK4819_SetFilterBandwidth(
+      static_cast<BK4819_FilterBandwidth_t>(vfos[ctx.scanVfo].bw));
+  NumVal_SetValue(&ctx.numVal[0], ctx.range.start);
+  NumVal_SetValue(&ctx.numVal[1], ctx.range.end);
+  NumVal_Invalidate(&ctx.numVal[0]);
+  NumVal_Invalidate(&ctx.numVal[1]);
+  UI_RedrawLabels();
+  ctx.curF = ctx.range.start;
+  ctx.isListening = false;
+  ctx.closedAt = 0;
+  ctx.closedSteps = 0;
+  ctx.lastCpsTime = millis();
+  ctx.stepCount = 0;
+  ctx.stepsPerSec = 0;
+  /* Детектор включаем сразу: короткий участок иначе не успевает выйти из
+   * прогрева и «не видит» сигналы. Порог шума не сбрасываем. */
+  ctx.warm = 0;
+  ctx.sweepDone = true;
+  primeStart();
+}
+
+static void msgSet(const char *text); /* определён ниже, для подсказок */
+
+static void saveMultiRange(void) {
+  ScanRange r;
+  memset(&r, 0, sizeof(r));
+  r.start = ctx.range.start;
+  r.end = ctx.range.end;
+  r.step = (uint8_t)vfos[ctx.scanVfo].step;
+  r.mod = (uint8_t)vfos[ctx.scanVfo].modulation;
+  r.bw = (uint8_t)vfos[ctx.scanVfo].bw;
+  ScanRange list[STORE_SCAN_RANGE_MAX];
+  uint8_t n = Store_ScanRanges(list, STORE_SCAN_RANGE_MAX);
+  uint8_t i = 0;
+  while (i < n && !(list[i].start == r.start && list[i].end == r.end))
+    ++i;
+  if (i == n) {
+    if (n < STORE_SCAN_RANGE_MAX)
+      ++n;
+    else
+      i = n - 1; /* список полон — заменяем последний */
+  }
+  list[i] = r;
+  Store_ScanRangesSet(list, n);
+  loadMultiRanges();
+}
+
+static void clearMultiRanges(void) {
+  Store_ScanRangesSet(nullptr, 0);
+  Store_ScanMultiSet(false);
+  loadMultiRanges();
+}
+
+static void toggleMulti(void) {
+  if (!ctx.multiCount) {
+    msgSet("NO RANGES");
+    return;
+  }
+  ctx.multiOn = !ctx.multiOn;
+  Store_ScanMultiSet(ctx.multiOn);
+  if (ctx.multiOn)
+    applyMultiRange(0);
+  onRangeChanged();
+  ctx.sweepDone = true;
+}
+
+static const char *menuMultiValue(const MenuItem *item) {
+  (void)item;
+  if (!ctx.multiCount)
+    return "NO RANGES";
+  return ctx.multiOn ? "ON" : "OFF";
+}
+
+static void menuMultiChange(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  if (!ctx.multiCount)
+    return;
+  ctx.multiOn = !ctx.multiOn;
+  Store_ScanMultiSet(ctx.multiOn);
+  if (ctx.multiOn)
+    applyMultiRange(0);
+  onRangeChanged();
+}
+
+/* Пункты «Range 1..4»: значение — границы сохранённого участка, изменение —
+ * выбрать его (мультискан включается). Пустой слот — «--». */
+static const char *menuNoneValue(const MenuItem *item) {
+  (void)item;
+  return "";
+}
+
+static const char *menuRangeValue(const MenuItem *item) {
+  uint8_t i = (uint8_t)(item->id - 0x101u);
+  static char b[28];
+  if (i >= ctx.multiCount)
+    return "--";
+  char s1[12], s2[12];
+  /* fmt_mhz3 ждёт единицы 10 Гц — их и хранит ScanRange. */
+  fmt_mhz3(s1, sizeof(s1), ctx.multiRanges[i].start);
+  fmt_mhz3(s2, sizeof(s2), ctx.multiRanges[i].end);
+  snprintf(b, sizeof(b), "%s-%s", s1, s2);
+  return b;
+}
+
+static void deleteRangeAt(uint8_t i);
+
+static void menuRangeChange(const MenuItem *item, int8_t dir) {
+  (void)dir;
+  if (item->id == 0x200) { /* Add current */
+    saveMultiRange();
+    msgSet("RANGE SAVED");
+    ctx.redraw = true;
+    return;
+  }
+  if (item->id == 0x201) { /* Clear all */
+    clearMultiRanges();
+    msgSet("RANGES CLR");
+    ctx.redraw = true;
+    return;
+  }
+  uint8_t i = (uint8_t)(item->id - 0x101u);
+  if (i >= ctx.multiCount)
+    return;
+  ctx.multiOn = true;
+  Store_ScanMultiSet(true);
+  applyMultiRange(i);
+  onRangeChanged();
+  ctx.sweepDone = true;
+  msgSet("RANGE SET");
+}
+
+/* Удалить текущий (последний выбранный) диапазон; если он был один —
+ * выключить мультискан. */
+static void deleteCurrentRange(void) {
+  if (!ctx.multiCount) {
+    msgSet("NO RANGES");
+    return;
+  }
+  deleteRangeAt(ctx.multiIdx < ctx.multiCount ? ctx.multiIdx : 0);
+  msgSet("RANGE DEL");
+}
+
+static void menuRangeClear(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  clearMultiRanges();
+  msgSet("RANGES CLR");
+  ctx.sweepDone = true;
+}
+
+/* ── Меню-оверлей: параметры приёмника и скорость ── */
 
 static const char *menuSpeedValue(const MenuItem *item) {
   (void)item;
@@ -265,84 +452,6 @@ static const char *menuSpeedValue(const MenuItem *item) {
 static void menuSpeedChange(const MenuItem *item, int8_t dir) {
   (void)item;
   adjustScanDelay(dir > 0 ? 1 : -1);
-}
-
-static const char *menuWaterfallValue(const MenuItem *item) {
-  (void)item;
-  return ctx.waterfall ? "ON" : "OFF";
-}
-
-static void menuWaterfallChange(const MenuItem *item, int8_t dir) {
-  (void)item;
-  setWaterfall(dir > 0);
-}
-
-static const char *menuPaletteValue(const MenuItem *item) {
-  (void)item;
-  return SP_PaletteName(gWaterfallPalette);
-}
-
-static void menuPaletteChange(const MenuItem *item, int8_t dir) {
-  (void)item;
-  SP_NextPalette(dir);
-  if (ctx.waterfall) {
-    WF_Reset();
-    WF_Clear(UI_WATERFALL_Y);
-  }
-  Store_MarkDirty();
-}
-
-static const char *menuLevelMinValue(const MenuItem *item) {
-  (void)item;
-  static char b[8];
-  snprintf(b, sizeof(b), "%d", SP_LevelMin());
-  return b;
-}
-
-static const char *menuLevelMaxValue(const MenuItem *item) {
-  (void)item;
-  static char b[8];
-  snprintf(b, sizeof(b), "%d", SP_LevelMax());
-  return b;
-}
-
-static void menuLevelMinChange(const MenuItem *item, int8_t dir) {
-  (void)item;
-  SP_SetLevelMin((int16_t)(SP_LevelMin() + dir * 5));
-  SP_Invalidate(UI_SPECTRUM_H);
-  ctx.lastSpRender = 0;
-  if (ctx.waterfall) {
-    WF_Reset();
-    WF_Clear(UI_WATERFALL_Y);
-  }
-}
-
-static void menuLevelMaxChange(const MenuItem *item, int8_t dir) {
-  (void)item;
-  SP_SetLevelMax((int16_t)(SP_LevelMax() + dir * 5));
-  SP_Invalidate(UI_SPECTRUM_H);
-  ctx.lastSpRender = 0;
-  if (ctx.waterfall) {
-    WF_Reset();
-    WF_Clear(UI_WATERFALL_Y);
-  }
-}
-
-static const char *menuLevelAutoValue(const MenuItem *item) {
-  (void)item;
-  return "Fit";
-}
-
-static void menuLevelAutoChange(const MenuItem *item, int8_t dir) {
-  (void)item;
-  (void)dir;
-  SP_LevelAutoFit();
-  SP_Invalidate(UI_SPECTRUM_H);
-  ctx.lastSpRender = 0;
-  if (ctx.waterfall) {
-    WF_Reset();
-    WF_Clear(UI_WATERFALL_Y);
-  }
 }
 
 /* Изменения полосы/модуляции/усиления скан сам не переприменяет на каждой
@@ -368,8 +477,16 @@ static void scanMenuApply(uint8_t id) {
   }
 }
 
-/* Скорость — сразу после шага: до неё не нужно листать полменю. */
+static void openScanMenu(void);
+static void openRangeMenu(void);
+static void menuRangesOpen(const MenuItem *item, int8_t dir);
+static void menuRangeAdd(const MenuItem *item, int8_t dir);
+static void beginRangeEdit(void);
+
+/* Главное меню сканера: длинный MENU из любого его экрана. */
 static const MenuItem SCAN_MENU[] = {
+    {"Multiband", menuMultiValue, menuMultiChange, 0},
+    {"Ranges", menuNoneValue, menuRangesOpen, 0},
     RADIO_MENU_ITEM_STEP,
     {"Speed", menuSpeedValue, menuSpeedChange, 0},
     RADIO_MENU_ITEM_MOD,
@@ -377,13 +494,96 @@ static const MenuItem SCAN_MENU[] = {
     RADIO_MENU_ITEM_SQL,
     RADIO_MENU_ITEM_GAIN,
     RADIO_MENU_ITEM_AFC,
-    {"Min", menuLevelMinValue, menuLevelMinChange, 0},
-    {"Max", menuLevelMaxValue, menuLevelMaxChange, 0},
-    {"Auto", menuLevelAutoValue, menuLevelAutoChange, 0},
-    {"Waterfall", menuWaterfallValue, menuWaterfallChange, 0},
-    {"Palette", menuPaletteValue, menuPaletteChange, 0},
 };
 #define SCAN_MENU_COUNT (uint8_t)(sizeof(SCAN_MENU) / sizeof(SCAN_MENU[0]))
+
+/* Список диапазонов мультискана (длинный 2): 0 — удалить, длинный 0 —
+ * очистить, MENU — ввести вручную, SIDE1/SIDE2 — применить/сохранить. */
+static const MenuItem RANGE_MENU[] = {
+    {"Multiband", menuMultiValue, menuMultiChange, 0},
+    {"Range 1", menuRangeValue, menuRangeChange, 0x101},
+    {"Range 2", menuRangeValue, menuRangeChange, 0x102},
+    {"Range 3", menuRangeValue, menuRangeChange, 0x103},
+    {"Range 4", menuRangeValue, menuRangeChange, 0x104},
+    {"Add current", menuNoneValue, menuRangeAdd, 0x200},
+    {"Clear all", menuNoneValue, menuRangeClear, 0x201},
+};
+#define RANGE_MENU_COUNT (uint8_t)(sizeof(RANGE_MENU) / sizeof(RANGE_MENU[0]))
+
+static void openScanMenu(void) {
+  ctx.rangeMenuOpen = false;
+  MenuOverlay_Open(SCAN_MENU, SCAN_MENU_COUNT, 0, UI_STATUS_H, LCD_WIDTH / 2,
+                   MENU_OVERLAY_BOX_H, true);
+}
+
+static void openRangeMenu(void) {
+  ctx.rangeMenuOpen = true;
+  MenuOverlay_Open(RANGE_MENU, RANGE_MENU_COUNT, 0, UI_STATUS_H, LCD_WIDTH / 2,
+                   MENU_OVERLAY_BOX_H, true);
+}
+
+static void menuRangesOpen(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  openRangeMenu();
+}
+
+static void menuRangeAdd(const MenuItem *item, int8_t dir) {
+  (void)item;
+  (void)dir;
+  saveMultiRange();
+  msgSet("RANGE SAVED");
+  ctx.redraw = true;
+}
+
+static void deleteRangeAt(uint8_t i) {
+  if (i >= ctx.multiCount)
+    return;
+  for (uint8_t k = i; k + 1 < ctx.multiCount; ++k)
+    ctx.multiRanges[k] = ctx.multiRanges[k + 1];
+  ctx.multiCount--;
+  Store_ScanRangesSet(ctx.multiRanges, ctx.multiCount);
+  if (!ctx.multiCount) {
+    ctx.multiOn = false;
+    Store_ScanMultiSet(false);
+    ctx.multiIdx = 0;
+  } else {
+    if (ctx.multiIdx >= ctx.multiCount)
+      ctx.multiIdx = 0;
+    if (ctx.multiOn)
+      applyMultiRange(ctx.multiIdx);
+  }
+  onRangeChanged();
+  ctx.sweepDone = true;
+}
+
+static void deleteSelectedRange(void) {
+  uint8_t i = MenuOverlay_Selected();
+  if (i >= ctx.multiCount) {
+    msgSet("NO RANGE");
+    return;
+  }
+  deleteRangeAt(i);
+  MenuOverlay_SetSelected(i < ctx.multiCount ? i
+                                             : (uint8_t)(ctx.multiCount - 1));
+  msgSet("RANGE DEL");
+  ctx.redraw = true;
+}
+
+static void editSelectedRange(void) {
+  uint8_t i = MenuOverlay_Selected();
+  if (i < ctx.multiCount) {
+    ctx.multiEditIdx = i;
+    applyMultiRange(i);
+  } else {
+    ctx.multiEditIdx = 0xFF; /* ручной ввод нового участка */
+  }
+  ctx.saveRangeOnEnd = true;
+  MenuOverlay_Close();
+  ctx.rangeMenuOpen = false;
+  beginRangeEdit();
+  msgSet("EDIT RANGE");
+}
 
 static void onStartEntered(uint32_t f) {
   ctx.range.start = f;
@@ -392,7 +592,31 @@ static void onStartEntered(uint32_t f) {
 }
 static void onEndEntered(uint32_t f) {
   ctx.range.end = f;
+  /* Конец ниже начала: двигаем начало, а не задираем только что
+   * введённый конец (пользователь задаёт именно его). */
+  if (ctx.range.end <= ctx.range.start) {
+    uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+    ctx.range.start = ctx.range.end > step ? ctx.range.end - step : 0;
+  }
   onRangeChanged();
+  /* Ручной ввод из списка диапазонов: сохранить (или заменить) участок. */
+  if (ctx.saveRangeOnEnd) {
+    if (ctx.multiEditIdx < ctx.multiCount) {
+      ScanRange *r = &ctx.multiRanges[ctx.multiEditIdx];
+      r->start = ctx.range.start;
+      r->end = ctx.range.end;
+      r->step = (uint8_t)vfos[ctx.scanVfo].step;
+      r->mod = (uint8_t)vfos[ctx.scanVfo].modulation;
+      r->bw = (uint8_t)vfos[ctx.scanVfo].bw;
+      Store_ScanRangesSet(ctx.multiRanges, ctx.multiCount);
+    } else {
+      saveMultiRange();
+    }
+    ctx.saveRangeOnEnd = false;
+    ctx.multiEditIdx = 0xFF;
+    ctx.reopenRangeMenu = true;
+    msgSet("RANGE SAVED");
+  }
 }
 
 static NumVal_t *editingNumVal() {
@@ -429,9 +653,13 @@ static void advance() {
   uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
   ctx.curF += step;
   if (ctx.curF > ctx.range.end) {
-    ctx.curF = ctx.range.start;
-    ctx.sweepDone = true;
-    primeStart();
+    if (ctx.multiOn && ctx.multiCount > 1) {
+      switchMultiRange((uint8_t)((ctx.multiIdx + 1) % ctx.multiCount));
+    } else {
+      ctx.curF = ctx.range.start;
+      ctx.sweepDone = true;
+      primeStart();
+    }
   }
   vfos[currentVfo].rxF = ctx.curF;
 }
@@ -456,6 +684,14 @@ static void primeStart() {
   BK4819_SelectFilterByFrequency(ctx.curF);
   BK4819_TuneTo(ctx.curF, false);
   delay_ms(20);
+}
+
+/* Время HOLD: TO — фиксированные 3 с, иначе Listen t/o (None — до
+ * закрытия шумодава). */
+static uint32_t holdTimeoutMs(void) {
+  if (Settings_Get(SET_SCANMODE) == SCAN_MODE_TO)
+    return SCAN_TO_MS;
+  return Settings_ScanTimeoutMs(SET_SQOPENEDTIMEOUT);
 }
 
 /* Локальная проверка кандидата: сигнал из быстрого прохода мог «уехать»
@@ -495,14 +731,39 @@ static bool confirmHit(uint32_t *bestF, uint16_t *bestRssi) {
     return false;
   /* Пик должен быть заметно выше *второго* максимума окна. Среднее
    * размывается широким всплеском на старте диапазона; второй максимум
-   * надёжнее отсекает одиночный шумовой выброс. */
-  return best >= (uint16_t)(second + SQL_PEAK_MARGIN);
+   * надёжнее отсекает одиночный шумовой выброс. В режиме SE запас
+   * удвоен: слабые/шумовые выбросы не останавливают скан. */
+  uint16_t margin = SQL_PEAK_MARGIN;
+  if (Settings_Get(SET_SCANMODE) == SCAN_MODE_SE)
+    margin = (uint16_t)(SQL_PEAK_MARGIN * 2);
+  return best >= (uint16_t)(second + margin);
 }
 
 /* Один шаг сканирования: замер, решение, движение.
  * Порог = noise floor (EMA по закрытым замерам) + SQL_MARGIN.
  * Раньше порог брался из Std() и был в разы ниже RSSI — всё считалось
  * «открытым» и сканер висел в HOLD/паузах. */
+static bool skipContains(uint32_t f, uint32_t tol) {
+  for (uint8_t i = 0; i < ctx.skipCount; ++i) {
+    uint32_t d = ctx.skipF[i] > f ? ctx.skipF[i] - f : f - ctx.skipF[i];
+    if (d <= tol)
+      return true;
+  }
+  return false;
+}
+
+static void skipAdd(uint32_t f) {
+  for (uint8_t i = 0; i < ctx.skipCount; ++i)
+    if (ctx.skipF[i] == f)
+      return;
+  if (ctx.skipCount < SKIP_MAX) {
+    ctx.skipF[ctx.skipCount++] = f;
+  } else {
+    memmove(ctx.skipF, ctx.skipF + 1, sizeof(ctx.skipF) - sizeof(ctx.skipF[0]));
+    ctx.skipF[SKIP_MAX - 1] = f;
+  }
+}
+
 static void scanStep() {
   bool listening = ctx.isListening;
   /* В HOLD приёмник уже стоит на частоте сигнала: не дёргаем VCO и не
@@ -538,8 +799,6 @@ static void scanStep() {
     ctx.warm--;
     ctx.floorRssi = ctx.floorRssi ? (uint16_t)(((uint32_t)ctx.floorRssi * 3 + rssi + 2) / 4)
                           : rssi;
-    Measurement w = {.f = ctx.curF, .rssi = rssi, .noise = 0, .open = false};
-    SP_AddPoint(&w);
     ctx.stepCount++;
     advance();
     return;
@@ -564,7 +823,6 @@ static void scanStep() {
     skipped = true;
   }
 
-  uint32_t measF = ctx.curF;
   uint16_t hitRssi = rssi;
   if (open && !ctx.isListening) {
     uint32_t bestF;
@@ -583,6 +841,11 @@ static void scanStep() {
     if (open &&
         LOOT_IsSkipped(ctx.curF, StepFrequencyTable[vfos[currentVfo].step] / 2,
                        ctx.monitorMode)) {
+      open = false;
+      skipped = true;
+    }
+    if (open &&
+        skipContains(ctx.curF, StepFrequencyTable[vfos[currentVfo].step] / 2)) {
       open = false;
       skipped = true;
     }
@@ -610,15 +873,13 @@ static void scanStep() {
     }
   }
 
-  Measurement m = {.f = measF, .rssi = rssi, .noise = 0, .open = open};
-  SP_AddPoint(&m);
   ctx.stepCount++;
 
   uint32_t now = millis();
   if (open) {
     if (!ctx.isListening) {
       ctx.isListening = true;
-      uint32_t tmo = Settings_ScanTimeoutMs(SET_SQOPENEDTIMEOUT);
+      uint32_t tmo = holdTimeoutMs();
       ctx.listenUntil = tmo == 0xFFFFFFFFu ? tmo : now + tmo;
     }
     ctx.closedAt = 0; /* сигнал вернулся — Stay time не действует */
@@ -655,6 +916,24 @@ static void scanStep() {
   } else {
     advance();
   }
+
+  /* Субтон: CTCSS/DCS читаем только пока стоим на частоте (неблокирующе,
+   * ~650 мс), код сразу попадает в находку — за 1.8 мс на шаг скана это
+   * невозможно, а в HOLD время есть. */
+  if (ctx.isListening) {
+    Tone_Update(true, ctx.scanChip, ctx.curF, open);
+    ctx.toneOn = true;
+    if (open && gLastActiveLoot && gLastActiveLoot->f == ctx.curF) {
+      uint8_t code = Tone_GetCode();
+      if (code != gLastActiveLoot->code) {
+        gLastActiveLoot->code = code;
+        Store_MarkDirty();
+      }
+    }
+  } else if (ctx.toneOn) {
+    Tone_Update(false, 0, 0, false);
+    ctx.toneOn = false;
+  }
 }
 
 /* Закончить удержание и идти дальше (после занесения в список) */
@@ -668,7 +947,9 @@ static void releaseHold() {
   advance();
 }
 
-/* ─── Список находок под спектром ─── */
+/* ─── Список находок ─── */
+
+static const char *s_titleState;
 
 static uint16_t lootRowIdx[UI_LOOT_ROWS];
 static uint16_t lootRowAge[UI_LOOT_ROWS];
@@ -758,14 +1039,6 @@ static void drawLootList(void) {
   }
 }
 
-/* Водопад занимает ту же зону — список находок прячем. */
-static void hideLootList(void) {
-  for (uint8_t r = 0; r < UI_LOOT_ROWS; ++r) {
-    uint16_t y = (uint16_t)(UI_LOOT_Y + r * UI_LOOT_ROW_H + FontAscent(F_M));
-    PrintfT(UI_LEFT_X, y, text_style(C_WHITE, C_BLACK, POS_L, F_M), "%s", "");
-  }
-}
-
 /* ─── Навигация по списку находок ───
  * listSel = 0 — текущий скан, 1..N — запись loot (индекс = listSel-1).
  * Стрелки ходят по кругу: за последней записью и перед первой — возврат
@@ -845,8 +1118,9 @@ static void tuneLoot(const Loot *it) {
 
 static void resumeScan(void) {
   bool wasHold = ctx.listWasHold;
-  ctx.listSel = 0;
-  ctx.listTop = 0;
+    ctx.listSel = 0;
+    ctx.listTop = 0;
+    ctx.skipCount = 0; /* nuisance-список живёт одну сессию скана */
   ctx.listWasHold = false;
   ctx.msg[0] = 0;
   ctx.scanning = true;
@@ -892,8 +1166,6 @@ static void listMove(int8_t d) {
     Radio_ScanAudio(false);
     LOOT_Standby();
     Mode_SetDisplayRxGate(false); /* слушаем выбранную — без провалов звука */
-    if (ctx.waterfall)
-      setWaterfall(false); /* список должен быть виден */
     LOOT_Sort(LOOT_SORTERS[ctx.sortIdx], ctx.sortRev);
     ctx.listTop = 0;
   } else if (d > 0) {
@@ -943,6 +1215,8 @@ static void saveSelectedLootToChannel(void) {
   ch.modulation = (uint8_t)(it->modulation & 7);
   ch.bw = (uint8_t)(it->bw & 15);
   ch.radio = (uint8_t)(it->radio & 3);
+  ch.tone = it->code;
+  ch.toneSql = it->code != TONE_CODE_NONE;
   ch.scanlists = CH_GetScanlistMask();
   msgSet(CH_Add(&ch) ? "SAVED" : "ADD ERR");
 }
@@ -965,9 +1239,12 @@ class ScannerMode : public Mode {
 public:
   void enter() override {
     STATUSLINE_SetTitle("SCAN");
+    s_titleState = "SCAN";
     lv_port_set_direct_areas(true);
-    lv_port_set_text_bottom(ctx.waterfall ? UI_WATERFALL_Y - 3
-                                          : UI_LEVEL_Y - 1);
+    /* Спектра/водопада в сканере нет: LVGL пишет и в их зону, список
+     * находок занимает место до графика уровня. */
+    lv_port_set_spectrum_hidden(true);
+    lv_port_set_text_bottom(UI_LEVEL_Y - 1);
     ctx.savedVfo = currentVfo;
     ctx.savedFreq = vfos[currentVfo].rxF;
     Radio_Init();
@@ -985,7 +1262,6 @@ public:
       vfos[ctx.scanVfo].modulation = MOD_FM;
     ctx.savedFreq = vfos[ctx.scanVfo].rxF; /* после Radio_Init */
     Radio_FilterAuto(); /* скан сам выбирает фильтр по частоте */
-    SP_ResetLevel();
 
     initNumVals();
     ctx.scanChip = vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0;
@@ -1000,6 +1276,16 @@ public:
       }
       if (ctx.dbgFlags & 2)
         SI47XX_PowerDown();
+    }
+    loadMultiRanges();
+    ctx.rangeMenuOpen = false;
+    ctx.saveRangeOnEnd = false;
+    ctx.reopenRangeMenu = false;
+    ctx.multiEditIdx = 0xFF;
+    if (ctx.multiOn) {
+      applyMultiRange(0);
+      BK4819_SetModulation(
+          static_cast<ModulationType>(vfos[ctx.scanVfo].modulation));
     }
     /* Полоса канала из VFO: после WFM в REG_43 остаётся широкая полоса,
      * и скан «слышит» соседние каналы. AFC на время скана выключен, иначе
@@ -1060,6 +1346,12 @@ public:
       }
     }
 
+    /* После ручного ввода вернуться в список диапазонов (там же правят). */
+    if (ctx.reopenRangeMenu && !editing && !MenuOverlay_IsOpen()) {
+      ctx.reopenRangeMenu = false;
+      openRangeMenu();
+    }
+
     uint32_t now = millis();
     if (now - ctx.lastCpsTime >= 1000) {
       ctx.stepsPerSec = ctx.stepCount * 1000 / (now - ctx.lastCpsTime);
@@ -1076,7 +1368,7 @@ public:
     /* Во время прохода кадры редкие: каждый flush SPI1 дисплея даёт
      * помеху в 437–441 МГц, и замеры становятся грязнее. Кадр обновляем на
      * границе прохода (sweepDone), по клавише, изменившей экран (redraw), и
-     * не реже раза в 500 мс — иначе частота и спектр на экране выглядят
+     * не реже раза в 500 мс — иначе частота и список на экране выглядят
      * «зависшими». Один кадр на переходе в замер — чтобы после HOLD/меню/
      * паузы не остался старый экран. */
     bool measuring = ctx.scanning && !ctx.isListening && !menuOpen && !editing;
@@ -1093,58 +1385,29 @@ public:
      * уровня (Level in VFO): он добавляет по одному столбцу прямым DMA и
      * показывает изменение сигнала во времени. */
     bool holding = ctx.isListening && !menuOpen && !editing;
-    bool firstHold = false;
     if (holding) {
       if (ctx.paintHeld) {
-        if (!ctx.waterfall)
-          levelTick(now);
+        levelTick(now);
         return;
       }
       ctx.paintHeld = true;
-      firstHold = true;
     } else {
       ctx.paintHeld = false;
     }
 
     ctx.lastFrameMs = now;
     ctx.redraw = false;
+    ctx.sweepDone = false;
 
     STATUSLINE_render();
 
     NumVal_Render(&ctx.numVal[0]);
     NumVal_Render(&ctx.numVal[1]);
     if (ctx.menuWasOpen && !menuOpen) {
-      /* Меню закрылось: его пиксели в зоне спектра нужно заменить. */
-      SP_Invalidate(UI_SPECTRUM_H);
-      ctx.lastSpRender = 0;
+      /* Меню закрылось: перепечатать лейблы на его месте. */
+      UI_RedrawLabels();
     }
     ctx.menuWasOpen = menuOpen;
-
-    /* Спектр — на границе прохода, по прямому запросу (смена
-     * диапазона/шага/уровней, кадр HOLD) и не реже раза в 500 мс, вместе
-     * с текстом: SP_Render дорисовывает только изменившиеся столбцы, так
-     * что столбцы появляются по мере прохода. Иначе при медленном проходе
-     * (Scan delay 1.8 мс, 400–470 МГц) спектр «замирает» на десятки секунд.
-     * После кадра следующий замер — с паузой на восстановление тракта. */
-    if (ctx.sweepDone || ctx.lastSpRender == 0 || firstHold ||
-        (!ctx.listSel && !measuring && now - ctx.lastSpRender >= 300)) {
-      BK4819_RxSuspend(); /* кадр не должен попадать в приём */
-      SP_Render(&ctx.range, UI_SPECTRUM_Y, UI_SPECTRUM_H);
-      BK4819_RxResume();
-      ctx.lastSpRender = now;
-      ctx.spiGuard = true; /* следующий замер — после паузы на восстановление */
-      /* прямой DMA затёр только полосу спектра — меню перерисует пересечение */
-      MenuOverlay_InvalidateBand(UI_SPECTRUM_Y, UI_SPECTRUM_Y + UI_SPECTRUM_H - 1);
-    }
-    if (ctx.sweepDone) { /* строка водопада — раз за полный проход */
-      ctx.sweepDone = false;
-      if (ctx.waterfall) {
-        BK4819_RxSuspend();
-        WF_Render(UI_WATERFALL_Y, true);
-        BK4819_RxResume();
-      }
-      SP_Begin(); /* пересчитать автоуровни по завершённому проходу */
-    }
 
     /* шаг между полями границ; при вводе не прячем — принятая граница
      * остаётся видимой рядом с редактором */
@@ -1152,83 +1415,82 @@ public:
     static char stepBuf[10];
     fmt_step(stepBuf, sizeof(stepBuf), stp);
     PrintfT(LCD_XCENTER, UI_RANGE_BASE,
-            text_style(C_YELLOW, C_BLACK, POS_C, F_S), "%s", stepBuf);
+            text_style(C_YELLOW, C_BLACK, POS_C, F_M), "%s", stepBuf);
 
-    /* Строка 1: состояние | частота (скана или выбранной) | скорость/номер. */
+    /* Крупная частота (скана или выбранной) — одна строка на оба scan-экрана. */
     bool browsing = ctx.listSel != 0;
     const Loot *selIt =
         browsing ? LOOT_Item((uint16_t)(ctx.listSel - 1)) : nullptr;
     uint32_t dispF = selIt ? selIt->f : ctx.curF;
+    static char bigFreq[16];
+    fmt_mhz3(bigFreq, sizeof(bigFreq), dispF);
+    PrintfT(LCD_XCENTER, UI_SCAN_FREQ_BASE,
+            text_style(browsing ? C_CYAN : C_WHITE, C_BLACK, POS_C, F_XL), "%s",
+            bigFreq);
+
+    /* Состояние — в заголовке статуслайна: под крупной частотой места нет. */
     const char *state = browsing ? "LOOT"
                         : !ctx.scanning ? "PAUSE"
                         : (ctx.isListening ? "HOLD" : "SCAN");
-    Color stateCol = browsing ? C_CYAN
-                     : !ctx.scanning ? C_GRAY
-                     : (ctx.isListening ? C_YELLOW : C_GREEN);
-    PrintfT(UI_LEFT_X, UI_INFO1_BASE,
-            text_style(stateCol, C_BLACK, POS_L, F_M), "%s", state);
-    PrintfT(LCD_XCENTER, UI_INFO1_BASE,
-            text_style(C_WHITE, C_BLACK, POS_C, F_M), "%u.%05u",
-            (unsigned)(dispF / 100000), (unsigned)(dispF % 100000));
-    if (browsing) {
-      PrintfT(UI_RIGHT_X, UI_INFO1_BASE,
-              text_style(C_YELLOW, C_BLACK, POS_R, F_M), "%u/%u",
-              (unsigned)ctx.listSel, (unsigned)LOOT_Size());
-    } else {
-      PrintfT(UI_RIGHT_X, UI_INFO1_BASE,
-              text_style(C_YELLOW, C_BLACK, POS_R, F_M), "%u/s",
-              (unsigned)ctx.stepsPerSec);
+    if (state != s_titleState) {
+      s_titleState = state;
+      STATUSLINE_SetTitle(state);
     }
 
-    /* Строка 2: находка/выдержка/счётчик или детали выбранной записи. */
+    const uint16_t infoY = UI_SCAN_INFO_BASE;
+
+    /* Строка деталей: находка/выдержка/счётчик или запись списка. */
     if (browsing && selIt) {
       if (ctx.msg[0] && (int32_t)(ctx.msgUntil - millis()) > 0) {
-        PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+        PrintfT(UI_LEFT_X, infoY,
                 text_style(C_YELLOW, C_BLACK, POS_L, F_S), "%s", ctx.msg);
       } else {
         ctx.msg[0] = 0;
         char dur[5];
         fmt_duration(dur, sizeof(dur), selIt->duration);
-        PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+        PrintfT(UI_LEFT_X, infoY,
                 text_style(C_WHITE, C_BLACK, POS_L, F_S), "%s %s %+ddBm",
                 MOD_NAMES[selIt->modulation & 7],
                 RADIO_NAMES[selIt->radio > 2 ? 2 : selIt->radio],
                 (int)selIt->peak - 160);
-        PrintfT(LCD_XCENTER, UI_INFO2_BASE,
+        PrintfT(LCD_XCENTER, infoY,
                 text_style(C_GRAY, C_BLACK, POS_C, F_S), "dur %s", dur);
       }
-      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
-              text_style(C_GRAY, C_BLACK, POS_R, F_S), "by %s%s",
-              LOOT_SORT_NAMES[ctx.sortIdx], ctx.sortRev ? " rev" : "");
+      PrintfT(UI_RIGHT_X, infoY,
+              text_style(C_GRAY, C_BLACK, POS_R, F_S), "%u/%u %s%s",
+              (unsigned)ctx.listSel, (unsigned)LOOT_Size(),
+              LOOT_SORT_NAMES[ctx.sortIdx], ctx.sortRev ? " R" : "");
     } else {
       const Loot *ll = gLastActiveLoot;
       if (ll) {
         char fb[16];
         fmt_mhz5(fb, sizeof(fb), ll->f);
-        PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+        PrintfT(UI_LEFT_X, infoY,
                 text_style(ll->open ? C_YELLOW : C_WHITE, C_BLACK, POS_L, F_S),
                 "%c%s", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ', fb);
       } else {
-        PrintfT(UI_LEFT_X, UI_INFO2_BASE,
+        PrintfT(UI_LEFT_X, infoY,
                 text_style(C_GRAY, C_BLACK, POS_L, F_S), "no loot yet");
       }
-      PrintfT(LCD_XCENTER, UI_INFO2_BASE,
+      PrintfT(LCD_XCENTER, infoY,
               text_style(C_GRAY, C_BLACK, POS_C, F_S), "%uus",
               (unsigned)scanDwellUs());
-      PrintfT(UI_RIGHT_X, UI_INFO2_BASE,
+      PrintfT(UI_RIGHT_X, infoY,
               text_style(ctx.monitorMode ? C_GREEN : C_GRAY, C_BLACK, POS_R,
                          F_S),
-              "L%u%s", (unsigned)LOOT_Size(), ctx.monitorMode ? " MON" : "");
+              "L%u%s %u/s", (unsigned)LOOT_Size(),
+              ctx.monitorMode ? " MON" : "", (unsigned)ctx.stepsPerSec);
     }
 
-    /* Низ экрана: список находок вместо водопада (он по long SIDE1) и
-     * график уровня. Список — LVGL-лейблы (зона расширена до графика),
-     * график — прямым DMA в нижней полосе. */
-    if (!ctx.waterfall) {
-      drawLootList();
-      if (holding) /* история — только пока слушаем */
-        levelTick(now);
-    }
+    /* Низ экрана: список находок и график уровня. Список — LVGL-лейблы
+     * (зона расширена до графика), график — прямым DMA в нижней полосе. */
+    drawLootList();
+    if (holding) /* история — только пока слушаем */
+      levelTick(now);
+
+    /* Любой кадр (LVGL-flush ниже) даёт SPI-помеху: следующий замер —
+     * после паузы на восстановление тракта. */
+    ctx.spiGuard = true;
 
     /* Текст/меню — LVGL: реальный SPI-flush делает lv_timer_handler, его
      * гасит главный цикл (Mode_DisplayRxGate). */
@@ -1262,16 +1524,53 @@ public:
 
   bool key(KEY_Code_t k, Key_State_t state) override {
     if (MenuOverlay_IsOpen()) {
-      if (MenuOverlay_Key(k, state))
+      /* В списке диапазонов свои 0/long 0/MENU; длинный MENU всегда
+       * открывает главное меню. */
+      if (ctx.rangeMenuOpen) {
+        if (state == KEY_LONG_PRESSED && k == KEY_MENU) {
+          SETTINGS_OpenFrom(MODE_SCANNER);
+          return true;
+        }
+        if (state == KEY_LONG_PRESSED && k == KEY_0) {
+          clearMultiRanges();
+          msgSet("RANGES CLR");
+          return true;
+        }
+        if (state == KEY_RELEASED && k == KEY_0) {
+          deleteSelectedRange();
+          return true;
+        }
+        if (state == KEY_RELEASED && k == KEY_MENU) {
+          editSelectedRange();
+          return true;
+        }
+      }
+      if (MenuOverlay_Key(k, state)) {
+        if (!MenuOverlay_IsOpen())
+          ctx.rangeMenuOpen = false;
         return true;
+      }
+      ctx.rangeMenuOpen = false;
       LOOTLIST_OpenFrom(MODE_SCANNER); /* STAR закрыл меню */
       return true;
     }
 
     /* пока идёт ввод — все клавиши редактору (сначала начало, затем конец) */
     if (NumVal_t *ev = editingNumVal()) {
-      if (NumVal_Key(ev, k, state))
+      if (state == KEY_LONG_PRESSED && k == KEY_MENU) {
+        SETTINGS_OpenFrom(MODE_SCANNER); /* главное меню и из редактора */
         return true;
+      }
+      if (NumVal_Key(ev, k, state)) {
+        if (!NumVal_IsEditing(&ctx.numVal[0]) &&
+            !NumVal_IsEditing(&ctx.numVal[1]) && ctx.saveRangeOnEnd) {
+          /* ввод отменён — вернуться в список диапазонов */
+          ctx.saveRangeOnEnd = false;
+          ctx.multiEditIdx = 0xFF;
+          ctx.reopenRangeMenu = true;
+        }
+        return true;
+      }
       return false;
     }
 
@@ -1295,6 +1594,12 @@ public:
         case KEY_0: /* очистить весь список и вернуться к скану */
           LOOT_Clear();
           resumeScan();
+          return true;
+        case KEY_3: /* меню параметров скана (в т.ч. Multiband) */
+          openScanMenu();
+          return true;
+        case KEY_MENU: /* длинный MENU — системное меню */
+          SETTINGS_OpenFrom(MODE_SCANNER);
           return true;
         default:
           /* пока список выбран, меню/водопад/сброс пиков не трогаем */
@@ -1352,15 +1657,22 @@ public:
 
     if (state == KEY_LONG_PRESSED) {
       switch (k) {
-      case KEY_MENU: /* меню-оверлей: параметры, скорость и водопад */
-        MenuOverlay_Open(SCAN_MENU, SCAN_MENU_COUNT, 0, UI_STATUS_H,
-                         LCD_WIDTH / 2, MENU_OVERLAY_BOX_H, true);
+      case KEY_MENU: /* длинный MENU — системное меню (главное) */
+        SETTINGS_OpenFrom(MODE_SCANNER);
         return true;
-      case KEY_SIDE1: /* водопад вкл/выкл (по умолчанию — список находок) */
-        setWaterfall(!ctx.waterfall);
+      case KEY_3: /* меню параметров скана (в т.ч. Multiband) */
+        openScanMenu();
         return true;
-      case KEY_5: /* сброс пикового удержания */
-        SP_ResetPeaks();
+      case KEY_2: /* список диапазонов мультискана */
+        openRangeMenu();
+        return true;
+      case KEY_4: /* удалить текущий диапазон мультискана */
+        deleteCurrentRange();
+        ctx.redraw = true;
+        return true;
+      case KEY_6: /* мультискан вкл/выкл */
+        toggleMulti();
+        msgSet(ctx.multiOn ? "MULTI ON" : "MULTI OFF");
         ctx.redraw = true;
         return true;
       default:
@@ -1394,6 +1706,14 @@ public:
     case KEY_SIDE2: /* в белый список и дальше */
       if (gLastActiveLoot) {
         LOOT_WhitelistLast();
+        releaseHold();
+        ctx.redraw = true;
+      }
+      return true;
+    case KEY_0: /* nuisance skip: эта частота — до конца сессии скана */
+      if (gLastActiveLoot) {
+        skipAdd(gLastActiveLoot->f);
+        msgSet("SKIP");
         releaseHold();
         ctx.redraw = true;
       }

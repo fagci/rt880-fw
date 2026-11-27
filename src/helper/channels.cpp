@@ -2,10 +2,12 @@
 
 #include "lootlist.h"
 #include "store.h"
+#include "tone.h"
 
 #include "../driver/board.h"
 #include "../radio.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #define CH_SAVE_DELAY_MS 2500u
@@ -86,6 +88,16 @@ static void chSanitize(CH *ch) {
     ch->bw = 0;
   ch->radio = chRadio(ch->radio & 3);
   ch->blacklist = ch->blacklist ? 1 : 0;
+  if (ch->tone != CH_TONE_NONE) {
+    if (ch->tone & TONE_CODE_DCS) {
+      if ((ch->tone & 0x7Fu) >= 104)
+        ch->tone = CH_TONE_NONE;
+    } else if (ch->tone >= 50) {
+      ch->tone = CH_TONE_NONE;
+    }
+  }
+  if (ch->tone == CH_TONE_NONE)
+    ch->toneSql = 0;
   ch->name[CH_NAME_LEN - 1] = 0;
   for (uint8_t i = 0; i < CH_NAME_LEN - 1; ++i) {
     uint8_t c = (uint8_t)ch->name[i];
@@ -158,6 +170,8 @@ static int16_t saveFromLoot(bool blacklist) {
       ch.modulation = l->modulation;
       ch.bw = l->bw;
       ch.radio = chRadio(l->radio);
+      ch.tone = l->code;
+      ch.toneSql = l->code != LOOT_NO_CODE;
       if (blacklist) {
         ch.blacklist = 1;
         ch.scanlists = 0;
@@ -191,6 +205,8 @@ static int16_t saveFromLoot(bool blacklist) {
     ch.modulation = l->modulation;
     ch.bw = l->bw;
     ch.radio = chRadio(l->radio);
+    ch.tone = l->code;
+    ch.toneSql = l->code != LOOT_NO_CODE;
     ch.blacklist = blacklist ? 1 : 0;
     ch.scanlists = blacklist ? 0 : ctx.mask;
     chSanitize(&ch);
@@ -257,6 +273,27 @@ uint16_t CH_Count(void) { return ctx.count; }
 uint16_t CH_GetScanlistMask(void) { return ctx.mask; }
 
 void CH_SetScanlistMask(uint16_t mask) { ctx.mask = mask & 0xFFu; }
+
+void CH_MaskString(char *b, size_t n, uint16_t mask) {
+  if (!b || !n)
+    return;
+  if (!mask) {
+    snprintf(b, n, "ALL");
+    return;
+  }
+  char *p = b;
+  char *end = b + n - 1;
+  p[0] = 0;
+  for (uint8_t i = 0; i < CH_SCANLIST_COUNT && p < end; ++i) {
+    if (!(mask & (1u << i)))
+      continue;
+    int w = snprintf(p, (size_t)(end - p + 1), "%s%u",
+                     p == b ? "" : ".", (unsigned)(i + 1));
+    if (w < 0 || w > end - p)
+      break;
+    p += w;
+  }
+}
 
 bool CH_Read(uint16_t storageIdx, CH *out) {
   if (!backendRead(storageIdx, out))

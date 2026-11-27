@@ -5,6 +5,7 @@
 #include "driver/si473x.h"
 #include "driver/st7789.h"
 #include "driver/w25q32.h"
+#include "helper/store.h"
 #include "radio.h"
 #include <math.h>
 #include <stdio.h>
@@ -36,6 +37,7 @@ extern "C" void board_tx_gates(bool, bool) {}
 bool g_led_rx;
 void led_rx_set(bool on) { g_led_rx = on; }
 void keyboard_backlight_set(bool) {}
+extern "C" void board_beep(uint16_t, uint16_t) {}
 
 /* ── дисплей: память кадра 240x320 + аппаратный скролл ── */
 static uint16_t gram[ST7789_HEIGHT][ST7789_WIDTH];
@@ -256,6 +258,8 @@ void BK4819_SelectFilter(Filter) {}
 void BK4819_SetFilterOverride(Filter, bool) {}
 void BK4819_InvalidateFilterCache(void) {}
 void BK4819_SetModulation(ModulationType) {}
+void BK4819_ApplyAFResponseRX(bool) {}
+void BK4819_ApplyAFResponseTX(void) {}
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t) {}
 void BK4819_SetupSquelch(SQL, uint8_t, uint8_t) {}
 void BK4819_SetDeviation(uint16_t) {}
@@ -332,6 +336,14 @@ bool W25Q_SectorErase(uint32_t) { return false; }
 bool W25Q_PageProgram(uint32_t, const void *, uint32_t) { return false; }
 
 void Store_MarkDirty(void) {}
+uint8_t Store_ScanRanges(ScanRange *out, uint8_t max) {
+  if (out && max)
+    memset(out, 0, (size_t)max * sizeof(*out));
+  return 0;
+}
+void Store_ScanRangesSet(const ScanRange *, uint8_t) {}
+bool Store_ScanMulti(void) { return false; }
+void Store_ScanMultiSet(bool) {}
 void Store_PinRadio(void) {}
 void Store_UnpinRadio(void) {}
 bool Store_ApplyRadio(void) { return false; }

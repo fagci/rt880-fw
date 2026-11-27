@@ -324,8 +324,14 @@ static void updateAfc(int16_t afc, bool rx) {
  * трогать до lv_timer_handler(): отложенный flush LVGL затрёт пиксели.
  * Перед flush только убираем график, когда он выключен, — тогда LVGL успеет
  * перерисовать S-метр/дБм поверх очищенной полосы. */
+/* Always RSSI: при выключенной настройке уровень виден только при
+ * открытом шумодаве. */
+static bool levelVisible(void) {
+  return Settings_Get(SET_ALWAYS_RSSI) || Radio_SquelchOpen();
+}
+
 static bool levelGraphEnabled(void) {
-  return Settings_Get(SET_SHOWLEVELINVFO) &&
+  return Settings_Get(SET_SHOWLEVELINVFO) && levelVisible() &&
          vfos[currentVfo].radio != RADIO_SI4732 && !Radio_TxActive();
 }
 
@@ -389,6 +395,85 @@ static void setRowActive(uint8_t i, bool active) {
     layoutMeter(i);
 }
 
+/* ─── Battery save ────────────────────────────────────────────
+ * Только VFO/BK при закрытом шумодаве: после 5 с тишины — 1 с приёма,
+ * затем 1/2/3 с BK4819_RxSuspend (по настройке). Любой сигнал, клавиша,
+ * PTT или смена режима возвращают приём. */
+#define SAVE_START_MS 5000u
+#define SAVE_ON_MS 1000u
+
+static uint32_t s_saveQuietAt;
+static uint32_t s_savePhaseAt;
+static bool s_saveOff;
+static bool s_saveSuspended;
+
+static bool saveSuppressed(void) {
+  int32_t mode = Settings_Get(SET_BATSAVE);
+  if (mode <= 0 || mode > 3)
+    return true;
+  if (Radio_TxActive() || vfos[currentVfo].radio == RADIO_SI4732)
+    return true;
+  if (Radio_SquelchOpen())
+    return true;
+  /* Multiwatch/канальный VFO опрашивает чипы сам — пауза недопустима. */
+  for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i)
+    if (vfos[i].monitor || VFO_ChannelMode(i))
+      return true;
+  return false;
+}
+
+static void saveSelectChip(void) {
+  BK4819_SelectChip(vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0);
+}
+
+static void saveResume(void) {
+  if (!s_saveSuspended)
+    return;
+  saveSelectChip();
+  BK4819_RxResume();
+  s_saveSuspended = false;
+}
+
+static void saveReset(void) {
+  saveResume();
+  s_saveQuietAt = 0;
+  s_savePhaseAt = 0;
+  s_saveOff = false;
+}
+
+static void saveTick(void) {
+  uint32_t now = millis();
+  if (saveSuppressed()) {
+    saveReset();
+    return;
+  }
+  if (!s_saveQuietAt) {
+    s_saveQuietAt = now;
+    s_savePhaseAt = now + SAVE_START_MS;
+    s_saveOff = false;
+    return;
+  }
+  if ((uint32_t)(now - s_saveQuietAt) < SAVE_START_MS) {
+    saveResume();
+    return;
+  }
+  uint32_t offMs = SAVE_ON_MS * (uint32_t)Settings_Get(SET_BATSAVE);
+  uint32_t span = s_saveOff ? offMs : SAVE_ON_MS;
+  if ((uint32_t)(now - s_savePhaseAt) >= span) {
+    s_savePhaseAt = now;
+    s_saveOff = !s_saveOff;
+  }
+  if (s_saveOff) {
+    if (!s_saveSuspended) {
+      saveSelectChip();
+      BK4819_RxSuspend();
+      s_saveSuspended = true;
+    }
+  } else {
+    saveResume();
+  }
+}
+
 /* ─── Режим ─── */
 
 class VfoMode : public Mode {
@@ -398,6 +483,7 @@ public:
     UI_ReleaseLabels();
     UI_ClearScreen(BG());
     Radio_Init();
+    Radio_SetTailHold(true);
     buildScreen();
     initNumVals();
     for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
@@ -428,6 +514,8 @@ public:
   }
 
   void exit() override {
+    saveReset();
+    Radio_SetTailHold(false);
     if (vfoCtx.s_scr) {
       lv_obj_del(vfoCtx.s_scr);
       vfoCtx.s_scr = NULL;
@@ -436,6 +524,7 @@ public:
 
   void update() override {
     Radio_Update();
+    saveTick();
     for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
       NumVal_Update(&vfoCtx.numVal[i]);
       if (vfos[i].rxF != NumVal_GetValue(&vfoCtx.numVal[i]))
@@ -593,9 +682,9 @@ public:
        * Обновляем раз в 250 мс. */
       if (active) {
         bool canMeasure = vfos[i].radio != RADIO_SI4732 && !Radio_TxActive();
-        bool graphMode = Settings_Get(SET_SHOWLEVELINVFO);
+        bool graphMode = Settings_Get(SET_SHOWLEVELINVFO) && levelVisible();
         bool haveGraph = canMeasure && graphMode;
-        bool haveMeter = canMeasure && !graphMode;
+        bool haveMeter = canMeasure && !graphMode && levelVisible();
         uint32_t now = millis();
         bool due = (uint32_t)(now - vfoCtx.s_lastMeterMs) >= VFO_METER_MS;
         if (due) {
@@ -661,7 +750,7 @@ public:
           if (vfoCtx.s_dbmLbl)
             setHidden(vfoCtx.s_dbmLbl, true);
         }
-        if (!canMeasure && vfoCtx.s_afcLbl)
+        if (!haveGraph && !haveMeter && vfoCtx.s_afcLbl)
           setHidden(vfoCtx.s_afcLbl, true);
       }
 
@@ -695,6 +784,8 @@ public:
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    /* Любая клавиша — повод вернуть приём из battery save. */
+    saveReset();
     /* Ввод частоты/шаг/смена диапазона — ручная настройка, канал снимаем. */
     if (state == KEY_EVT_RELEASE && k >= KEY_0 && k <= KEY_9 &&
         !NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
@@ -725,9 +816,9 @@ public:
 
     if (state == KEY_EVT_LONG_PRESS) {
       switch (k) {
-      case KEY_MENU: /* системное меню на весь экран */
+      case KEY_MENU: /* системное меню на весь экран, возврат в VFO */
         if (!NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
-          Mode_Switch(MODE_SETTINGS);
+          SETTINGS_OpenFrom(MODE_VFO);
         return true;
       case KEY_4:
         Mode_Switch(MODE_FC);

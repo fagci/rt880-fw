@@ -15,6 +15,9 @@ extern Mode &MODE_SETTINGS;
 /* Открыть системное меню сразу на странице multiwatch (из карты кнопок). */
 void SETTINGS_OpenMultiwatch(void);
 
+/* Системное меню с возвратом в from по EXIT (а не всегда в VFO). */
+void SETTINGS_OpenFrom(Mode &from);
+
 /* Экран списка находок (loot). Открывается коротким STAR во всех режимах
  * (в редакторе частоты STAR — десятичная точка). EXIT — назад в тот режим,
  * откуда открыли. */

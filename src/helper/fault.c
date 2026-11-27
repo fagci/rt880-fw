@@ -8,6 +8,7 @@
 #include "driver/board.h"
 #include "driver/gpio.h"
 #include "driver/st7789.h"
+#include "driver/uart.h"
 #include <stdint.h>
 
 /* 5x7, столбцы битами, MSB = верхний пиксель */
@@ -22,8 +23,7 @@ static const uint8_t HEXFONT[16][5] = {
     {0x01, 0x71, 0x09, 0x05, 0x03}, /* 7 */
     {0x36, 0x49, 0x49, 0x49, 0x36}, /* 8 */
     {0x06, 0x49, 0x49, 0x29, 0x1E}, /* 9 */
-    {0x00, 0x36, 0x41, 0x41, 0x36}, /* A (сверху плоская) */
-    {0x00, 0x36, 0x41, 0x41, 0x36},
+    {0x00, 0x36, 0x41, 0x41, 0x36}, /* A */
     {0x7F, 0x09, 0x09, 0x09, 0x06}, /* B */
     {0x3E, 0x41, 0x41, 0x41, 0x22}, /* C */
     {0x7F, 0x41, 0x41, 0x22, 0x1C}, /* D */
@@ -51,9 +51,28 @@ static void show_hex(uint32_t v, uint16_t y0) {
   st7789_cs_high();
 }
 
-static void fault_show(uint32_t pc, uint32_t marker) {
-  (void)marker;
+/* PC/xPSR в UART: экран паники на ST7789 может быть нечитаем (чужое
+ * окно/прокрутка), а порт 115200 всегда под рукой. Без stdio/стека. */
+static void fault_uart_hex(uint32_t v) {
+  static const char h[] = "0123456789ABCDEF";
+  for (int8_t i = 28; i >= 0; i -= 4)
+    uart_putc(h[(v >> i) & 0xF]);
+}
+
+static void fault_uart(uint32_t pc, uint32_t marker, uint32_t lr) {
+  uart_puts("FAULT pc=");
+  fault_uart_hex(pc);
+  uart_puts(" lr=");
+  fault_uart_hex(lr);
+  uart_puts(" xpsr=");
+  fault_uart_hex(marker);
+  uart_puts("\r\n");
+  uart_flush();
+}
+
+static void fault_show(uint32_t pc, uint32_t marker, uint32_t lr) {
   __disable_irq();
+  fault_uart(pc, marker, lr);
   show_hex(pc, 0);
   show_hex(marker, 12); /* вторая строка — маркер (xPSR/причина) */
   while (1) {
@@ -69,7 +88,8 @@ static void fault_show(uint32_t pc, uint32_t marker) {
 void hard_fault_handler_c(uint32_t *sp) {
   uint32_t pc = sp[6];
   uint32_t xpsr = sp[7];
-  fault_show(pc, xpsr);
+  uint32_t lr = sp[5];
+  fault_show(pc, xpsr, lr);
 }
 
 __attribute__((naked)) void HardFault_Handler(void) {

@@ -5,6 +5,18 @@
 
 #include "bands.h"
 #include "channels.h"
+#include <stdint.h>
+
+/* Поддиапазон мультискана (v4): границы, шаг, модуляция и полоса. */
+#define STORE_SCAN_RANGE_MAX 4
+typedef struct __attribute__((packed)) {
+  uint32_t start;
+  uint32_t end;
+  uint8_t step;
+  uint8_t mod;
+  uint8_t bw;
+  uint8_t reserved;
+} ScanRange;
 
 /* Энергонезависимое состояние в конце внешней W25Q32.
  *
@@ -34,6 +46,13 @@ bool Store_ApplyRadio(void);
 /* Настройки системы и карта кнопок. Вызывать до первого Radio_Init; при
  * записи старого формата (v1/v2) остаются умолчания. */
 bool Store_ApplySettings(void);
+
+/* Мультискан: до STORE_SCAN_RANGE_MAX поддиапазонов и флаг включения.
+ * Set помечает состояние изменённым (запись через Store_Poll). */
+uint8_t Store_ScanRanges(ScanRange *out, uint8_t max);
+void Store_ScanRangesSet(const ScanRange *in, uint8_t count);
+bool Store_ScanMulti(void);
+void Store_ScanMultiSet(bool on);
 
 /* Диагностика для UART-консоли. */
 void Store_DebugPrint(void);

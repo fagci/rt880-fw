@@ -99,6 +99,14 @@ void Radio_NextFilter(void);
 /* Вернуть AUTO-фильтр по частоте (режимы сканирования не наследуют ручной) */
 void Radio_FilterAuto(void);
 void Radio_Update(void);
+/* Открыт ли звук активного VFO с учётом Rep STE (для SI — false). */
+bool Radio_SquelchOpen(void);
+/* VFO/BK: удерживать звук 300 мс после пропадания несущей (Rep STE). */
+void Radio_SetTailHold(bool on);
+/* Клавишный бипер (SET_BEEP): при необходимости кратко открывает AF-тракт. */
+void Radio_Beep(void);
+/* Применить AF response RX к активному чипу (TX — со следующей передачи). */
+void Radio_ApplyAFResponse(bool tx);
 void Radio_ScanAudio(bool on); /* открыть/закрыть звук активного BK */
 /* Звук SI4732 (вещательный КВ-сканер): ведёт учёт siMuted/AF_MUTE, чтобы
  * после выхода VFO снова открыл звук по своим правилам. */

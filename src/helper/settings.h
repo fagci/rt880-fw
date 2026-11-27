@@ -46,11 +46,11 @@ typedef enum {
   SET_BOUND240_280,
   SET_NOLISTEN,
   SET_SI4732POWEROFF,
-  SET_TONELOCAL,
+  SET_PRIORITY, /* частота приоритетного канала, ед. 10 Гц; 0 — Off */
   SET_FCTIME,
   SET_MULTIWATCH,
   SET_FREQ_CORRECTION,
-  SET_INVERT_BUTTONS, /* удалено: слот сохранён, чтобы не менять Store v3 */
+  SET_AUTOBLACKLIST, /* бывший Invert buttons: слот сохранён, Store v3 */
   SET_AF_RX_300,
   SET_AF_RX_3K,
   SET_AF_TX_300,

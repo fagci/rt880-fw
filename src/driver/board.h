@@ -24,6 +24,8 @@ void lv_tick_inc(uint32_t tick_period); /* LVGL, из lv_hal_tick.c */
 void delay_us(uint32_t us);
 void delay_ms(uint32_t ms);
 uint32_t millis(void);
+/* Короткий тон на PA5 (ключевой бипер), блокирующий. */
+void board_beep(uint16_t freq_hz, uint16_t ms);
 
 void audio_path_set(uint8_t source); /* 0=BK1, 1=BK2 */
 /* PF0/K200: true — ВЧ-тракт (HF/U8), false — V/U. */

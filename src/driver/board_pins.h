@@ -23,6 +23,9 @@ static const gpio_pin_t PIN_LED_GREEN =
 /* PA14, нога 49: PCK/TX-RLED — красный светодиод. */
 static const gpio_pin_t PIN_LED_RED =
     GPIO_PIN(GPIOA, GPIO_PINS_14, CRM_GPIOA_PERIPH_CLOCK);
+/* PA5, нога 21: TONE — пьезо/динамик ключевого бипера. */
+static const gpio_pin_t PIN_TONE =
+    GPIO_PIN(GPIOA, GPIO_PINS_5, CRM_GPIOA_PERIPH_CLOCK);
 
 /* ── Питание и коммутация трактов ───────────────────────────────────── */
 /* PF8, нога 31: AF MUTE. */

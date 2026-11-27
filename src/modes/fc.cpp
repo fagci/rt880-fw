@@ -15,19 +15,30 @@
  * вручную, 0 автопереключение диапазонов, SIDE1/SIDE2 — находку в чёрный/белый
  * список и дальше, MENU или PTT — частоту в VFO и выход, STAR короткий —
  * список находок, EXIT — выход без неё, длинный MENU — список находок.
+ * UP/DOWN — встроенный список находок (как в сканере): по кругу, сортировка
+ * 1/2/3/4, SIDE1/SIDE2 — BL/WL, 0 — удалить, длинный SIDE2 — в канал,
+ * MENU — выбранную в VFO, EXIT — назад к скану. Крупная частота на экране
+ * округлена до шага VFO (точная — в строке находки).
  */
 #include "modes.h"
+#include "vfo_session.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
+#include "../helper/channels.h"
 #include "../helper/log.h"
 #include "../helper/lootlist.h"
+#include "../helper/names.h"
 #include "../helper/settings.h"
 #include "../helper/measurements.h"
+#include "../helper/tone.h"
+#include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
+#include "../ui/lv_port.h"
+#include "../ui/screen_layout.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "printf.h"
@@ -78,32 +89,22 @@ struct {
   uint8_t scanVfo;
   uint32_t savedFreq;
   uint32_t captureF; /* частота в VFO при выходе (0 — вернуть прежнюю) */
+  /* Встроенный список находок — те же переходы и действия, что в сканере:
+   * 0 — текущий скан, 1..N — запись loot (индекс = listSel-1). */
+  uint16_t listSel;
+  uint16_t listTop;
+  uint8_t sortIdx;
+  bool sortRev;
+  bool listCapture; /* MENU в списке: в VFO уже настроено, exit не откатывать */
+  char msg[16];
+  uint32_t msgUntil;
+  VfoSnapshot listSaved;
 } fcCtx;
 
-/* кэш строк экрана: перерисовываем только изменившиеся */
-#define FC_LINES 12
-static char s_line[FC_LINES][34];
-static uint16_t s_lineColor[FC_LINES];
-
-static void drawLine(uint8_t idx, int16_t x, int16_t y, int16_t clearH,
-                     TextPos pos, uint16_t color, Font font,
-                     const char *text) {
-  if (s_lineColor[idx] == color && !strcmp(s_line[idx], text))
-    return;
-  FillRect(0, y - clearH + 4, LCD_WIDTH, clearH, C_BLACK);
-  PrintfEx(x, y, pos, color, C_BLACK, font, "%s", text);
-  strncpy(s_line[idx], text, sizeof(s_line[idx]) - 1);
-  s_line[idx][sizeof(s_line[idx]) - 1] = 0;
-  s_lineColor[idx] = color;
-}
-
-static void invalidateLines(void) {
-  for (uint8_t i = 0; i < FC_LINES; i++) {
-    s_line[i][0] = 1; /* заведомо не совпадёт с текстом */
-    s_line[i][1] = 0;
-    s_lineColor[i] = 0xFFFF;
-  }
-}
+/* Список находок (live) — те же строки, что в сканере: свежие сверху. */
+static uint16_t lootRowIdx[UI_LOOT_ROWS];
+static uint16_t lootRowAge[UI_LOOT_ROWS];
+static const char *s_titleState;
 
 static void selectBand(void) {
   BK4819_SelectChip(0);
@@ -184,10 +185,268 @@ static void resumeScan() {
   enableScan();
 }
 
+/* ─── Встроенный список находок (как в сканере) ─── */
+
+static uint32_t roundToStep(uint32_t f) {
+  /* Шаг целевого VFO: в списке это scanVfo, при capture — savedVfo. */
+  uint32_t step = StepFrequencyTable[vfos[currentVfo].step];
+  if (!step)
+    return f;
+  return ((f + step / 2) / step) * step;
+}
+
+static void msgSet(const char *text) {
+  snprintf(fcCtx.msg, sizeof(fcCtx.msg), "%s", text);
+  fcCtx.msgUntil = millis() + 1500;
+}
+
+static void msgSetSaved(const char *tag, int16_t n) {
+  if (n < 0) {
+    msgSet("ERR");
+    return;
+  }
+  char b[16];
+  snprintf(b, sizeof(b), "%s %d", tag, (int)n);
+  msgSet(b);
+}
+
+/* Свежие находки сверху: сортируем индексы по «сколько назад», сам loot не
+ * трогаем (его порядок общий для списка и хранилища). */
+static uint8_t collectRecentLoot(void) {
+  uint16_t n = LOOT_Size();
+  uint16_t nowS = (uint16_t)(millis() / 1000);
+  uint8_t cnt = 0;
+  for (uint16_t i = 0; i < n; ++i) {
+    const Loot *it = LOOT_Item(i);
+    uint16_t age = (uint16_t)(nowS - it->lastTimeOpen);
+    uint8_t p = 0;
+    while (p < cnt && lootRowAge[p] <= age)
+      p++;
+    if (p >= UI_LOOT_ROWS)
+      continue;
+    if (cnt < UI_LOOT_ROWS)
+      cnt++;
+    for (uint8_t j = (uint8_t)(cnt - 1); j > p; --j) {
+      lootRowAge[j] = lootRowAge[j - 1];
+      lootRowIdx[j] = lootRowIdx[j - 1];
+    }
+    lootRowAge[p] = age;
+    lootRowIdx[p] = i;
+  }
+  return cnt;
+}
+
+static TextStyle lootRowStyle(const Loot *it) {
+  Color c = it->blacklist ? C_GRAY
+            : it->whitelist ? C_GREEN
+            : it->open      ? C_YELLOW
+                            : C_WHITE;
+  return text_style(c, C_BLACK, POS_L, F_M);
+}
+
+static void drawLootList(void) {
+  uint16_t nowS = (uint16_t)(millis() / 1000);
+  if (!fcCtx.listSel) {
+    uint8_t cnt = collectRecentLoot();
+    for (uint8_t r = 0; r < UI_LOOT_ROWS; ++r) {
+      uint16_t y =
+          (uint16_t)(UI_LOOT_Y + r * UI_LOOT_ROW_H + FontAscent(F_M));
+      if (r >= cnt) {
+        PrintfT(UI_LEFT_X, y, text_style(C_WHITE, C_BLACK, POS_L, F_M), "%s",
+                "");
+        continue;
+      }
+      const Loot *it = LOOT_Item(lootRowIdx[r]);
+      char fb[16], age[5];
+      fmt_mhz5(fb, sizeof(fb), it->f);
+      fmt_duration(age, sizeof(age), (uint16_t)(nowS - it->lastTimeOpen));
+      char mark =
+          it->blacklist ? '-' : it->whitelist ? '+' : it->open ? '!' : ' ';
+      PrintfT(UI_LEFT_X, y, lootRowStyle(it), "%c%s %s %+4d", mark, fb, age,
+              (int)it->peak - 160);
+    }
+    return;
+  }
+
+  uint16_t n = LOOT_Size();
+  for (uint8_t r = 0; r < UI_LOOT_ROWS; ++r) {
+    uint16_t y = (uint16_t)(UI_LOOT_Y + r * UI_LOOT_ROW_H + FontAscent(F_M));
+    uint16_t idx = (uint16_t)(fcCtx.listTop + r);
+    if (idx >= n) {
+      PrintfT(UI_LEFT_X, y, text_style(C_WHITE, C_BLACK, POS_L, F_M), "%s",
+              "");
+      continue;
+    }
+    const Loot *it = LOOT_Item(idx);
+    bool sel = (uint16_t)(idx + 1) == fcCtx.listSel;
+    char fb[16], age[5];
+    fmt_mhz5(fb, sizeof(fb), it->f);
+    fmt_duration(age, sizeof(age), (uint16_t)(nowS - it->lastTimeOpen));
+    char mark =
+        it->blacklist ? '-' : it->whitelist ? '+' : it->open ? '!' : ' ';
+    TextStyle st = sel ? text_style(C_BLACK, C_CYAN, POS_L, F_M)
+                       : lootRowStyle(it);
+    PrintfT(UI_LEFT_X, y, st, "%c%c%s %s %+4d", sel ? '>' : ' ', mark, fb,
+            age, (int)it->peak - 160);
+  }
+}
+
+static void clampListSel(void) {
+  uint16_t n = LOOT_Size();
+  if (!fcCtx.listSel || !n) {
+    fcCtx.listSel = 0;
+    fcCtx.listTop = 0;
+    return;
+  }
+  if (fcCtx.listSel > n)
+    fcCtx.listSel = n;
+  uint16_t idx = (uint16_t)(fcCtx.listSel - 1);
+  if (idx < fcCtx.listTop)
+    fcCtx.listTop = idx;
+  if (idx >= (uint16_t)(fcCtx.listTop + UI_LOOT_ROWS))
+    fcCtx.listTop = (uint16_t)(idx - UI_LOOT_ROWS + 1);
+  uint16_t maxTop = n > UI_LOOT_ROWS ? (uint16_t)(n - UI_LOOT_ROWS) : 0;
+  if (fcCtx.listTop > maxTop)
+    fcCtx.listTop = maxTop;
+}
+
+static void sortList(uint8_t t) {
+  uint16_t idx = fcCtx.listSel ? (uint16_t)(fcCtx.listSel - 1) : 0;
+  const Loot *cur = LOOT_Item(idx);
+  uint32_t f = cur ? cur->f : 0;
+  if (t == fcCtx.sortIdx)
+    fcCtx.sortRev = !fcCtx.sortRev;
+  else {
+    fcCtx.sortIdx = t;
+    fcCtx.sortRev = false;
+  }
+  LOOT_Sort(LOOT_SORTERS[t], fcCtx.sortRev);
+  if (f) {
+    int16_t i = LOOT_IndexOf(LOOT_Get(f));
+    fcCtx.listSel = i < 0 ? 0 : (uint16_t)(i + 1);
+  }
+  fcCtx.listTop = 0;
+  clampListSel();
+}
+
+/* Настроить приём на выбранную находку (снимок скана — в listSaved). */
+static void tuneLoot(const Loot *it) {
+  if (!it)
+    return;
+  currentVfo = fcCtx.scanVfo;
+  VFO *v = &vfos[fcCtx.scanVfo];
+  v->rxF = it->f;
+  v->modulation = static_cast<ModulationType>(it->modulation & 7);
+  v->bw = it->bw;
+  v->radio = static_cast<Radio>(it->radio <= 2 ? it->radio : 0);
+  v->radioManual = true;
+  Radio_TuneTo(it->f, true);
+}
+
+/* Выход из списка: вернуть частоту/модуляцию скана и продолжить FC. */
+static void leaveLootList(void) {
+  fcCtx.listSel = 0;
+  fcCtx.listTop = 0;
+  fcCtx.msg[0] = 0;
+  /* precise-настройка Vfo_Restore снова приоткрывает звук — закрываем. */
+  Radio_ScanAudio(false);
+  Vfo_Restore(fcCtx.listSaved, true);
+  currentVfo = fcCtx.scanVfo;
+  BK4819_SetAFC(0);
+  resumeScan();
+}
+
+static void listMove(int8_t d) {
+  uint16_t n = LOOT_Size();
+  if (!n) {
+    if (fcCtx.listSel)
+      leaveLootList();
+    return;
+  }
+  if (!fcCtx.listSel) {
+    /* Вход в список: снимок VFO скана, чтобы вернуть его на выходе. */
+    fcCtx.listSaved = Vfo_Capture(fcCtx.scanVfo);
+    fcCtx.listSel = d > 0 ? 1 : n;
+    disableScan();
+    LOOT_Standby();
+    fcCtx.stopped = false;
+    fcCtx.stopFreq = 0;
+    fcCtx.resumeAt = 0;
+    Radio_ScanAudio(false);
+    Mode_SetDisplayRxGate(false); /* слушаем выбранную — без провалов звука */
+    LOOT_Sort(LOOT_SORTERS[fcCtx.sortIdx], fcCtx.sortRev);
+    fcCtx.listTop = 0;
+  } else if (d > 0) {
+    if (fcCtx.listSel < n)
+      fcCtx.listSel++;
+    else {
+      leaveLootList();
+      return;
+    }
+  } else {
+    if (fcCtx.listSel > 1)
+      fcCtx.listSel--;
+    else {
+      leaveLootList();
+      return;
+    }
+  }
+  clampListSel();
+  tuneLoot(LOOT_Item((uint16_t)(fcCtx.listSel - 1)));
+}
+
+static void deleteSelectedLoot(void) {
+  if (!fcCtx.listSel)
+    return;
+  LOOT_Remove((uint16_t)(fcCtx.listSel - 1));
+  uint16_t n = LOOT_Size();
+  if (!n) {
+    leaveLootList();
+    return;
+  }
+  if (fcCtx.listSel > n)
+    fcCtx.listSel = n;
+  clampListSel();
+  tuneLoot(LOOT_Item((uint16_t)(fcCtx.listSel - 1)));
+}
+
+static void saveSelectedLootToChannel(void) {
+  const Loot *it = LOOT_Item((uint16_t)(fcCtx.listSel - 1));
+  if (!it)
+    return;
+  CH ch;
+  memset(&ch, 0, sizeof(ch));
+  ch.f = it->f;
+  ch.modulation = (uint8_t)(it->modulation & 7);
+  ch.bw = (uint8_t)(it->bw & 15);
+  ch.radio = (uint8_t)(it->radio & 3);
+  ch.tone = it->code;
+  ch.toneSql = it->code != TONE_CODE_NONE;
+  ch.scanlists = CH_GetScanlistMask();
+  msgSet(CH_Add(&ch) ? "SAVED" : "ADD ERR");
+}
+
+static void captureSelectedLoot(void) {
+  const Loot *it = LOOT_Item((uint16_t)(fcCtx.listSel - 1));
+  if (!it)
+    return;
+  currentVfo = fcCtx.savedVfo;
+  uint32_t f = roundToStep(it->f);
+  vfos[currentVfo].modulation =
+      static_cast<ModulationType>(it->modulation & 7);
+  vfos[currentVfo].bw = it->bw;
+  vfos[currentVfo].rxF = f;
+  Radio_TuneTo(f, true);
+  fcCtx.listCapture = true;
+  fcCtx.captureF = 0;
+  Mode_Switch(MODE_VFO);
+}
+
 class FcMode : public Mode {
 public:
   void enter() override {
-    STATUSLINE_SetTitle("FC");
+    STATUSLINE_SetTitle("FC SCAN");
+    s_titleState = "FC SCAN";
     fcCtx.savedVfo = currentVfo;
     if (vfos[currentVfo].radio != RADIO_BK4819A)
       currentVfo = 0;
@@ -217,9 +476,19 @@ public:
     fcCtx.stopFreq = 0;
     fcCtx.resumeAt = 0;
     fcCtx.captureF = 0;
+    fcCtx.listSel = 0;
+    fcCtx.listTop = 0;
+    fcCtx.sortIdx = LOOT_SORT_TIME;
+    fcCtx.sortRev = false;
+    fcCtx.listCapture = false;
+    fcCtx.msg[0] = 0;
+    fcCtx.msgUntil = 0;
 
     FillRect(0, FC_STATUS_H, LCD_WIDTH, LCD_HEIGHT - FC_STATUS_H, C_BLACK);
-    invalidateLines();
+    lv_port_set_direct_areas(false); /* FC — обычный полноэкранный текст */
+    /* FC не гасит приём на время flush (в отличие от сканера/анализатора);
+     * сбрасываем флаг, чтобы не унаследовать его от предыдущего режима. */
+    Mode_SetDisplayRxGate(false);
     Radio_ScanAudio(false);
     selectBand();
     enableScan();
@@ -228,11 +497,16 @@ public:
   void exit() override {
     disableScan();
     LOOT_Standby();
+    Mode_SetDisplayRxGate(false);
+    fcCtx.listSel = 0;
     BK4819_InvalidateFilterCache(); /* вернуть авто-фильтр VFO */
     /* BK остаётся настроенным на последнюю частоту/фильтр счётчика —
      * возвращаем VFO его частоту и настраиваем чип (иначе шумодав VFO читается
      * по чужой частоте). MENU/PTT/'*' на находке — забрать её в VFO. */
-    if (fcCtx.captureF && fcCtx.scanVfo == fcCtx.savedVfo) {
+    if (fcCtx.listCapture) {
+      /* Выход из списка по MENU: captureSelectedLoot уже настроил VFO. */
+      currentVfo = fcCtx.savedVfo;
+    } else if (fcCtx.captureF && fcCtx.scanVfo == fcCtx.savedVfo) {
       currentVfo = fcCtx.savedVfo;
       Radio_TuneToAuto(fcCtx.captureF); /* модуляция и шаг диапазона */
     } else {
@@ -240,6 +514,8 @@ public:
       vfos[currentVfo].rxF = fcCtx.savedFreq;
       Radio_TuneTo(fcCtx.savedFreq, true);
     }
+    fcCtx.listCapture = false;
+    fcCtx.captureF = 0;
     for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
       if (fcCtx.savedMonitors & (1u << i))
         vfos[i].monitor = true;
@@ -249,6 +525,10 @@ public:
   }
 
   void update() override {
+    if (fcCtx.listSel) {
+      Radio_Update(); /* шумодав/звук выбранной находки */
+      return;         /* счётчик стоит, пока список выбран */
+    }
     if (fcCtx.isScanning) {
       uint32_t freq;
       if (BK4819_GetFrequencyScanResult(&freq)) {
@@ -303,54 +583,180 @@ public:
 
     char buf[34];
 
-    /* строка настроек */
-    snprintf(buf, sizeof(buf), "%s %ums THR %03X SQ %u%s", BANDS[fcCtx.band].name,
-             200u << fcCtx.scanSpeed, (unsigned)fcCtx.thr,
-             (unsigned)squelchLevel, fcCtx.bandAutoSwitch ? " [A]" : "");
-    drawLine(0, 4, FC_STATUS_H + 16, 16, POS_L, C_WHITE, F_M, buf);
+    /* шапка: диапазон | шаг VFO (крупно) | порог/шумодав */
+    uint32_t step = StepFrequencyTable[vfos[fcCtx.scanVfo].step];
+    char stepBuf[10];
+    fmt_step(stepBuf, sizeof(stepBuf), step);
+    PrintfT(UI_LEFT_X, UI_RANGE_BASE,
+            text_style(C_WHITE, C_BLACK, POS_L, F_M), "%s",
+            BANDS[fcCtx.band].name);
+    PrintfT(LCD_XCENTER, UI_RANGE_BASE,
+            text_style(C_YELLOW, C_BLACK, POS_C, F_M), "%s", stepBuf);
+    snprintf(buf, sizeof(buf), "THR%03X SQ%u%s", (unsigned)fcCtx.thr,
+             (unsigned)squelchLevel, fcCtx.bandAutoSwitch ? "A" : "");
+    PrintfT(UI_RIGHT_X, UI_RANGE_BASE,
+            text_style(C_WHITE, C_BLACK, POS_R, F_S), "%s", buf);
 
-    /* частота: последняя найденная счётчиком / на которой стоим */
-    uint32_t f = fcCtx.stopped ? fcCtx.stopFreq : fcCtx.currentFrequency;
-    snprintf(buf, sizeof(buf), "%lu.%03lu", (unsigned long)(f / MHZ),
-             (unsigned long)((f % MHZ) / KHZ));
-    drawLine(1, LCD_XCENTER, FC_STATUS_H + 52, 34, POS_C,
-             fcCtx.stopped ? C_GREEN : C_YELLOW, F_XL, buf);
+    /* Крупная частота: в FC округляем до шага VFO; точная — в строке находки. */
+    bool browsing = fcCtx.listSel != 0;
+    const Loot *selIt =
+        browsing ? LOOT_Item((uint16_t)(fcCtx.listSel - 1)) : nullptr;
+    uint32_t rawF = selIt ? selIt->f
+                    : fcCtx.stopped ? fcCtx.stopFreq
+                                    : fcCtx.currentFrequency;
+    char bigFreq[16];
+    fmt_mhz3(bigFreq, sizeof(bigFreq), roundToStep(rawF));
+    PrintfT(LCD_XCENTER, UI_SCAN_FREQ_BASE,
+            text_style(browsing ? C_CYAN : C_WHITE, C_BLACK, POS_C, F_XL), "%s",
+            bigFreq);
 
-    /* шумодав на находке */
-    if (fcCtx.stopped)
-      snprintf(buf, sizeof(buf), "Squelch: %s",
-               BK4819_IsSquelchOpen() ? "OPEN" : "CLOSED");
-    else
-      snprintf(buf, sizeof(buf), "scanning...");
-    drawLine(2, LCD_XCENTER, FC_STATUS_H + 76, 16, POS_C,
-             fcCtx.stopped ? C_GREEN : C_GRAY, F_M, buf);
-
-    /* последние находки из списка (свежие — выше) */
-    uint16_t n = LOOT_Size();
-    for (uint8_t r = 0; r < 6; r++) {
-      if (r < n) {
-        const Loot *l = LOOT_Item(n - 1 - r); /* добавлялись в конец */
-        uint32_t ago = LOOT_SecondsAgo(l);
-        snprintf(buf, sizeof(buf), "%c%4u.%05u %2u:%02u",
-                 l->blacklist ? '-' : l->whitelist ? '+' : ' ',
-                 (unsigned)(l->f / MHZ), (unsigned)(l->f % MHZ),
-                 (unsigned)(ago / 60 % 100), (unsigned)(ago % 60));
-      } else {
-        buf[0] = ' ';
-        buf[1] = 0;
-      }
-      drawLine(3 + r, 4, FC_STATUS_H + 110 + r * 17, 16, POS_L,
-               (r < n && LOOT_Item(n - 1 - r)->open) ? C_YELLOW : C_WHITE,
-               F_M, buf);
+    const char *state = browsing ? "FC LOOT"
+                        : fcCtx.stopped ? "FC HOLD" : "FC SCAN";
+    if (state != s_titleState) {
+      s_titleState = state;
+      STATUSLINE_SetTitle(state);
     }
 
-    drawLine(9, 4, LCD_HEIGHT - 14, 12, POS_L, C_GRAY, F_S,
-             "1/7 SPD 3/9 SQ 5 THR #/0 BAND");
-    drawLine(10, 4, LCD_HEIGHT - 2, 12, POS_L, C_GRAY, F_S,
-             "S1 -BL S2 +WL * LOOT MENU>VFO");
+    const uint16_t infoY = UI_SCAN_INFO_BASE;
+
+    /* Строка деталей: находка/выдержка/счётчик или запись списка. */
+    if (browsing && selIt) {
+      if (fcCtx.msg[0] && (int32_t)(fcCtx.msgUntil - millis()) > 0) {
+        PrintfT(UI_LEFT_X, infoY,
+                text_style(C_YELLOW, C_BLACK, POS_L, F_S), "%s", fcCtx.msg);
+      } else {
+        fcCtx.msg[0] = 0;
+        char dur[5];
+        fmt_duration(dur, sizeof(dur), selIt->duration);
+        PrintfT(UI_LEFT_X, infoY,
+                text_style(C_WHITE, C_BLACK, POS_L, F_S), "%s %s %+ddBm",
+                MOD_NAMES[selIt->modulation & 7],
+                RADIO_NAMES[selIt->radio > 2 ? 2 : selIt->radio],
+                (int)selIt->peak - 160);
+        PrintfT(LCD_XCENTER, infoY,
+                text_style(C_GRAY, C_BLACK, POS_C, F_S), "dur %s", dur);
+      }
+      PrintfT(UI_RIGHT_X, infoY,
+              text_style(C_GRAY, C_BLACK, POS_R, F_S), "%u/%u %s%s",
+              (unsigned)fcCtx.listSel, (unsigned)LOOT_Size(),
+              LOOT_SORT_NAMES[fcCtx.sortIdx], fcCtx.sortRev ? " R" : "");
+    } else {
+      const Loot *ll = gLastActiveLoot;
+      if (ll) {
+        char fb[16];
+        fmt_mhz5(fb, sizeof(fb), ll->f);
+        PrintfT(UI_LEFT_X, infoY,
+                text_style(ll->open ? C_YELLOW : C_WHITE, C_BLACK, POS_L, F_S),
+                "%c%s", ll->blacklist ? '-' : ll->whitelist ? '+' : ' ', fb);
+      } else {
+        PrintfT(UI_LEFT_X, infoY,
+                text_style(C_GRAY, C_BLACK, POS_L, F_S), "no loot yet");
+      }
+      /* Время на замер — то же место и шрифт, что в сканере. */
+      PrintfT(LCD_XCENTER, infoY,
+              text_style(C_GRAY, C_BLACK, POS_C, F_S), "%ums",
+              (unsigned)(200u << fcCtx.scanSpeed));
+      if (fcCtx.stopped)
+        snprintf(buf, sizeof(buf), "L%u %s", (unsigned)LOOT_Size(),
+                 BK4819_IsSquelchOpen() ? "OPEN" : "CLSD");
+      else
+        snprintf(buf, sizeof(buf), "L%u", (unsigned)LOOT_Size());
+      PrintfT(UI_RIGHT_X, infoY,
+              text_style(C_GRAY, C_BLACK, POS_R, F_S), "%s", buf);
+    }
+
+    drawLootList();
+
+    /* Подсказки: в списке — управление находками, в скане — параметры FC. */
+    if (browsing) {
+      PrintfT(4, LCD_HEIGHT - 16,
+              text_style(C_GRAY, C_BLACK, POS_L, F_S),
+              "1-4 SORT S1 BL S2 WL 0 DEL");
+      PrintfT(4, LCD_HEIGHT - 4,
+              text_style(C_GRAY, C_BLACK, POS_L, F_S),
+              "LS2 CH MENU>VFO EXIT SCAN");
+    } else {
+      PrintfT(4, LCD_HEIGHT - 16,
+              text_style(C_GRAY, C_BLACK, POS_L, F_S),
+              "1/7 SPD 3/9 SQ 5 THR #/0 BAND");
+      PrintfT(4, LCD_HEIGHT - 4,
+              text_style(C_GRAY, C_BLACK, POS_L, F_S),
+              "UD LOOT S1-BL S2+WL *LST MENU>VFO");
+    }
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
+    /* Встроенный список: те же переходы и действия, что в сканере. */
+    if (fcCtx.listSel) {
+      if (state == KEY_LONG_PRESSED) {
+        switch (k) {
+        case KEY_5: /* whitelist-находки → каналы */
+          msgSetSaved("SAVED", CH_SaveWhitelistFromLoot());
+          return true;
+        case KEY_8: /* blacklist-находки → каналы */
+          msgSetSaved("SAVED", CH_SaveBlacklistFromLoot());
+          return true;
+        case KEY_9: /* чёрный список каналов → loot */
+          msgSetSaved("LOADED", CH_LoadBlacklistToLoot());
+          return true;
+        case KEY_SIDE2: /* выбранную находку — в канал */
+          saveSelectedLootToChannel();
+          return true;
+        case KEY_0: /* очистить весь список и вернуться к скану */
+          LOOT_Clear();
+          leaveLootList();
+          return true;
+        default:
+          return true;
+        }
+      }
+      if (state == KEY_LONG_PRESSED_CONT &&
+          (k == KEY_UP || k == KEY_DOWN)) {
+        listMove(k == KEY_UP ? -1 : +1);
+        return true;
+      }
+      if (state != KEY_RELEASED)
+        return true;
+
+      switch (k) {
+      case KEY_UP:
+        listMove(-1);
+        return true;
+      case KEY_DOWN:
+        listMove(+1);
+        return true;
+      case KEY_1:
+        sortList(LOOT_SORT_TIME);
+        return true;
+      case KEY_2:
+        sortList(LOOT_SORT_DUR);
+        return true;
+      case KEY_3:
+        sortList(LOOT_SORT_BL);
+        return true;
+      case KEY_4:
+        sortList(LOOT_SORT_F);
+        return true;
+      case KEY_SIDE1:
+        LOOT_ToggleBlacklist(LOOT_Item((uint16_t)(fcCtx.listSel - 1)));
+        return true;
+      case KEY_SIDE2:
+        LOOT_ToggleWhitelist(LOOT_Item((uint16_t)(fcCtx.listSel - 1)));
+        return true;
+      case KEY_0:
+        deleteSelectedLoot();
+        return true;
+      case KEY_MENU: /* выбранную частоту — в VFO и выйти */
+        captureSelectedLoot();
+        return true;
+      case KEY_EXIT: /* назад к сканированию */
+        leaveLootList();
+        return true;
+      default:
+        return true;
+      }
+    }
+
     if (state == KEY_LONG_PRESSED && k == KEY_MENU) {
       LOOTLIST_OpenFrom(MODE_FC);
       return true;
@@ -400,9 +806,15 @@ public:
     case KEY_STAR: /* список находок */
       LOOTLIST_OpenFrom(MODE_FC);
       return true;
+    case KEY_UP: /* в список находок (0 — текущий скан, 1..N — находки) */
+      listMove(-1);
+      return true;
+    case KEY_DOWN:
+      listMove(+1);
+      return true;
     case KEY_MENU:
     case KEY_PTT:
-      fcCtx.captureF = fcCtx.stopped ? fcCtx.stopFreq : 0;
+      fcCtx.captureF = fcCtx.stopped ? roundToStep(fcCtx.stopFreq) : 0;
       Mode_Switch(MODE_VFO);
       return true;
     case KEY_EXIT:

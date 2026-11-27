@@ -25,6 +25,7 @@ static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 static bool s_directAreas;
 static bool s_spectrumOverlay;
+static bool s_spectrumHidden;
 /* Нижняя строка, которую LVGL может писать в режиме direct areas. */
 static int32_t s_textBottom = UI_WATERFALL_Y - 3;
 
@@ -83,8 +84,10 @@ void lv_port_set_direct_areas(bool on) {
   /* По умолчанию LVGL пишет только над водопадом; режим, которому нужен
    * низ экрана (список находок сканера), выставляет границу сам. */
   s_textBottom = UI_WATERFALL_Y - 3;
+  s_spectrumHidden = false;
 }
 void lv_port_set_spectrum_overlay(bool on) { s_spectrumOverlay = on; }
+void lv_port_set_spectrum_hidden(bool on) { s_spectrumHidden = on; }
 void lv_port_set_text_bottom(uint16_t y) {
   s_textBottom = y < ST7789_HEIGHT ? y : ST7789_HEIGHT - 1;
 }
@@ -127,6 +130,16 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
      * области. Водопад/нижняя полоса по-прежнему только DMA. */
     const int32_t clip_bottom = s_textBottom;
     int32_t y2 = area->y2 < clip_bottom ? area->y2 : clip_bottom;
+    if (area->y1 <= y2)
+      flush_rows(area, color_p, area->y1, y2);
+    flush_done(drv, area, sentBefore);
+    return;
+  }
+
+  /* Спектр скрыт (мультискан): прямой отрисовки в этой полосе нет, LVGL
+   * может писать весь разрешённый низ экрана. */
+  if (s_spectrumHidden) {
+    int32_t y2 = area->y2 < s_textBottom ? area->y2 : s_textBottom;
     if (area->y1 <= y2)
       flush_rows(area, color_p, area->y1, y2);
     flush_done(drv, area, sentBefore);

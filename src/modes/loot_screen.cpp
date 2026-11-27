@@ -22,6 +22,7 @@
 #include "../helper/channels.h"
 #include "../helper/lootlist.h"
 #include "../helper/names.h"
+#include "../helper/tone.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -184,12 +185,13 @@ static void refresh(void) {
   /* детали выбранной */
   if (n) {
     const Loot *it = LOOT_Item(ctx.s_selIdx);
-    char dur[5];
+    char dur[5], tone[12];
     fmt_duration(dur, sizeof(dur), it->duration);
-    snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "%s %s %ddBm dur %s",
-             MOD_NAMES[it->modulation & 7],
+    Tone_CodeString(it->code, tone, sizeof(tone));
+    snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf),
+             "%s %s %ddBm dur %s%s%s", MOD_NAMES[it->modulation & 7],
              RADIO_NAMES[it->radio > 2 ? 2 : it->radio], (int)it->peak - 160,
-             dur);
+             dur, tone[0] ? " " : "", tone);
   } else {
     ctx.s_detailBuf[0] = ' ';
     ctx.s_detailBuf[1] = 0;

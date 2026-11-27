@@ -97,6 +97,10 @@ uint16_t BK4819_ReadRegisterRaw(uint8_t reg);
 uint32_t BK4819_GetFrequency(void);
 void BK4819_TuneTo(uint32_t freq, bool precise);
 void BK4819_SetModulation(ModulationType mod);
+/* AF response (EQ): 300 Гц — REG_54/55 (RX) или 44/45 (TX), 3 кГц —
+ * REG_75 (RX) или 74 (TX). gain из Settings: -4..+4 dB. */
+void BK4819_ApplyAFResponseRX(bool ssb);
+void BK4819_ApplyAFResponseTX(void);
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw);
 void BK4819_SetAGC(bool useDefault, uint8_t gainIndex);
 uint8_t BK4819_GetGainDb(uint8_t gainIndex);

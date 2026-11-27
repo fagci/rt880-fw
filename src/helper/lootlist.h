@@ -33,7 +33,8 @@ typedef struct {
   uint8_t blacklist : 1;
   uint8_t whitelist : 1;
   uint8_t open : 1; /* runtime: сигнал есть сейчас */
-  uint8_t _pad : 5;
+  uint8_t hits : 4; /* сколько раз открывался (0..15) */
+  uint8_t _pad : 1;
 
   uint8_t code; /* CTCSS/DCS, LOOT_NO_CODE = нет */
   uint8_t peak; /* пик RSSI: raw >> 1 (0..255) */

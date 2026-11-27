@@ -24,6 +24,19 @@ Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (re
 - **Loot list** (short `*`): up to 200 finds shared by all scanners, sort by
   time/duration/blacklist/frequency, whitelist and blacklist marks, transfer
   to channels; stored in flash.
+- **Subtones end to end**: the scanner decodes CTCSS/DCS on every stop (in
+  HOLD, not per 1.8 ms step), stores the code in the find, shows it on the loot
+  screen, keeps it when the find is saved to a channel, and can filter a
+  channel by its tone. The channel form edits the tone and its filter flag.
+- **Nuisance handling**: short `0` in the live scan skips a frequency until
+  the scanner session ends; every find counts its openings and `Scan → Auto
+  blacklist` moves a repeated nuisance find to the blacklist after N hits.
+- **Priority channel**: long `3` in the channel list marks the selected
+  channel; the scan checks it every 8 channels and stops on it like on any
+  other channel (`Radio → Priority` shows the frequency, a change clears it).
+- **PC protocol** on the UART console: dump/import channels and the loot list,
+  and set the VFO frequency from a script (`ch`, `ch add`, `ch del`, `loot`,
+  `loot wipe`, `freq`).
 - **Seamless SI4732 retuning**: a frequency change is a single `TUNE_FREQ`
   (FAST) command without re-powering the chip, and the resident continuous
   patch keeps fine tuning in the chip; in AM/SSB soft mute attenuation is 0,
@@ -41,8 +54,9 @@ Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (re
   built-in receiver menu, Multiwatch and per-key click/long action assignment;
   settings unsupported by the RT-880 hardware are shown as `N/A`.
 - **BAND screen and broadcast SW scanner**: LW/MW, broadcast SW, FM 64–108
-  and amateur SSB with an SNR scan and station marks; a separate scanner over
-  the 120–11 m broadcast bands.
+  and amateur SSB with an SNR scan and station marks; an overview scans all
+  AM broadcast bands of the plan, and a separate scanner covers the 120–11 m
+  broadcast bands.
 - **BK4819 frequency counter** (VFO → long `4`): catches a transmitter carrier
   in 0.2–1.6 s, pulls the find to VFO and to the loot list.
 - **Receive path**: S-meter as an LED bar, AFC, CTCSS/DCS/DTMF, band receive
@@ -87,14 +101,14 @@ The scanner (VFO → `MENU`) collects found frequencies in a list (200 entries);
 the list and VFO settings are stored in the external W25Q32 and survive
 power-off.
 
-The screen follows k1-fw: the spectrum stays on top, the area below it is the
-live loot list (the newest 8 finds, with blacklist/whitelist marks, time ago
-and peak dBm), and the bottom 48 px are an RSSI history graph — the same idea
-as `Level in VFO` / `SP_RenderGraph` in k1-fw and s0v4. The graph samples the
-RSSI every 250 ms while listening (240 columns ≈ 60 s; old columns are
-overwritten one at a time with direct DMA, so the screen is not fully redrawn
-on each sample). The waterfall is off by default and can be switched on with
-long `SIDE1` (it replaces the list and the graph).
+The screen has no spectrum or waterfall (short multi-scan ranges never fill
+them): under the range fields are the large current frequency, the step in the
+top line and a detail line; below them is the live loot list (10 rows, newest
+first, with blacklist/whitelist marks, time ago and peak dBm). The bottom
+48 px are an RSSI history graph — the same idea as `Level in VFO` /
+`SP_RenderGraph` in k1-fw and s0v4. The graph samples the RSSI every 250 ms
+while listening (240 columns ≈ 60 s; old columns are overwritten one at a time
+with direct DMA, so the screen is not fully redrawn on each sample).
 
 | Dark theme | Light theme |
 |---|---|
@@ -104,22 +118,50 @@ long `SIDE1` (it replaces the list and the graph).
 | Key | Scanner (live scan / selected find) | Loot list |
 |---|---|---|
 | `5` | live: enter limits: start first, then end | — |
+| long `2` | live/find: open the multi-scan range list | — |
+| long `3` | live/find: scanner menu (Multiband, Ranges, step, speed, …) | — |
+| long `4` | live: delete the current multi-scan range | — |
+| long `6` | live: multi-scan on/off | — |
 | `1` / `7` | live: dwell on a frequency (scan speed) | — |
 | `3` / `9` | live: scan step | — |
-| long `5` | live: reset peak hold; find: whitelist finds → channels | whitelist finds → channels |
+| long `5` | find: whitelist finds → channels | whitelist finds → channels |
 | `0` / long `0` | find: delete / clear all | delete / clear all |
 | `*` | live: open the loot list | — |
 | `UP/DOWN` | live: enter the findings list; find: next/previous (past the ends — back to scan) | select a row (the receiver tunes to it) |
 | `SIDE1` | live: add the last find to the blacklist and continue; find: blacklist on/off | blacklist on/off |
+| `0` | live: nuisance skip — ignore this frequency until the scan session ends | — |
 | `SIDE2` | live: add the last find to the whitelist and continue; find: whitelist on/off | whitelist on/off |
-| long `SIDE1` | live: waterfall on/off (default: loot list + level graph) | — |
 | long `SIDE2` | find: save the selected find to a channel | — |
 | `MENU` | live: frequency to VFO and exit; find: selected to VFO and exit | selected to VFO and exit |
-| long `MENU` | live: menu: step, speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level, waterfall, palette | — |
+| long `MENU` | live/find/range list/editor: system settings (main menu), EXIT returns to the scanner | — |
 | `1/2/3/4` | find: sort: time / duration / blacklist / frequency | sort: time / duration / blacklist / frequency |
 | long `8` | find: blacklist finds → channels (with the blacklist flag) | blacklist finds → channels (with the blacklist flag) |
 | long `9` | find: channel blacklist → loot (manually) | channel blacklist → loot (manually) |
 | `EXIT` | live: to VFO; find: back to scan | back |
+
+Multi-scan keeps up to 4 ranges (start, end, step, modulation, bandwidth) and
+walks them in a circle: after the end of one range the scan continues from the
+start of the next, applying that range's step/bandwidth. The scanner has no
+spectrum or waterfall (short ranges never fill them): the findings list takes
+that space (10 rows), the large frequency and the detail line sit under the
+range fields, and the level graph stays at the bottom. The current frequency is
+shown with the large `F_XL` font (three decimals), the scan step uses `F_M` in
+the top line (the same place as in FC), and the dwell time is in the middle of
+the detail line in both scanners. Long `2` opens the
+range list; `UP/DOWN` select, `SIDE1/SIDE2` apply a range, `Add current` saves
+the scanner's current range, short `0` deletes the selected range, long `0`
+clears the list, `MENU` enters a range manually (start, then end; the list is
+shown again), `EXIT` closes. Long `6` toggles multi-scan on/off; the two range
+labels always show the active range. Long `MENU` always opens the system
+settings (main menu), including from this list and from the range editor; the
+scanner's own menu (Multiband/Ranges/step/speed/…) is on long `3`.
+
+While HOLD listens on a found carrier the scanner decodes CTCSS/DCS
+(non-blocking, ~650 ms) and writes the code into the find; the loot detail
+line shows `CT 88.5` or `DCS 023`. Finds carry the code to channels, and a
+channel with `toneSql` is skipped when its decoded tone does not match. A find
+that opens `Auto blacklist` times (`Scan → Auto blacklist`, off by default) is
+blacklisted automatically unless it is whitelisted.
 
 The current scan is element zero of the findings list. `UP/DOWN` on the live
 scan move onto the newest (or oldest) find; walking past either end of the
@@ -129,12 +171,12 @@ scan is paused, the receiver is tuned to that frequency, the status shows
 actions as the loot screen (sort, black/white lists, delete, save to channels,
 capture to VFO), so finds can be handled without leaving the scanner.
 
-Long `MENU` — a menu in the top-left corner under the status bar (half the
-width, a hint + 4 rows, the rest scrolls; a scrollbar on the right): the
-spectrum (and the waterfall, when enabled) keeps running. `UP/DOWN` — item,
-`SIDE1` — increase, `SIDE2` — decrease, `MENU/EXIT` — close. In the scanner
-the items are: step, speed, modulation, bandwidth, squelch, gain, AFC,
-Min/Max/Auto level, waterfall, waterfall palette.
+Long `3` in the scanner (long `MENU` in the analyser) — a menu in the top-left
+corner under the status bar (half the width, a hint + 4 rows, the rest scrolls;
+a scrollbar on the right). `UP/DOWN` — item, `SIDE1` — increase, `SIDE2` —
+decrease, `MENU/EXIT` — close. The scanner items are: Multiband, Ranges, step,
+speed, modulation, bandwidth, squelch, gain, AFC; the analyser adds Min/Max/Auto
+level and the waterfall palette.
 
 The loot list is the entry point to channels: long `5` on the loot screen (or
 on a selected find in the scanner) saves whitelist finds to channels, long
@@ -190,17 +232,55 @@ increase/decrease, `MENU` — enter a submenu (or assign an action), `EXIT` —
 one level back, and `EXIT` on the main page — return to VFO.
 
 The pages follow the k1-fw settings: **Scan** (squelch open/close time and
-delays, FC time, skip `X_X`, scan mode/delay), **Radio** (DTMF decode, filter
-bound `240`/`280`, SI power off, upconverter, STE, deviation, TX time, busy
-channel lock, mic gain), **Equalizer**, **Display** (gamma, backlight
-high/low/time, channel display mode, level in VFO), **Battery** (type, style,
-calibration), **Receiver** (the former VFO overlay menu: step, filter,
-receiver, modulation, bandwidth, squelch, gain, AFC), **Multiwatch**, and
-**Buttons**. The main page has the global **TX enable** (default **Off**) and
-**TX power** (`Low`/`Mid`/`High`, default `Low`). Items that the RT-880
-firmware does not have (unsupported k1-fw items, etc.) are
-shown with the value `N/A` and do not change anything. `Gamma` selects the
-ST7789 built-in curve: `G2.2` (default), `G1.8`, `G2.5` or `G1.0`.
+delays, FC time, skip `X_X`, battery save, scan mode, auto blacklist,
+scan delay, scanlist), **Radio** (DTMF decode, filter bound `240`/`280`,
+SI power off, upconverter, STE, priority channel, deviation, TX time, busy
+channel lock, mic gain, Rep STE), **Equalizer**
+(RX/TX 300 Hz and 3 kHz gain), **Display** (gamma, backlight high/low/time,
+BL SQL mode, channel display mode, level in VFO, always RSSI), **Battery**
+(type, style, calibration), **Receiver** (the former VFO overlay menu: step,
+filter, receiver, modulation, bandwidth, squelch, gain, AFC), **Multiwatch**,
+and **Buttons**. The main page has the global **TX enable** (default **Off**)
+and **TX power** (`Low`/`Mid`/`High`, default `Low`), plus `Beep`, `Keylock`
+and `Active VFO`. `Gamma` selects the ST7789 built-in curve: `G2.2` (default),
+`G1.8`, `G2.5` or `G1.0`.
+
+`Auto blacklist` (`Scan`): `Off` (default) or a hit threshold 1..10; a find
+that opens the squelch that many times is moved to the blacklist unless it is
+whitelisted. `Priority` (`Radio`) shows the priority channel frequency; it is
+set with long `3` in the channel list, and changing the item clears it.
+
+`Beep` gives a 2.7 kHz, 40 ms tone on PA5 for every key press except PTT
+(not while transmitting or while the display is off). When the audio path is
+muted (squelch closed) it is opened 20 ms before the tone, because the
+LN4898 amplifier is power-gated by AF MUTE and needs time to start. `Keylock` is the same global lock as long `STAR`.
+`Active VFO` switches the active row and always follows the real active VFO.
+
+**Scan mode** is `CO` (carrier operated, the previous behaviour), `TO` (time
+operated: HOLD for exactly 3 s and then continue) or `SE` (search: a stricter
+peak confirmation before HOLD; in the channel scanner SE behaves like CO).
+**Battery save** (`Off`, `1:1`, `1:2`, `1:3`) only works in the VFO on the
+BK4819 with the squelch closed: after 5 s of silence it alternates between
+1 s of reception and 1/2/3 s of `BK4819_RxSuspend`; any signal, key, PTT or
+mode change restores reception. It is suppressed while multiwatch or a
+channel-mode VFO is active.
+
+`Scanlist` reads and writes the real channel scanlist mask (`ALL` or `1`..`8`;
+a multi-list mask is shown as `1.3` and the first step goes back to `ALL`).
+**Rep STE** keeps the audio open for 300 ms after the BK carrier disappears
+(VFO/repeater tail, default `Off`). **BL SQL mode** is `Off`, `On` (opening
+the squelch cancels auto-dimming and resets the idle timer) or `Open` (the
+backlight dims again as soon as the squelch closes). **Always RSSI** shows the
+S-meter/level graph with the squelch closed; when `Off` (default) the meter is
+visible only while a signal is open.
+
+**Bat type** selects the discharge curve used for the `Percent` battery style
+(`1400`, `1600`, `2200`, `3500` mAh); the fill and colour still follow the
+voltage. **BAT cal** (`1200..3200`, step 8) is the divider calibration used by
+`battery_voltage_cv()`; the menu shows the measured voltage together with the
+value (`7.44V 2184`) so it can be matched to a multimeter. **Equalizer** sets
+RX/TX AF response for 300 Hz and 3 kHz from -4 to +4 dB. TX 3 kHz at 0 dB
+leaves the factory `REG_74` calibration word untouched.
 
 Scan timings are live: `Open t`/`Close t` are the BK4819 squelch open/close
 delays (5 ms units), `Listen t/o` limits the HOLD time while the squelch is
@@ -231,12 +311,13 @@ together with the settings.
 
 ## Channels and scanlists (VFO → long `7`)
 
-Saved channels: name, frequency, modulation, bandwidth, receiver, scanlist
-mask and the blacklist flag. Up to 200 channels, in save order. There are 8
-scanlists; `0` — ALL. A channel with `scanlists == 0` belongs to all lists,
-otherwise to the marked bits. The current scanlist is stored in flash. A
-channel record is 16 bytes (format v2); an old 8-byte record without a name is
-read as is and rewritten as v2 on the first list change.
+Saved channels: name, frequency, modulation, bandwidth, receiver, tone and
+tone-filter flag, scanlist mask and the blacklist flag. Up to 200 channels, in
+save order. There are 8 scanlists; `0` — ALL. A channel with `scanlists == 0`
+belongs to all lists, otherwise to the marked bits. The current scanlist is
+stored in flash. A channel record is 18 bytes (format v3); a v2 record
+(16 bytes, no tone) or a v1 record (8 bytes, no name) is read with no tone and
+rewritten as v3 on the first list change.
 
 | Key | List / pause | Scan |
 |---|---|---|
@@ -248,6 +329,7 @@ read as is and rewritten as v2 on the first list change.
 | long `MENU` | start scanning | stop scanning |
 | `SIDE1` | blacklist on/off for the selected | current to blacklist and continue |
 | long `SIDE2` | pin/unpin the channel behind the VFO it was entered from | — |
+| long `3` | make the selected channel the priority channel (repeat — clear) | — |
 | long `5` | add the VFO frequency (from before entry) to channels | — |
 | long `0` | delete the selected | — |
 | long `9` | channel blacklist → loot | — |
@@ -259,12 +341,14 @@ below in a medium one — the frequency, modulation and receiver, and below
 that — `CH x/y`, the scanlist and the state. During an active scan the header
 is hidden and the list fills the whole screen.
 
-Form (`#`): 7 fields — name, frequency, modulation, bandwidth, receiver
+Form (`#`): 8 fields — name, frequency, modulation, bandwidth, tone, receiver
 (`BK-A`/`SI`), scanlists, blacklist. `UP/DOWN` — field, `SIDE1/SIDE2` — change
 the value, `MENU` — enter a frequency (digits, `*` — point, `MENU`/`#` —
 confirm) or a name (multi-tap `2..9`, `1` — symbols, `0` — space/0, `STAR` —
 backspace, `UP/DOWN` — cursor); `#`/`EXIT` — save and back. In the scanlists
-field `1..8` toggle bits, `0` — ALL, `SIDE1/SIDE2` — one list/ALL.
+field `1..8` toggle bits, `0` — ALL, `SIDE1/SIDE2` — one list/ALL. The tone
+field cycles `OFF`, 50 CTCSS and 104 DCS codes; `STAR` on that field toggles
+the tone filter (`*` after the code).
 
 The order in the list is the save order. Long `5` in the list adds the VFO
 frequency from which the mode was entered to channels (a frequency match
@@ -274,8 +358,10 @@ shows `NO CHANNELS`.
 
 The scan walks the channels of the current scanlist (blacklist channels are
 visible at the end of the list with a `-` mark, but are skipped during the
-scan). BK — by RSSI above the noise floor (the first pass is calibrated by the
-minimum), SI — by SNR ≥ 6 dB. RSSI on the fast pass is read after 500 µs (the
+scan). A channel with a tone and the filter flag is decoded after the squelch
+opens; a different CTCSS/DCS resumes the scan, so the 650 ms decode is paid
+only on a real stop. BK — by RSSI above the noise floor (the first pass is
+calibrated by the minimum), SI — by SNR ≥ 6 dB. RSSI on the fast pass is read after 500 µs (the
 default), and a found candidate is confirmed by a local window backwards at a
 2.5 ms dwell: the BK RSSI filter "pulls" the peak 1-6 steps forward, the window
 finds the real frequency and rejects noise. AFC is off during the scan, the
@@ -320,14 +406,16 @@ SI4732-only screen: LW/MW, broadcast SW, FM 64–108 MHz and amateur SSB bands
 frequency is large, below is the band scale; the current frequency is marked by
 a single arrow under the scale. Long `1` scans the current band and draws marks
 for found stations as the scan goes; the mark height and colour are the SNR.
-Long `2` walks all broadcast SW bands (120–11 m) and shows them as horizontal
-scales stacked in a column: on the left the band's metre label without
-frequency labels, the finds as vertical coloured bars of different heights
-(SNR 0–30), the current frequency as an arrow. `UP/DOWN` — through found
+Long `2` walks all AM broadcast bands of the plan (LW/MW and 120–11 m) and
+shows them as horizontal scales stacked in a column: on the left the band
+name, the finds as vertical coloured bars of different heights (SNR 0–30),
+the current frequency as an arrow. The overview is updated in place: only the
+active row's marker and new finds are drawn. `UP/DOWN` — through found
 stations, and without a scan — step across the band, as in VFO; digits —
-frequency entry (`1048` → 104.8 MHz, `MENU`/`#` — confirm), `SIDE1/SIDE2` — the
-neighbouring broadcast SW band. The station threshold is SNR ≥ 6 dB. In SSB
-long `3`/`9` moves the BFO (50 Hz step), the value is shown at the bottom.
+frequency entry (`1048` → 104.8 MHz, `MENU`/`#` — confirm), `SIDE1/SIDE2` —
+the neighbouring AM broadcast band (FM 64–108 MHz is scanned with long `1`).
+The station threshold is SNR ≥ 6 dB. In SSB long `3`/`9` moves the BFO
+(50 Hz step), the value is shown at the bottom.
 `MENU` — the selected frequency to VFO, `*` — the loot list, `EXIT` — exit to
 VFO; during entry the first `EXIT` cancels it, the second exits to VFO. The
 scale is not redrawn during plain listening.
@@ -423,8 +511,8 @@ record stores the frequencies/modulation/step/bandwidth of three VFOs, the
 current VFO, squelch, filter, theme, antenna input, band memory and the loot
 list. Slots 28..31 are reserved for a separate channel ring (one record per
 sector: header last, data at offset 256, CRC32) and the current scanlist mask.
-A channel is 16 bytes (v2, with a name); a v1 record (8 bytes) is read and
-converted to v2 on the first list rewrite. A write goes out 2.5 s after the
+A channel is 18 bytes (v3, with a name and a tone); v2 (16 bytes) and v1
+(8 bytes) records are read and converted to v3 on the first list rewrite. A write goes out 2.5 s after the
 last change, each time to the next sector with CRC32; after a power loss the
 previous intact record is loaded. `storewipe` erases both the state and the
 channels. The beginning of the flash (stock data) is not erased.
@@ -471,6 +559,16 @@ physical "PTT at power-on" check. `fastboot` writes the magic for stage-2 and
 resets. Taking a dump: `python3 flash.py --dump-boot /dev/ttyUSB0
 /tmp/kilo/bootloader.bin`.
 
+The console also has a machine-readable line protocol (frequencies in 10 Hz
+units, fields separated by spaces, the channel name is the rest of the line):
+
+- `ch` — one `CH <idx> <f10> <mod> <bw> <radio> <tone> <toneSql> <scanlists>
+  <blacklist> <name>` per channel, then `CHEND <count>`;
+- `ch add <f10> <mod> <bw> <radio> <tone> <toneSql> <scanlists> <blacklist>
+  <name>` — add/update by frequency, replies `CHADD 0|1 <name>`;
+- `ch del <idx>`, `loot` (`LOOT ...` + `LOOTEND <count>`), `loot wipe`,
+  `freq <f10>` — set the active VFO frequency.
+
 `reboot` in the console performs a reset, after start `READY <µs>` and `PROF ...`
 are printed with the stages from the beginning of `main`; `prof` repeats the
 last profile. Measuring cold boot through the bootloader: `python3 bootprof.py
@@ -514,19 +612,32 @@ The hardware counter catches a transmitter carrier on VHF/UHF/800 MHz in
 antenna relay (for 800 MHz — `A2` with short `ALARM`). A find (2 matches within
 3 kHz): the scan stops, the receiver tunes to the frequency, the sound goes
 through the squelch; the record goes to the loot list. The black and white
-lists are skipped.
+lists are skipped. The screen uses the same grid as the scanner: the large
+frequency is rounded to the current VFO step (the exact find is in the loot
+row), the step is in the top line, and the dwell time is in the middle of the
+detail line. `UP/DOWN` enter the embedded findings list with the same actions
+as in the scanner (sort, black/white lists, delete, save to channels, capture
+to VFO).
 
 | Dark theme | Light theme |
 |---|---|
 | <img src="docs/screenshots/fc-dark.png" width="200" alt="BK4819 frequency counter, dark theme"> | <img src="docs/screenshots/fc-light.png" width="200" alt="BK4819 frequency counter, light theme"> |
 
-| Key | Action |
-|---|---|
-| `1` / `7` | speed (0.2–1.6 s per pass) |
-| `3` / `9` | squelch (`SQ 0` = always open: does not stick on a find, after 5 s the scan continues) |
-| `5` | counter threshold (0x244 / 0x580) |
-| `#` / `0` | next band / auto-switch (off by default) |
-| `SIDE1` / `SIDE2` | find to the black / white list and continue |
-| `MENU`, `PTT` | find frequency to VFO and exit |
-| `*` / long `MENU` | loot list |
-| `EXIT` | exit without capture (VFO returns to the previous frequency) |
+| Key | Live FC scan | Selected find |
+|---|---|---|
+| `1` / `7` | speed (0.2–1.6 s per pass) | sort by time |
+| `2` | — | sort by duration |
+| `3` / `9` | squelch (`SQ 0` = always open: does not stick on a find, after 5 s the scan continues) | sort by blacklist |
+| `4` | — | sort by frequency |
+| `5` | counter threshold (0x244 / 0x580) | — |
+| long `5` | — | whitelist finds → channels |
+| `#` | next band | — |
+| `0` / long `0` | auto-switch (off by default) | delete the selected find / clear all (long) |
+| `UP/DOWN` | enter the findings list (past either end — back to scan) | previous/next find (past either end — back to scan) |
+| `SIDE1` / `SIDE2` | find to the black / white list and continue | blacklist / whitelist on/off |
+| long `SIDE2` | — | save the selected find to a channel |
+| long `8` / `9` | — | blacklist finds → channels / channel blacklist → loot |
+| `MENU` | find frequency to VFO and exit | selected find to VFO and exit |
+| `PTT` | find frequency to VFO and exit | — |
+| `*` / long `MENU` | loot list | — |
+| `EXIT` | exit without capture (VFO returns to the previous frequency) | back to scanning, continue FC |

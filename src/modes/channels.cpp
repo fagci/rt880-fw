@@ -15,16 +15,18 @@
  *   длинный SIDE2 — закрепить/снять канал за VFO, из которого вошли
  *                (частота VFO не меняется, канал слушает multiwatch);
  *   длинный 5 — добавить частоту VFO (на момент входа) в каналы;
+ *   длинный 3 — сделать выбранный канал приоритетным (повтор — снять);
  *   длинный 0 — удалить выбранный;
  *   длинный 9 — чёрный список каналов в loot (вручную);
  *   STAR      — список находок;
  *   EXIT      — в VFO, снимок VFO восстанавливается.
  *
- * Форма (7 полей): имя, частота, модуляция, полоса, приёмник, сканлисты,
- * blacklist. UP/DOWN — поле, SIDE1/SIDE2 — значение, MENU — ввод частоты
- * или имени, # — сохранить и назад, EXIT — сохранить и назад. Имя —
- * мульти-тап 2..9, 1 — символы, 0 — пробел/0, STAR — backspace. На поле
- * сканлистов 1..8 переключают биты, 0 — ALL.
+ * Форма (8 полей): имя, частота, модуляция, полоса, субтон, приёмник,
+ * сканлисты, blacklist. UP/DOWN — поле, SIDE1/SIDE2 — значение, MENU —
+ * ввод частоты или имени, # — сохранить и назад, EXIT — сохранить и назад.
+ * Имя — мульти-тап 2..9, 1 — символы, 0 — пробел/0, STAR — backspace. На
+ * поле сканлистов 1..8 переключают биты, 0 — ALL. На поле субтона STAR
+ * включает/выключает обязательное совпадение тона (в списке — `*`).
  *
  * В скане:
  *   длинный MENU — остановить скан; MENU — текущий канал в VFO и выход;
@@ -42,6 +44,7 @@
 #include "../helper/names.h"
 #include "../helper/settings.h"
 #include "../helper/store.h"
+#include "../helper/tone.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -81,6 +84,12 @@
 #define SQL_HYST 4
 #define RX_SNR_THR 6   /* порог станции SI, дБ */
 #define SI_HOLD_MS 5000 /* у SI нет шумодава — HOLD всё равно по таймеру */
+#define PRIO_PERIOD 8   /* priority: канал вклинивается каждые N шагов скана */
+/* Scan mode: TO — HOLD ровно 3 с; SE в каналах деградирует до CO, кроме
+ * более строгого повторного подтверждения. */
+#define SCAN_TO_MS 3000
+#define SCAN_MODE_TO 1
+#define SCAN_MODE_SE 2
 
 typedef enum { PH_IDLE, PH_SETTLE, PH_CONFIRM, PH_HOLD } ScanPhase;
 typedef enum { VIEW_LIST, VIEW_FORM } ChView;
@@ -89,6 +98,7 @@ typedef enum {
   FIELD_FREQ,
   FIELD_MOD,
   FIELD_BW,
+  FIELD_TONE,
   FIELD_RADIO,
   FIELD_SLOTS,
   FIELD_BLACK,
@@ -97,7 +107,7 @@ typedef enum {
 typedef enum { EDIT_NONE, EDIT_FREQ, EDIT_NAME } ChEditKind;
 
 static const char *const FIELD_LABELS[FIELD_COUNT] = {
-    "Name", "Freq", "Mod", "BW", "Radio", "Slots", "Black"};
+    "Name", "Freq", "Mod", "BW", "Tone", "Radio", "Slots", "Black"};
 
 /* Мульти-тап: цифра → группа символов (верхний регистр для новых имён). */
 static const char *const TAP_CHARS[10] = {
@@ -130,6 +140,9 @@ static struct Ctx {
   uint32_t s_nextAt;
   uint32_t s_holdUntil;
   uint32_t s_closedAt; /* момент закрытия шумодава (0 — сигнал есть) */
+  uint32_t s_toneAt;   /* 0 — субтон не проверяем/уже проверен */
+  uint16_t s_prioIdx;  /* индекс приоритетного канала в s_view, 0xFFFF — нет */
+  uint8_t s_prioSteps; /* счётчик шагов до вклинивания priority */
   uint16_t s_floorRssi;
   uint16_t s_confirmThr;
   uint16_t s_calibMin;
@@ -160,24 +173,6 @@ static struct Ctx {
 } ctx;
 
 /* ─── Список ─── */
-
-static void maskStr(char *b, uint8_t cap, uint16_t mask) {
-  if (!mask) {
-    snprintf(b, cap, "ALL");
-    return;
-  }
-  char *p = b;
-  char *end = b + cap;
-  p[0] = 0;
-  for (uint8_t i = 0; i < CH_SCANLIST_COUNT && p < end; ++i) {
-    if (!(mask & (1u << i)))
-      continue;
-    int w = snprintf(p, end - p, "%s%u", p == b ? "" : ".", (unsigned)(i + 1));
-    if (w < 0 || w >= end - p)
-      break;
-    p += w;
-  }
-}
 
 static const char *stateStr(void) {
   if (!ctx.s_scanning)
@@ -249,6 +244,18 @@ static void rebuildView(void) {
   ctx.s_viewCount = CH_BuildList(CH_GetScanlistMask(), ctx.s_view, CH_MAX);
   if (ctx.s_selIdx >= ctx.s_viewCount)
     ctx.s_selIdx = ctx.s_viewCount ? (uint16_t)(ctx.s_viewCount - 1) : 0;
+  /* Приоритет хранится частотой (индексы хранения плывут при правках). */
+  ctx.s_prioIdx = 0xFFFF;
+  int32_t pf = Settings_Get(SET_PRIORITY);
+  if (pf > 0) {
+    for (uint16_t i = 0; i < ctx.s_viewCount; ++i) {
+      CH ch;
+      if (CH_Read(ctx.s_view[i], &ch) && (int32_t)ch.f == pf) {
+        ctx.s_prioIdx = i;
+        break;
+      }
+    }
+  }
   clampTop();
 }
 
@@ -306,6 +313,24 @@ static void advanceScan(void) {
     stopScan();
     return;
   }
+  /* Priority: раз в PRIO_PERIOD шагов проверяем приоритетный канал; если
+   * шумодав откроется, обычный HOLD остановит скан на нём. */
+  if (++ctx.s_prioSteps >= PRIO_PERIOD) {
+    ctx.s_prioSteps = 0;
+    uint16_t pi = ctx.s_prioIdx;
+    if (pi < ctx.s_viewCount && pi != ctx.s_selIdx) {
+      CH pch;
+      if (CH_Read(ctx.s_view[pi], &pch) && !pch.blacklist) {
+        ctx.s_selIdx = pi;
+        clampTop();
+        applyCh(&pch, true);
+        ctx.s_phase = PH_SETTLE;
+        ctx.s_nextAt = millis() + SETTLE_MS;
+        ctx.s_dirty = true;
+        return;
+      }
+    }
+  }
   for (uint16_t k = 1; k <= ctx.s_viewCount; ++k) {
     uint16_t idx = (uint16_t)((ctx.s_selIdx + k) % ctx.s_viewCount);
     CH ch;
@@ -338,6 +363,7 @@ static void startScan(void) {
   ctx.s_calibSeen = 0;
   ctx.s_scanCount = countScannable();
   ctx.s_floorRssi = 0;
+  ctx.s_prioSteps = 0;
   ctx.s_selIdx = 0;
   clampTop();
   CH ch;
@@ -363,18 +389,27 @@ static void beginHold(void) {
   ctx.s_hold = true;
   ctx.s_phase = PH_HOLD;
   ctx.s_closedAt = 0;
-  uint32_t tmo = Settings_ScanTimeoutMs(SET_SQOPENEDTIMEOUT);
-  /* Listen t/o = None означает «до закрытия шумодава», но у SI его нет. */
-  if (tmo == 0xFFFFFFFFu && si)
-    tmo = SI_HOLD_MS;
+  ctx.s_toneAt = 0;
+  int32_t mode = Settings_Get(SET_SCANMODE);
+  uint32_t tmo;
+  if (mode == SCAN_MODE_TO) {
+    tmo = SCAN_TO_MS; /* TO: HOLD ровно 3 с */
+  } else {
+    tmo = Settings_ScanTimeoutMs(SET_SQOPENEDTIMEOUT);
+    /* Listen t/o = None означает «до закрытия шумодава», но у SI его нет. */
+    if (tmo == 0xFFFFFFFFu && si)
+      tmo = SI_HOLD_MS;
+  }
   ctx.s_holdUntil = tmo == 0xFFFFFFFFu ? tmo : millis() + tmo;
   ctx.s_dirty = true;
 }
 
 static void endHold(void) {
   clearAudio();
+  Tone_Update(false, 0, 0, false);
   ctx.s_hold = false;
   ctx.s_closedAt = 0;
+  ctx.s_toneAt = 0;
   advanceScan();
 }
 
@@ -394,6 +429,23 @@ static void scanTick(void) {
         (int32_t)(now - ctx.s_holdUntil) >= 0) {
       endHold();
       return;
+    }
+    /* Тон-фильтр канала: CTCSS/DCS читаем неблокирующе (~650 мс) уже
+     * после открытия шумодава, поэтому цена — только на остановке, не
+     * 650 мс на каждый канал. Чужой субтон — сразу дальше. */
+    if (!curIsSi() && ch.toneSql && ch.tone != CH_TONE_NONE) {
+      uint8_t chip = vfos[currentVfo].radio == RADIO_BK4819B ? 1 : 0;
+      Tone_Update(true, chip, vfos[currentVfo].rxF, true);
+      if (!ctx.s_toneAt)
+        ctx.s_toneAt = now ? now : 1;
+      else if ((int32_t)(now - ctx.s_toneAt) >= 800) {
+        uint8_t got = Tone_GetCode();
+        if (got != TONE_CODE_NONE && got != ch.tone) {
+          endHold();
+          return;
+        }
+        ctx.s_toneAt = 0;
+      }
     }
     /* У SI шумодава нет, а I2C-опрос при прослушивании щёлкает: просто
      * держим HOLD по таймеру. BK проверяем по RSSI, как сканер. */
@@ -448,7 +500,11 @@ static void scanTick(void) {
   uint16_t rssi = BK4819_GetRSSI();
 
   if (ctx.s_phase == PH_CONFIRM) {
-    if (rssi >= ctx.s_confirmThr) {
+    /* SE: строже повторное подтверждение (выше порога на SQL_MARGIN). */
+    uint16_t need = ctx.s_confirmThr;
+    if (Settings_Get(SET_SCANMODE) == SCAN_MODE_SE)
+      need = (uint16_t)(need + SQL_MARGIN);
+    if (rssi >= need) {
       beginHold();
       return;
     }
@@ -585,6 +641,26 @@ static void changeField(int8_t dir) {
   case FIELD_BW:
     c->bw = (uint8_t)((c->bw + 10 + dir) % 10);
     break;
+  case FIELD_TONE: {
+    /* Кольцо: OFF, 50 CTCSS, 104 DCS. Выбор тона включает его фильтр. */
+    const int total = 1 + 50 + 104;
+    int cur = 0;
+    if (c->tone == CH_TONE_NONE)
+      cur = 0;
+    else if (c->tone & TONE_CODE_DCS)
+      cur = 51 + (c->tone & 0x7F);
+    else
+      cur = 1 + c->tone;
+    cur = (cur + total + dir) % total;
+    if (cur == 0)
+      c->tone = CH_TONE_NONE;
+    else if (cur <= 50)
+      c->tone = (uint8_t)(cur - 1);
+    else
+      c->tone = (uint8_t)(TONE_CODE_DCS | (cur - 51));
+    c->toneSql = c->tone != CH_TONE_NONE;
+    break;
+  }
   case FIELD_RADIO:
     if (dir > 0)
       c->radio = c->radio == RADIO_BK4819A ? RADIO_SI4732 : RADIO_BK4819A;
@@ -775,6 +851,7 @@ static void addFromVfo(void) {
   ch.modulation = (uint8_t)(ctx.s_saved.mod & 7);
   ch.bw = (uint8_t)(ctx.s_saved.bw & 15);
   ch.radio = (uint8_t)(ctx.s_saved.radio & 3);
+  ch.tone = CH_TONE_NONE;
   ch.scanlists = CH_GetScanlistMask();
   if (!CH_Add(&ch)) {
     setMsg("ADD ERR");
@@ -822,7 +899,7 @@ static void refreshHeader(void) {
   lv_label_set_text_static(ctx.s_freqLbl, ctx.s_hdrFreq);
 
   char ms[16];
-  maskStr(ms, sizeof(ms), CH_GetScanlistMask());
+  CH_MaskString(ms, sizeof(ms), CH_GetScanlistMask());
   snprintf(ctx.s_hdrSub, sizeof(ctx.s_hdrSub), "CH %u/%u  SL %s  %s",
            (unsigned)(ctx.s_selIdx + 1), (unsigned)ctx.s_viewCount, ms,
            stateStr());
@@ -833,7 +910,7 @@ static void refreshList(void) {
   uint16_t n = ctx.s_viewCount;
   bool head = headerOn() && n > 0;
   char ms[16];
-  maskStr(ms, sizeof(ms), CH_GetScanlistMask());
+  CH_MaskString(ms, sizeof(ms), CH_GetScanlistMask());
   snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "CH %u/%u SL %s %s",
            (unsigned)(n ? ctx.s_selIdx + 1 : 0), (unsigned)n, ms, stateStr());
   lv_label_set_text_static(ctx.s_title, ctx.s_titleBuf);
@@ -895,7 +972,7 @@ static void refreshList(void) {
     snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "%s", ctx.s_msg);
   } else if (n && readSel(&ch)) {
     char ms2[16];
-    maskStr(ms2, sizeof(ms2), ch.scanlists);
+    CH_MaskString(ms2, sizeof(ms2), ch.scanlists);
     snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "#%u %s %s %s %s",
              (unsigned)(ctx.s_view[ctx.s_selIdx] + 1), ms2,
              MOD_NAMES[ch.modulation & 7], radioName(ch.radio), stateStr());
@@ -950,11 +1027,18 @@ static void refreshForm(void) {
     case FIELD_BW:
       snprintf(v, sizeof(v), "%s", BW_NAMES[c->bw % 10]);
       break;
+    case FIELD_TONE:
+      Tone_CodeString(c->tone, v, sizeof(v));
+      if (!v[0])
+        snprintf(v, sizeof(v), "OFF");
+      else if (c->toneSql)
+        strncat(v, " *", sizeof(v) - strlen(v) - 1);
+      break;
     case FIELD_RADIO:
       snprintf(v, sizeof(v), "%s", radioName(c->radio));
       break;
     case FIELD_SLOTS:
-      maskStr(v, sizeof(v), c->scanlists);
+      CH_MaskString(v, sizeof(v), c->scanlists);
       break;
     case FIELD_BLACK:
       snprintf(v, sizeof(v), "%s", c->blacklist ? "ON" : "OFF");
@@ -970,7 +1054,7 @@ static void refreshForm(void) {
   if (ctx.s_msg[0]) {
     snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "%s", ctx.s_msg);
   } else {
-    maskStr(ms, sizeof(ms), c->scanlists);
+    CH_MaskString(ms, sizeof(ms), c->scanlists);
     snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "#%u SL %s",
              (unsigned)(ctx.s_draftStore + 1), ms);
   }
@@ -1036,6 +1120,14 @@ static bool formKey(KEY_Code_t k, Key_State_t state) {
     return true;
   case KEY_HASH:
     closeForm();
+    return true;
+  case KEY_STAR:
+    /* На поле тона — вкл/выкл обязательное совпадение субтона. */
+    if (ctx.s_field == FIELD_TONE && ctx.s_draft.tone != CH_TONE_NONE) {
+      ctx.s_draft.toneSql = ctx.s_draft.toneSql ? 0 : 1;
+      ctx.s_formChanged = true;
+      ctx.s_dirty = true;
+    }
     return true;
   case KEY_1:
   case KEY_2:
@@ -1230,6 +1322,17 @@ public:
       case KEY_9: /* чёрный список каналов → loot, вручную */
         CH_LoadBlacklistToLoot();
         return true;
+      case KEY_3: { /* priority: выбранный канал вклинивается в скан */
+        CH ch;
+        if (readSel(&ch)) {
+          bool on = Settings_Get(SET_PRIORITY) == (int32_t)ch.f;
+          Settings_Set(SET_PRIORITY, on ? 0 : (int32_t)ch.f);
+          rebuildView();
+          setMsg(on ? "PRIO CLR" : "PRIO SET");
+          ctx.s_dirty = true;
+        }
+        return true;
+      }
       case KEY_SIDE2: { /* закрепить канал за VFO, из которого вошли */
         CH ch;
         if (!readSel(&ch))

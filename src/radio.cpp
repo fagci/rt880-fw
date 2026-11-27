@@ -56,6 +56,13 @@ static uint8_t s_monCaught;
 static uint32_t s_monClosedAt;
 static uint32_t s_monCheckAt;
 
+/* Rep STE: хвост открытого звука после закрытия шумодава (только VFO/BK). */
+#define TAIL_HOLD_MS 300u
+static bool s_tailHold;
+static bool s_tailWasOpen;
+static uint32_t s_tailUntil;
+static bool s_sqOpenEffective = true;
+
 /* Выставить модуляцию и шаг активного VFO по плану. false — вне плана. */
 bool Radio_ApplyBandPlan(uint32_t f) {
   const BandPlan *b = Band_Find(f);
@@ -579,6 +586,8 @@ void Radio_TxUpdate(void) {
 }
 
 bool Radio_TxStart(void) {
+  /* battery save мог оставить RX в suspend: вернуть тракт до гейтов. */
+  BK4819_RxResume();
   if (s_txActive || s_txTotLocked)
     return false;
   if (!Settings_Get(SET_TX_ENABLE) || Settings_Get(SET_PTT_LOCK))
@@ -641,6 +650,7 @@ bool Radio_TxStart(void) {
   BK4819_WriteRegister(0x31,
                        (uint16_t)(BK4819_ReadRegister(0x31) & 0xFFFDu));
   BK4819_WriteRegister(0x74, txFilterWord(cal.tx3k));
+  BK4819_ApplyAFResponseTX();
   BK4819_WriteRegister(
       0x7D, (uint16_t)(0xE940u + (uint16_t)Settings_Get(SET_MIC)));
   BK4819_WriteRegister(0x40, narrow ? cal.devNarrow : cal.devWide);
@@ -671,6 +681,8 @@ void Radio_TxStop(void) {
   if (!s_txActive)
     return;
   s_txActive = false;
+  s_tailUntil = 0;
+  s_tailWasOpen = false;
 
   BK4819_SelectChip(0);
   gpio_pin_write(&PIN_AF_MUTE, false);
@@ -771,6 +783,25 @@ void Radio_Update(void) {
     BK4819_SelectChip(vfoChip(currentVfo));
     sqOpen = (squelchLevel == 0) || BK4819_IsSquelchOpen();
   }
+  /* Rep STE: на фронте закрытия держим звук ещё 300 мс. */
+  if (s_tailHold && ar != RADIO_SI4732 && Settings_Get(SET_REPEATERSTE)) {
+    uint32_t now = millis();
+    if (sqOpen) {
+      s_tailWasOpen = true;
+      s_tailUntil = 0;
+    } else if (s_tailWasOpen) {
+      s_tailWasOpen = false;
+      s_tailUntil = now + TAIL_HOLD_MS;
+    }
+    if (s_tailUntil && (int32_t)(now - s_tailUntil) < 0)
+      sqOpen = true;
+    else
+      s_tailUntil = 0;
+  } else {
+    s_tailUntil = 0;
+    s_tailWasOpen = sqOpen;
+  }
+  s_sqOpenEffective = (ar != RADIO_SI4732) && sqOpen;
   applyMute(sqOpen);
 
   monitorTick();
@@ -786,6 +817,52 @@ void Radio_Update(void) {
   } else {
     Tone_Update(false, 0, vfos[currentVfo].rxF, sqOpen);
   }
+}
+
+bool Radio_SquelchOpen(void) { return s_sqOpenEffective; }
+
+void Radio_SetTailHold(bool on) {
+  if (!on) {
+    s_tailUntil = 0;
+    s_tailWasOpen = false;
+  }
+  s_tailHold = on;
+}
+
+/* Клавишный бипер. Тон идёт на PA5 в обход BK, но пока шумодав закрыт,
+ * AF_MUTE погашен — без него писк не слышен. AF MUTE управляет Q506 →
+ * EN/питание U510 (LN4898), усилителю нужно время на запуск, поэтому
+ * сначала открываем тракт и ждём, потом тон. Учёт afMuteOn не трогаем
+ * (его ведёт applyMute/Radio_ScanAudio). AF DAC BK не включаем: внешний
+ * тон идёт мимо него, а шум закрытого шумодава был бы слышен. */
+#define BEEP_LEAD_MS 20u
+#define BEEP_TONE_MS 40u
+#define BEEP_TAIL_MS 5u
+
+void Radio_Beep(void) {
+  if (!Settings_Get(SET_BEEP) || Radio_TxActive())
+    return; /* в TX тон ушёл бы в эфир */
+  bool wasMute = afMuteOn;
+  if (!wasMute) {
+    gpio_pin_write(&PIN_AF_MUTE, true);
+    delay_ms(BEEP_LEAD_MS); /* усилитель просыпается не мгновенно */
+  }
+  board_beep(2700, BEEP_TONE_MS);
+  if (!wasMute) {
+    delay_ms(BEEP_TAIL_MS);
+    gpio_pin_write(&PIN_AF_MUTE, false);
+  }
+}
+
+void Radio_ApplyAFResponse(bool tx) {
+  if (tx)
+    return; /* TX-EQ применится в Radio_TxStart следующей передачи */
+  VFO *v = &vfos[currentVfo];
+  if (v->radio == RADIO_SI4732)
+    return;
+  BK4819_SelectChip(vfoChip(currentVfo));
+  bool ssb = v->modulation == MOD_LSB || v->modulation == MOD_USB;
+  BK4819_ApplyAFResponseRX(ssb);
 }
 
 /* Звук сканера. Железо задаём ЯВНО и приводим в соответствие учёт
@@ -996,6 +1073,9 @@ void Radio_NextVfo(void) { Radio_SwitchToVfo(currentVfo + 1); }
 
 void Radio_SwitchToVfo(uint8_t idx) {
   currentVfo = idx % DEVICE_VFO_COUNT;
+  /* Active VFO в меню всегда отражает реальный активный ряд. */
+  gSettings[SET_ACTIVEVFO] = currentVfo;
+  Store_MarkDirty();
   /* Тяжёлое применение (инициализация кристалла, SSB-патч SI4732)
      откладываем — экран успеет перерисовать новый активный ряд,
      радио догоняет через Radio_ApplyPending. */

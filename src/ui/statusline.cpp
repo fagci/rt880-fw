@@ -165,6 +165,36 @@ void STATUSLINE_SetTitle(const char *t) {
     lv_label_set_text_static(s_title, s_titleText);
 }
 
+/* Кривые разряда из k1-fw: {напряжение cV, процент}, от высокого к низкому.
+ * Проценты — только для стиля «Percent»; заливка/цвет остаются по
+ * напряжению. */
+static const uint16_t BAT_CURVES[4][11][2] = {
+    {{828, 100}, {813, 97}, {794, 80}, {782, 65}, {770, 45}, {758, 25},
+     {750, 18}, {742, 12}, {734, 9}, {726, 6}, {630, 0}},
+    {{840, 100}, {780, 90}, {760, 80}, {740, 70}, {720, 60}, {710, 50},
+     {700, 40}, {690, 30}, {680, 20}, {672, 10}, {600, 0}},
+    {{840, 100}, {800, 90}, {784, 80}, {768, 70}, {756, 60}, {748, 50},
+     {742, 40}, {738, 30}, {732, 20}, {720, 10}, {600, 0}},
+    {{840, 100}, {820, 90}, {780, 80}, {770, 70}, {760, 60}, {750, 50},
+     {740, 40}, {730, 30}, {720, 20}, {700, 10}, {600, 0}},
+};
+
+static uint8_t batteryPercent(uint16_t cv) {
+  uint8_t t = (uint8_t)Settings_Get(SET_BATTERYTYPE);
+  if (t > 3)
+    t = 0;
+  const uint16_t(*c)[2] = BAT_CURVES[t];
+  for (uint8_t i = 1; i < 11; ++i) {
+    if (cv > c[i][0]) {
+      uint32_t v1 = c[i - 1][0], p1 = c[i - 1][1];
+      uint32_t v2 = c[i][0], p2 = c[i][1];
+      uint32_t pct = p2 + ((uint32_t)(cv - v2) * (p1 - p2)) / (v1 - v2);
+      return (uint8_t)(pct > 100 ? 100 : pct);
+    }
+  }
+  return 0;
+}
+
 void STATUSLINE_render(void) {
   if (!s_root)
     build();
@@ -222,10 +252,7 @@ void STATUSLINE_render(void) {
     if (style == 0) {
       t[0] = 0;
     } else if (style == 1) {
-      uint8_t pct = (uint8_t)ConvertDomain((int)bat, BAT_MIN, BAT_MAX, 0, 100);
-      if (pct > 100)
-        pct = 100;
-      snprintf(t, sizeof(t), "%u%%", (unsigned)pct);
+      snprintf(t, sizeof(t), "%u%%", (unsigned)batteryPercent(bat));
     } else {
       snprintf(t, sizeof(t), "%u.%02u", bat / 100, bat % 100);
     }

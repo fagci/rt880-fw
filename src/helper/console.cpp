@@ -10,8 +10,11 @@
 #include "../misc.h"
 #include "../modes/modes.h"
 #include "../ui/lv_port.h"
+#include "channels.h"
+#include "lootlist.h"
 #include "store.h"
 #include "at32f423.h"
+#include "../radio.h"
 #include "bootprof.h"
 #include "boot_layout.h"
 
@@ -21,7 +24,7 @@
 #define BOOT_ADDR 0x08000000u
 #define BOOT_LEN 0x2800u
 
-#define CMD_MAX 40
+#define CMD_MAX 96
 #define POLL_BYTES 32
 
 static char s_cmd[CMD_MAX];
@@ -479,6 +482,110 @@ static void harm_cmd(const char *args) {
   }
 }
 
+/* ─── Машиночитаемый протокол: каналы, находки, настройка VFO ───
+ * Строки ASCII, поля через пробел, имя канала — остаток строки.
+ *   CH <idx> <f10> <mod> <bw> <radio> <tone> <toneSql> <scanlists> <bl> <name>
+ *   ch add <f10> <mod> <bw> <radio> <tone> <toneSql> <scanlists> <bl> <name>
+ *   ch del <idx> | loot | loot wipe | freq <f10>
+ * f10 — частота в единицах 10 Гц; tone — 255 нет, 0..49 CTCSS, 128|idx DCS. */
+
+static const char *skip_sp(const char *s) {
+  while (*s == ' ')
+    ++s;
+  return s;
+}
+
+static void ch_dump(void) {
+  uint16_t n = CH_Count();
+  for (uint16_t i = 0; i < n; ++i) {
+    CH ch;
+    if (!CH_Read(i, &ch))
+      continue;
+    uart_printf("CH %u %lu %u %u %u %u %u %u %u %s\r\n", (unsigned)i,
+                (unsigned long)ch.f, (unsigned)ch.modulation, (unsigned)ch.bw,
+                (unsigned)ch.radio, (unsigned)ch.tone,
+                (unsigned)ch.toneSql, (unsigned)ch.scanlists,
+                (unsigned)ch.blacklist, ch.name);
+  }
+  uart_printf("CHEND %u\r\n", (unsigned)n);
+}
+
+static void ch_add(const char *args) {
+  uint32_t f, mod, bw, radio, tone, tsql, slots, bl;
+  const char *p = parse_dec(args, &f);
+  if (p)
+    p = parse_dec(p, &mod);
+  if (p)
+    p = parse_dec(p, &bw);
+  if (p)
+    p = parse_dec(p, &radio);
+  if (p)
+    p = parse_dec(p, &tone);
+  if (p)
+    p = parse_dec(p, &tsql);
+  if (p)
+    p = parse_dec(p, &slots);
+  if (p)
+    p = parse_dec(p, &bl);
+  if (!p || !f || f > 134000000u) {
+    uart_puts("ERR\r\n");
+    return;
+  }
+  CH ch;
+  memset(&ch, 0, sizeof(ch));
+  ch.f = f;
+  ch.modulation = (uint8_t)(mod & 7);
+  ch.bw = (uint8_t)(bw & 15);
+  ch.radio = (uint8_t)(radio & 3);
+  ch.tone = (uint8_t)(tone & 0xFFu);
+  ch.toneSql = tsql ? 1 : 0;
+  ch.scanlists = (uint16_t)(slots & 0xFFu);
+  ch.blacklist = bl ? 1 : 0;
+  p = skip_sp(p);
+  size_t len = strlen(p);
+  if (len > CH_NAME_LEN - 1)
+    len = CH_NAME_LEN - 1;
+  memcpy(ch.name, p, len);
+  uart_printf("CHADD %u %s\r\n", (unsigned)CH_Add(&ch) ? 1u : 0u, ch.name);
+}
+
+static void ch_del(const char *args) {
+  uint32_t idx;
+  if (!parse_dec(args, &idx) || idx >= CH_Count() ||
+      !CH_Delete((uint16_t)idx)) {
+    uart_puts("ERR\r\n");
+    return;
+  }
+  uart_printf("CHDEL %lu\r\n", (unsigned long)idx);
+}
+
+static void loot_dump(void) {
+  uint16_t n = LOOT_Size();
+  for (uint16_t i = 0; i < n; ++i) {
+    const Loot *l = LOOT_Item(i);
+    if (!l)
+      continue;
+    uart_printf("LOOT %lu %u %u %u %u %u %u %u %u %u\r\n",
+                (unsigned long)l->f, (unsigned)l->modulation,
+                (unsigned)l->bw, (unsigned)l->radio, (unsigned)l->code,
+                (unsigned)l->peak, (unsigned)l->duration,
+                (unsigned)l->hits, (unsigned)l->blacklist,
+                (unsigned)l->whitelist);
+  }
+  uart_printf("LOOTEND %u\r\n", (unsigned)n);
+}
+
+static void console_freq(const char *args) {
+  uint32_t f;
+  if (!parse_dec(args, &f) || f < 1530u || f > 134000000u) {
+    uart_puts("ERR\r\n");
+    return;
+  }
+  vfos[currentVfo].rxF = f;
+  Radio_TuneTo(f, true);
+  uart_printf("FREQ %lu\r\n", (unsigned long)f);
+}
+
 static void run(const char *cmd) {
   if (strcmp(cmd, "dumpboot") == 0)
     dump_boot();
@@ -532,13 +639,28 @@ static void run(const char *cmd) {
   else if (strcmp(cmd, "lv reset") == 0) {
     lv_port_stats_reset();
     uart_puts("LVSTAT RESET\r\n");
-  } else if (strcmp(cmd, "help") == 0)
+  } else if (strcmp(cmd, "ch") == 0)
+    ch_dump();
+  else if (strncmp(cmd, "ch add ", 7) == 0)
+    ch_add(cmd + 7);
+  else if (strncmp(cmd, "ch del ", 7) == 0)
+    ch_del(cmd + 7);
+  else if (strcmp(cmd, "loot") == 0)
+    loot_dump();
+  else if (strcmp(cmd, "loot wipe") == 0) {
+    LOOT_Clear();
+    uart_puts("LOOTWIPE\r\n");
+  } else if (strncmp(cmd, "freq ", 5) == 0)
+    console_freq(cmd + 5);
+  else if (strcmp(cmd, "help") == 0) {
+    uart_puts("ch\r\nch add <f10> <mod> <bw> <radio> <tone> <sql> <slots> "
+              "<bl> <name>\r\nch del <idx>\r\nloot [wipe]\r\nfreq <f10>\r\n");
     uart_puts("boot\r\nfastboot\r\nreboot\r\nprof\r\ndumpboot\r\nflashmap\r\n"
               "flashdump <addr> <len>\r\nstore\r\nstorewipe\r\n"
               "paint 0|1\r\nlv [reset]\r\n"
               "bk r|w|chip|filter|bw|afc|agc|ant|tune|scan|stop|res|"
               "rssi[kHz [step [dwell]]]|fc\r\n");
-  else
+  } else
     uart_puts("ERR\r\n");
 }
 

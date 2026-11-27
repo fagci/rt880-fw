@@ -270,3 +270,29 @@ void Tone_GetStatus(char *buf, size_t n) {
   strncpy(buf, s_text, n);
   buf[n - 1] = 0;
 }
+
+uint8_t Tone_GetCode(void) {
+  if (s_hasCtcss)
+    return s_ctcssIdx;
+  if (s_hasDcs && s_dcsIdx < 104)
+    return (uint8_t)(TONE_CODE_DCS | s_dcsIdx);
+  return TONE_CODE_NONE;
+}
+
+void Tone_CodeString(uint8_t code, char *buf, size_t n) {
+  if (!buf || !n)
+    return;
+  buf[0] = 0;
+  if (code == TONE_CODE_NONE)
+    return;
+  if (code & TONE_CODE_DCS) {
+    uint8_t idx = (uint8_t)(code & 0x7Fu);
+    if (idx < 104)
+      snprintf(buf, n, "DCS %03o", (unsigned)DCS_OPTIONS[idx]);
+    return;
+  }
+  if (code < 50) {
+    uint16_t f = CTCSS_OPTIONS[code];
+    snprintf(buf, n, "CT %u.%u", (unsigned)(f / 10), (unsigned)(f % 10));
+  }
+}

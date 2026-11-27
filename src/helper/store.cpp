@@ -3,6 +3,7 @@
 #include "keymap.h"
 #include "lootlist.h"
 #include "settings.h"
+#include "tone.h"
 
 #include "../bands.h"
 #include "../driver/board.h"
@@ -20,7 +21,8 @@
 #define STORE_SLOTS 32u
 #define STORE_STATE_SLOTS 24u /* 0..23 — кольцо состояния */
 #define STORE_MAGIC 0x30383852u /* "R880" */
-#define STORE_VERSION 3u    /* v3: настройки системы и карта кнопок */
+#define STORE_VERSION 4u    /* v4: мультискан (поддиапазоны) */
+#define STORE_VERSION_V3 3u /* v3: настройки системы и карта кнопок */
 #define STORE_VERSION_V2 2u /* v2: канал, закреплённый за VFO */
 #define STORE_VERSION_V1 1u /* старый формат без vfoChannels */
 #define STORE_BANDS_MAX 48u
@@ -37,10 +39,11 @@
 #define STORE_CH_BASE (STORE_BASE + 28u * W25Q_SECTOR_SIZE)
 #define STORE_CH_SLOTS 4u
 #define STORE_CH_MAGIC 0x4E414843u /* "CHAN" */
-#define STORE_CH_VERSION 2u    /* v2: имя канала, полоса 0..9 */
+#define STORE_CH_VERSION 3u    /* v3: субтон (tone/toneSql) */
+#define STORE_CH_VERSION_V2 2u /* v2: имя канала, полоса 0..9 */
 #define STORE_CH_VERSION_V1 1u /* старый формат без имени, 8 байт */
 #define STORE_CH_DATA_OFF 256u
-#define STORE_CH_PAGE 32u /* кратно sizeof(CH), экономия RAM */
+#define STORE_CH_PAGE 32u /* буфер потоковой записи, кратен 2 */
 
 /* Запись: заголовок + состояние + необязательный хвост списка находок. */
 typedef struct __attribute__((packed)) {
@@ -67,11 +70,16 @@ typedef struct __attribute__((packed)) {
   VFOChannel vfoCh[DEVICE_VFO_COUNT];
   int32_t settings[SET_COUNT];
   KeyBinding keymap[KEY_COUNT][2];
+  uint8_t scanMulti;
+  uint8_t scanRangeCount;
+  ScanRange scanRanges[STORE_SCAN_RANGE_MAX];
 } StoreFixed;
 
-/* Размеры старых записей: v1 — до закреплённых каналов, v2 — до настроек. */
+/* Размеры старых записей: v1 — до закреплённых каналов, v2 — до настроек,
+ * v3 — до мультискана (новые поля в хвосте, старые читаются нулями). */
 #define STORE_FIXED_V1_SIZE ((uint16_t)offsetof(StoreFixed, vfoCh))
 #define STORE_FIXED_V2_SIZE ((uint16_t)offsetof(StoreFixed, settings))
+#define STORE_FIXED_V3_SIZE ((uint16_t)offsetof(StoreFixed, scanMulti))
 
 /* Радио-часть состояния на входе в сканирующий режим (см. Store_PinRadio). */
 typedef struct __attribute__((packed)) {
@@ -109,6 +117,20 @@ typedef struct __attribute__((packed)) {
 
 static_assert(sizeof(CH_V1) == 8, "CH v1 must be 8 bytes");
 
+/* Канал формата v2 (16 байт): имя уже есть, субтона нет. */
+typedef struct __attribute__((packed)) {
+  uint32_t f;
+  uint16_t scanlists;
+  uint8_t modulation : 3;
+  uint8_t bw : 4;
+  uint8_t radio : 2;
+  uint8_t blacklist : 1;
+  uint8_t reserved : 6;
+  char name[CH_NAME_LEN];
+} CH_V2;
+
+static_assert(sizeof(CH_V2) == 16, "CH v2 must be 16 bytes");
+
 /* Заголовок записи диапазонов: данные с offset STORE_BAND_DATA_OFF,
  * заголовок пишется последним. */
 typedef struct __attribute__((packed)) {
@@ -142,6 +164,10 @@ static uint8_t s_next; /* куда писать следующую */
 static uint32_t s_seq = 1;
 static bool s_radioPinned;
 static StoreRadio s_pinRadio;
+/* Мультискан: RAM-копия, чтобы save_record не читал флеш. */
+static uint8_t s_scanMulti;
+static uint8_t s_scanRangeCount;
+static ScanRange s_scanRanges[STORE_SCAN_RANGE_MAX];
 
 /* Состояние кольца каналов. */
 static bool s_chValid;
@@ -205,14 +231,16 @@ static uint16_t fixed_size(uint16_t version) {
     return STORE_FIXED_V1_SIZE;
   if (version == STORE_VERSION_V2)
     return STORE_FIXED_V2_SIZE;
+  if (version == STORE_VERSION_V3)
+    return STORE_FIXED_V3_SIZE;
   return (uint16_t)sizeof(StoreFixed);
 }
 
 static bool rec_valid(const StoreRec *r) {
   if (r->magic != STORE_MAGIC)
     return false;
-  if (r->version != STORE_VERSION && r->version != STORE_VERSION_V2 &&
-      r->version != STORE_VERSION_V1)
+  if (r->version != STORE_VERSION && r->version != STORE_VERSION_V3 &&
+      r->version != STORE_VERSION_V2 && r->version != STORE_VERSION_V1)
     return false;
   return r->payloadLen >= fixed_size(r->version) &&
          r->payloadLen <= W25Q_SECTOR_SIZE - sizeof(StoreRec);
@@ -325,6 +353,13 @@ void Store_Init(void) {
         }
         LOOT_LoadCommit(f.lootCount);
 
+        s_scanMulti = f.scanMulti != 0;
+        s_scanRangeCount = f.scanRangeCount <= STORE_SCAN_RANGE_MAX
+                               ? f.scanRangeCount
+                               : STORE_SCAN_RANGE_MAX;
+        memcpy(s_scanRanges, f.scanRanges,
+               (size_t)s_scanRangeCount * sizeof(s_scanRanges[0]));
+
         s_valid = true;
         s_last = (uint8_t)best;
         if (best >= (int)STORE_STATE_SLOTS) {
@@ -402,6 +437,10 @@ static bool save_record(void) {
     f.vfoCh[i] = vfoChannels[i];
   memcpy(f.settings, gSettings, sizeof(f.settings));
   memcpy(f.keymap, gKeymap, sizeof(f.keymap));
+  f.scanMulti = s_scanMulti;
+  f.scanRangeCount = s_scanRangeCount;
+  memcpy(f.scanRanges, s_scanRanges,
+         (size_t)s_scanRangeCount * sizeof(s_scanRanges[0]));
   f.bandCount = Band_Count();
   if (f.bandCount > STORE_BANDS_MAX)
     return false;
@@ -503,7 +542,7 @@ bool Store_ApplySettings(void) {
 
   StoreFixed f;
   uint16_t ver;
-  if (!read_last_fixed(&f, &ver) || ver < STORE_VERSION)
+  if (!read_last_fixed(&f, &ver) || ver < STORE_VERSION_V3)
     return false;
 
   memcpy(gSettings, f.settings, sizeof(gSettings));
@@ -526,6 +565,7 @@ bool Store_ApplyRadio(void) {
     vfoChannels[i] = f.vfoCh[i];
   }
   currentVfo = f.currentVfo;
+  gSettings[SET_ACTIVEVFO] = currentVfo;
   squelchLevel = f.squelch;
   filterIndex = f.filter;
   uint8_t bn = f.bandCount < Band_Count() ? f.bandCount : Band_Count();
@@ -534,6 +574,28 @@ bool Store_ApplyRadio(void) {
   for (uint8_t c = 0; c < CAT_COUNT; ++c)
     Band_GroupLastSet(c, f.groupLast[c]);
   return true;
+}
+
+uint8_t Store_ScanRanges(ScanRange *out, uint8_t max) {
+  uint8_t n = s_scanRangeCount < max ? s_scanRangeCount : max;
+  if (out && n)
+    memcpy(out, s_scanRanges, (size_t)n * sizeof(s_scanRanges[0]));
+  return s_scanRangeCount;
+}
+
+void Store_ScanRangesSet(const ScanRange *in, uint8_t count) {
+  if (count > STORE_SCAN_RANGE_MAX)
+    count = STORE_SCAN_RANGE_MAX;
+  if (in && count)
+    memcpy(s_scanRanges, in, (size_t)count * sizeof(s_scanRanges[0]));
+  s_scanRangeCount = count;
+  Store_MarkDirty();
+}
+
+bool Store_ScanMulti(void) { return s_scanMulti != 0; }
+void Store_ScanMultiSet(bool on) {
+  s_scanMulti = on ? 1 : 0;
+  Store_MarkDirty();
 }
 
 bool Store_Wipe(void) {
@@ -548,6 +610,8 @@ bool Store_Wipe(void) {
   s_last = 0;
   s_next = 0;
   s_seq = 1;
+  s_scanMulti = 0;
+  s_scanRangeCount = 0;
   s_chValid = false;
   s_chWriting = false;
   s_chLast = s_chNext = 0;
@@ -570,8 +634,11 @@ bool Store_Wipe(void) {
 /* ─── Кольцо каналов ─── */
 
 static uint16_t ch_stride(uint16_t version) {
-  return version == STORE_CH_VERSION_V1 ? (uint16_t)sizeof(CH_V1)
-                                        : (uint16_t)sizeof(CH);
+  if (version == STORE_CH_VERSION_V1)
+    return (uint16_t)sizeof(CH_V1);
+  if (version == STORE_CH_VERSION_V2)
+    return (uint16_t)sizeof(CH_V2);
+  return (uint16_t)sizeof(CH);
 }
 
 static void ch_decode_v1(const CH_V1 *o, CH *c) {
@@ -582,11 +649,27 @@ static void ch_decode_v1(const CH_V1 *o, CH *c) {
   c->bw = o->bw;
   c->radio = o->radio;
   c->blacklist = o->blacklist;
+  c->tone = CH_TONE_NONE;
+}
+
+static void ch_decode_v2(const CH_V2 *o, CH *c) {
+  memset(c, 0, sizeof(*c));
+  c->f = o->f;
+  c->scanlists = o->scanlists;
+  c->modulation = o->modulation;
+  c->bw = o->bw;
+  c->radio = o->radio;
+  c->blacklist = o->blacklist;
+  memcpy(c->name, o->name, CH_NAME_LEN);
+  c->name[CH_NAME_LEN - 1] = 0;
+  c->tone = CH_TONE_NONE;
 }
 
 static bool ch_rec_valid(const ChRec *r) {
   if (r->magic != STORE_CH_MAGIC ||
-      (r->version != STORE_CH_VERSION && r->version != STORE_CH_VERSION_V1))
+      (r->version != STORE_CH_VERSION &&
+       r->version != STORE_CH_VERSION_V2 &&
+       r->version != STORE_CH_VERSION_V1))
     return false;
   if (r->count > CH_MAX || (r->scanlist & ~0xFFu) != 0u)
     return false;
@@ -600,24 +683,38 @@ static bool ch_valid(const CH *c) {
     return false;
   if (c->modulation > MOD_WFM || c->bw > 9 || c->radio > RADIO_SI4732)
     return false;
+  if (c->tone != CH_TONE_NONE) {
+    if (c->tone & TONE_CODE_DCS) {
+      if ((c->tone & 0x7Fu) >= 104)
+        return false;
+    } else if (c->tone >= 50) {
+      return false;
+    }
+  }
   return true;
 }
 
 static bool ch_slot_channels_valid(uint32_t base, uint16_t count,
                                    uint16_t version) {
   for (uint16_t i = 0; i < count; ++i) {
+    uint32_t off = base + STORE_CH_DATA_OFF;
     if (version == STORE_CH_VERSION_V1) {
       CH_V1 o;
       CH c;
-      W25Q_Read(base + STORE_CH_DATA_OFF + (uint32_t)i * sizeof(o), &o,
-                sizeof(o));
+      W25Q_Read(off + (uint32_t)i * sizeof(o), &o, sizeof(o));
       ch_decode_v1(&o, &c);
+      if (!ch_valid(&c))
+        return false;
+    } else if (version == STORE_CH_VERSION_V2) {
+      CH_V2 o;
+      CH c;
+      W25Q_Read(off + (uint32_t)i * sizeof(o), &o, sizeof(o));
+      ch_decode_v2(&o, &c);
       if (!ch_valid(&c))
         return false;
     } else {
       CH c;
-      W25Q_Read(base + STORE_CH_DATA_OFF + (uint32_t)i * sizeof(c), &c,
-                sizeof(c));
+      W25Q_Read(off + (uint32_t)i * sizeof(c), &c, sizeof(c));
       if (!ch_valid(&c))
         return false;
     }
@@ -686,6 +783,10 @@ bool Store_ChannelsRead(uint16_t idx, CH *ch) {
     CH_V1 o;
     W25Q_Read(base + (uint32_t)idx * sizeof(o), &o, sizeof(o));
     ch_decode_v1(&o, ch);
+  } else if (s_chVersion == STORE_CH_VERSION_V2) {
+    CH_V2 o;
+    W25Q_Read(base + (uint32_t)idx * sizeof(o), &o, sizeof(o));
+    ch_decode_v2(&o, ch);
   } else {
     W25Q_Read(base + (uint32_t)idx * sizeof(*ch), ch, sizeof(*ch));
     ch->name[CH_NAME_LEN - 1] = 0;

@@ -76,6 +76,8 @@ static const MenuItem SCAN_ITEMS[] = {
      SET_ITEM(SET_SKIPGARBAGEFREQUENCIES)},
     {"Battery save", settingValue, settingChange, SET_ITEM(SET_BATSAVE)},
     {"Scan mode", settingValue, settingChange, SET_ITEM(SET_SCANMODE)},
+    {"Auto blacklist", settingValue, settingChange,
+     SET_ITEM(SET_AUTOBLACKLIST)},
     {"Scanlist", settingValue, settingChange, SET_ITEM(SET_CURRENTSCANLIST)},
     {"Scan delay", settingValue, settingChange, SET_ITEM(SET_SCANDELAY)},
 };
@@ -86,7 +88,7 @@ static const MenuItem RADIO_ITEMS[] = {
     {"Filter bound", settingValue, settingChange, SET_ITEM(SET_BOUND240_280)},
     {"SI power off", settingValue, settingChange, SET_ITEM(SET_SI4732POWEROFF)},
     {"STE", settingValue, settingChange, SET_ITEM(SET_STE)},
-    {"Tone local", settingValue, settingChange, SET_ITEM(SET_TONELOCAL)},
+    {"Priority", settingValue, settingChange, SET_ITEM(SET_PRIORITY)},
     {"Mic", settingValue, settingChange, SET_ITEM(SET_MIC)},
     {"Upconv", settingValue, settingChange, SET_ITEM(SET_UPCONVERTER)},
     {"TX time", settingValue, settingChange, SET_ITEM(SET_TXTIME)},
@@ -308,10 +310,19 @@ static void pushPage(uint8_t page) {
   openPage(page);
 }
 
+static Mode *s_returnMode;
+
+void SETTINGS_OpenFrom(Mode &from) {
+  s_returnMode = &from;
+  Mode_Switch(MODE_SETTINGS);
+}
+
 static void popPage(void) {
   if (s_depth == 0) {
     MenuOverlay_Close();
-    Mode_Switch(MODE_VFO);
+    Mode *ret = s_returnMode ? s_returnMode : &MODE_VFO;
+    s_returnMode = nullptr;
+    Mode_Switch(*ret);
     return;
   }
   s_depth--;
@@ -384,6 +395,7 @@ public:
     MenuOverlay_Close();
     RadioMenu_SetApply(nullptr);
     s_depth = 0;
+    s_returnMode = nullptr;
   }
 
   void update() override { Radio_Update(); }

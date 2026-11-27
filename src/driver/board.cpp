@@ -1,5 +1,6 @@
 #include "board.h"
 #include "../helper/bootprof.h"
+#include "../helper/settings.h"
 #include "../ui/graphics.h"
 #include "at32f423.h"
 #include "at32f423_flash.h"
@@ -99,6 +100,23 @@ void led_rx_set(bool on) { gpio_pin_write(&PIN_LED_GREEN, on); }
 
 void keyboard_backlight_set(bool on) {
   gpio_pin_write(&PIN_KEYBOARD_BACKLIGHT, on);
+}
+
+/* Ключевой бипер: меандр на PA5. Частота в герцах, длительность в мс;
+ * полупериод 500000/freq мкс, минимум 1 мкс (freq <= 500 кГц). */
+void board_beep(uint16_t freq_hz, uint16_t ms) {
+  if (!freq_hz || !ms)
+    return;
+  uint32_t half = 500000UL / freq_hz;
+  if (!half)
+    half = 1;
+  uint32_t periods = ((uint32_t)ms * 1000UL) / (half * 2UL);
+  for (uint32_t i = 0; i < periods; ++i) {
+    gpio_pin_set(&PIN_TONE);
+    delay_us(half);
+    gpio_pin_clr(&PIN_TONE);
+    delay_us(half);
+  }
 }
 
 void delay_us(uint32_t us) {
@@ -202,9 +220,13 @@ uint16_t rt880_adc_read_battery(void) {
 // Возвращает напряжение батареи в сотых вольта (например 372 = 3.72 В)
 uint16_t battery_voltage_cv(void) {
   uint32_t raw = rt880_adc_read_battery();
-  // Vbat_cV = raw * Vref_cV * (R1+R2) / (ADC_MAX * R2)
-  // = raw * 330 * 347 / (4095 * 47)
-  return (uint16_t)((raw * 330UL * 347UL) / (4095UL * 47UL));
+  // Vbat_cV = raw * Vref_cV * (R1+R2) * cal / (ADC_MAX * R2 * 2184)
+  // = raw * 330 * 347 / (4095 * 47); 2184 — номинальный делитель.
+  int32_t cal = Settings_Get(SET_BATTERYCALIBRATION);
+  if (cal < 1200 || cal > 3200)
+    cal = 2184;
+  return (uint16_t)(((uint64_t)raw * 330u * 347u * 2184u) /
+                    ((uint64_t)4095u * 47u * (uint32_t)cal));
 }
 
 uint16_t rt880_adc_read_keyin(void) {
@@ -239,6 +261,8 @@ void board_init(void) {
   gpio_pin_init_output(&PIN_LED_RED);
   gpio_pin_init_output(&PIN_LED_GREEN);
   gpio_pin_init_output(&PIN_KEYBOARD_BACKLIGHT);
+  gpio_pin_init_output(&PIN_TONE);
+  gpio_pin_clr(&PIN_TONE);
 
   gpio_pin_init_output(&PIN_AF_MUTE);
   gpio_pin_init_output(&PIN_ANC_POWER);

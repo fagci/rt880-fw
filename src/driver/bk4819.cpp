@@ -401,6 +401,49 @@ static BandState_t getBand(uint32_t f) {
   return BAND_HF;
 }
 
+/* ── AF response (EQ) ───────────────────────────────────────────
+ * Таблицы из k1-fw BK4819_SetAFResponse: индекс gain_db+4 (0 = -4 дБ,
+ * 4 = 0 дБ, 8 = +4 дБ). 3 кГц — одно слово, 300 Гц — две таблицы. */
+static const uint16_t AF_3K[9] = {
+    0xDA00, 0xE800, 0xF200, 0xFA02, 0xF50B, 0xE61C, 0xDF22, 0xD42D, 0xCC35,
+};
+static const uint16_t AF_300_D1[9] = {
+    0x94A9, 0x935A, 0x920B, 0x91C1, 0x9009, 0x8F90, 0x8F46, 0x8ED8, 0x8D8F,
+};
+static const uint16_t AF_300_D2[9] = {
+    0x2EEE, 0x2EFF, 0x3010, 0x3040, 0x31A9, 0x31F3, 0x31E7, 0x3232, 0x3359,
+};
+
+static uint8_t afGainIndex(Setting s) {
+  int32_t v = Settings_Get(s);
+  if (v < 0)
+    v = 0;
+  if (v > 8)
+    v = 8;
+  return (uint8_t)v;
+}
+
+void BK4819_ApplyAFResponseRX(bool ssb) {
+  uint8_t i = afGainIndex(SET_AF_RX_300);
+  BK4819_WriteRegister(0x54, AF_300_D1[i]);
+  BK4819_WriteRegister(0x55, AF_300_D2[i]);
+  /* SSB пишет своё слово в REG_75 в SetModulation — 3 кГц не трогаем. */
+  if (!ssb) {
+    i = afGainIndex(SET_AF_RX_3K);
+    BK4819_WriteRegister(0x75, AF_3K[i]);
+  }
+}
+
+void BK4819_ApplyAFResponseTX(void) {
+  uint8_t i = afGainIndex(SET_AF_TX_300);
+  BK4819_WriteRegister(0x44, AF_300_D1[i]);
+  BK4819_WriteRegister(0x45, AF_300_D2[i]);
+  /* 0 дБ (индекс 4) оставляет заводское слово REG_74 из калибровки tx3k. */
+  i = afGainIndex(SET_AF_TX_3K);
+  if (i != 4)
+    BK4819_WriteRegister(0x74, AF_3K[i]);
+}
+
 void BK4819_Init(void) {
   /* Пересчитать тайминги здесь: статические инициализаторы выполняются до
    * настройки 150 МГц, и s_*Cycles на старте могли быть нулевыми — тогда
@@ -453,6 +496,7 @@ void BK4819_Init(void) {
   BK4819_WriteRegister(BK4819_REG_24, 0);
 
   BK4819_SetDeviation(50 * 10);
+  BK4819_ApplyAFResponseRX(false);
 }
 
 int8_t BK4819_GetAgcIndex() {
@@ -724,6 +768,7 @@ void BK4819_SetModulation(ModulationType type) {
     BK4819_WriteRegister(0x2C, 0x1822);
   }
   g_bk->lastModulation = type;
+  BK4819_ApplyAFResponseRX(isSsb);
 }
 
 void BK4819_SquelchType(SquelchType t) {
