@@ -125,14 +125,24 @@ void audio_path_set(uint8_t source) {
 }
 
 static bool s_antMain;
+static uint32_t s_antSwitchMs;
 
 /* PF0/K200: HIGH — основной вход на ВЧ-тракт, LOW — на V/U. */
 void ant_sw(bool hf) {
   s_antMain = hf;
+  s_antSwitchMs = millis();
   gpio_pin_write(&PIN_ANT_SWITCH, hf);
 }
 
 bool ant_is_main(void) { return s_antMain; }
+
+uint32_t ant_last_switch_ms(void) { return s_antSwitchMs; }
+
+/* PC15 HF-TXPOWER-EN и PB11 TX29/50M-SW. Оба активны высоким уровнем. */
+void board_tx_gates(bool hf, bool tx29) {
+  gpio_pin_write(&PIN_HF_TX_POWER, hf);
+  gpio_pin_write(&PIN_TX29_50M, tx29);
+}
 
 
 // board.h — добавить пин как аналоговый (без pull):
@@ -228,7 +238,6 @@ void board_init(void) {
 
   gpio_pin_init_output(&PIN_LED_RED);
   gpio_pin_init_output(&PIN_LED_GREEN);
-  gpio_pin_init_output(&PIN_LCD_BACKLIGHT);
   gpio_pin_init_output(&PIN_KEYBOARD_BACKLIGHT);
 
   gpio_pin_init_output(&PIN_AF_MUTE);
@@ -236,10 +245,14 @@ void board_init(void) {
   gpio_pin_init_output(&PIN_RX_TS);
   gpio_pin_init_output(&PIN_FM_POWER);
   gpio_pin_init_output(&PIN_ANT_SWITCH);
+  gpio_pin_init_output(&PIN_HF_TX_POWER);
+  gpio_pin_init_output(&PIN_TX29_50M);
   gpio_pin_clr(&PIN_AF_MUTE);
   gpio_pin_clr(&PIN_ANC_POWER);
   gpio_pin_clr(&PIN_RX_TS);
   gpio_pin_clr(&PIN_FM_POWER);
+  gpio_pin_clr(&PIN_HF_TX_POWER);
+  gpio_pin_clr(&PIN_TX29_50M);
   ant_sw(false); /* по умолчанию V/U-тракт, как в стоке */
 
   gpio_pin_init_input(&PIN_KEY_M1, GPIO_PULL_UP);

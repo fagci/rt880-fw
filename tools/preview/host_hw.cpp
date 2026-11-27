@@ -4,6 +4,7 @@
 #include "driver/bk4819.h"
 #include "driver/si473x.h"
 #include "driver/st7789.h"
+#include "driver/w25q32.h"
 #include "radio.h"
 #include <math.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@
 gpio_type g_fake_gpio[8];
 uint32_t SystemCoreClock = 150000000;
 uint32_t _sheap, _eheap;
+bool isSi4732On = false;
 
 /* ── время ── */
 uint32_t g_now_ms = 100000;
@@ -24,10 +26,13 @@ extern "C" uint16_t battery_voltage_cv(void) { return g_bat_cv; }
 extern "C" void audio_path_set(uint8_t) {}
 extern "C" void uart_printf(const char *, ...) {}
 void st7789_set_mute(bool) {}
+void st7789_set_gamma(uint8_t) {}
 
 static bool g_ant_main;
 extern "C" void ant_sw(bool hf) { g_ant_main = hf; }
 extern "C" bool ant_is_main(void) { return g_ant_main; }
+extern "C" uint32_t ant_last_switch_ms(void) { return 0; }
+extern "C" void board_tx_gates(bool, bool) {}
 bool g_led_rx;
 void led_rx_set(bool on) { g_led_rx = on; }
 void keyboard_backlight_set(bool) {}
@@ -59,6 +64,7 @@ void st7789_set_addr_window(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
 void st7789_start_pixels(void) {}
 void st7789_write_data16(uint16_t d) { put_px(d); }
 void st7789_cs_low(void) {}
+void st7789_backlight_set(uint16_t) {}
 void st7789_backlight_off(void) {}
 void st7789_backlight_on(void) {}
 void st7789_cs_high(void) {}
@@ -240,6 +246,7 @@ extern "C++" {
 void BK4819_Init(void) {}
 void BK4819_SelectChip(uint8_t) {}
 void BK4819_RX_TurnOn(void) {}
+void BK4819_RxEnable(void) {}
 void BK4819_SetAFC(uint8_t) {}
 void BK4819_SetAGC(bool, uint8_t) {}
 uint8_t BK4819_GetGainDb(uint8_t) { return 0; }
@@ -251,9 +258,16 @@ void BK4819_InvalidateFilterCache(void) {}
 void BK4819_SetModulation(ModulationType) {}
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t) {}
 void BK4819_SetupSquelch(SQL, uint8_t, uint8_t) {}
+void BK4819_SetDeviation(uint16_t) {}
+void BK4819_SetTailDetection(uint32_t) {}
+void BK4819_PrepareTransmit(void) {}
 void BK4819_WriteRegister(uint8_t, uint16_t) {}
 uint16_t BK4819_ReadRegister(uint8_t) { return 0; }
 uint16_t BK4819_ReadRegisterRaw(uint8_t) { return 0; }
+static uint16_t g_bk_gpio_out;
+uint16_t BK4819_GetGpioOutState(void) { return g_bk_gpio_out; }
+void BK4819_SetGpioOutState(uint16_t s) { g_bk_gpio_out = s; }
+void BK4819_InvalidateFrequencyCache(void) {}
 uint8_t BK4819_GetAFC(void) { return 0; }
 int16_t BK4819_GetAFCValue(void) { return 0; }
 void BK4819_EnableCxCSSScan(void) {}
@@ -308,6 +322,15 @@ bool SI47XX_IsSSB(void) { return true; }
 }
 
 /* В превью нет внешней W25Q32 — сохранение состояния не нужно. */
+bool W25Q_Init(void) { return false; }
+bool W25Q_Present(void) { return false; }
+uint32_t W25Q_JedecId(void) { return 0; }
+void W25Q_Read(uint32_t, void *dst, uint32_t len) {
+  memset(dst, 0xFF, len);
+}
+bool W25Q_SectorErase(uint32_t) { return false; }
+bool W25Q_PageProgram(uint32_t, const void *, uint32_t) { return false; }
+
 void Store_MarkDirty(void) {}
 void Store_PinRadio(void) {}
 void Store_UnpinRadio(void) {}

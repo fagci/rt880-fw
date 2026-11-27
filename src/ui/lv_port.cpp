@@ -25,6 +25,8 @@ static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 static bool s_directAreas;
 static bool s_spectrumOverlay;
+/* Нижняя строка, которую LVGL может писать в режиме direct areas. */
+static int32_t s_textBottom = UI_WATERFALL_Y - 3;
 
 /* Счётчики для `lv` в консоли. monitor_cb даёт пиксели и время одного
  * refresh (рендер + flush), flush_cb — реально отправленное в панель. */
@@ -76,8 +78,16 @@ static void flush_done(lv_disp_drv_t *drv, const lv_area_t *area,
   lv_disp_flush_ready(drv);
 }
 
-void lv_port_set_direct_areas(bool on) { s_directAreas = on; }
+void lv_port_set_direct_areas(bool on) {
+  s_directAreas = on;
+  /* По умолчанию LVGL пишет только над водопадом; режим, которому нужен
+   * низ экрана (список находок сканера), выставляет границу сам. */
+  s_textBottom = UI_WATERFALL_Y - 3;
+}
 void lv_port_set_spectrum_overlay(bool on) { s_spectrumOverlay = on; }
+void lv_port_set_text_bottom(uint16_t y) {
+  s_textBottom = y < ST7789_HEIGHT ? y : ST7789_HEIGHT - 1;
+}
 
 static void flush_rows(const lv_area_t *area, const lv_color_t *color_p,
                        int32_t y1, int32_t y2) {
@@ -112,10 +122,10 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
    * попавшие в память аппаратного vscroll, ползут вниз чёрными
    * прямоугольниками. */
   if (s_spectrumOverlay) {
-    /* Открыто меню поверх спектра: LVGL можно писать до водопада, спектр
+    /* Открыто меню поверх спектра: LVGL можно писать до textBottom, спектр
      * продолжает рисоваться напрямую, меню перерисовывается поверх своей
-     * области. Водопад по-прежнему только DMA. */
-    const int32_t clip_bottom = UI_WATERFALL_Y - 3;
+     * области. Водопад/нижняя полоса по-прежнему только DMA. */
+    const int32_t clip_bottom = s_textBottom;
     int32_t y2 = area->y2 < clip_bottom ? area->y2 : clip_bottom;
     if (area->y1 <= y2)
       flush_rows(area, color_p, area->y1, y2);
@@ -134,7 +144,7 @@ static void flush_cb(lv_disp_drv_t *drv, const lv_area_t *area,
                    : UI_TICKS_Y + UI_TICKS_H;
   /* 2 px запаса до зоны аппаратного скролла: граница TFA не должна
    * попадать в LVGL-flush. */
-  const int32_t clip_bottom = UI_WATERFALL_Y - 3;
+  const int32_t clip_bottom = s_textBottom;
   y2 = area->y2 < clip_bottom ? area->y2 : clip_bottom;
   if (y1 <= y2)
     flush_rows(area, color_p, y1, y2);

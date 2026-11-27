@@ -8,6 +8,8 @@
 /* F_S: line_height 13 — подсказка + видимые пункты в компактном окне. */
 #define ROW_H 13
 #define HINT "UP/DN S1+ S2-"
+/* Пункты со значением N/A (не поддержано железом) — серым. */
+#define NA_COLOR "#808080 "
 
 static struct {
   const MenuItem *items;
@@ -27,7 +29,7 @@ static struct {
   lv_obj_t *rows;
   lv_obj_t *scrollTrack;
   lv_obj_t *scrollThumb;
-  char rowsBuf[192];
+  char rowsBuf[640];
   char hintBuf[20];
   char hintShown[20];
   uint32_t rowsHash;
@@ -87,6 +89,20 @@ static void updateScrollbar(void) {
   }
 }
 
+/* Копия строки в буфер с экранированием '#': в режиме recolor одиночная
+ * решётка начинает команду цвета (в BUTTON_ITEMS есть имена «# short»). */
+static char *appendText(char *p, char *end, const char *s) {
+  for (; *s; ++s) {
+    if ((*s == '#' ? p + 2 : p + 1) >= end)
+      break;
+    *p++ = *s;
+    if (*s == '#')
+      *p++ = '#';
+  }
+  *p = 0;
+  return p;
+}
+
 static uint32_t hashStr(const char *s) {
   uint32_t h = 2166136261u;
   for (; *s; s++) {
@@ -115,16 +131,35 @@ static void refresh(void) {
     uint8_t idx = (uint8_t)(ctx.offset + i);
     if (idx >= ctx.count)
       break;
-    const char *v = ctx.items[idx].value ? ctx.items[idx].value(&ctx.items[idx])
-                                         : "";
-    int pad = cols - (int)strlen(ctx.items[idx].name) - (int)strlen(v);
+    const MenuItem *item = &ctx.items[idx];
+    const char *v = item->value ? item->value(item) : "";
+    bool na = strcmp(v, "N/A") == 0;
+    int pad = cols - (int)strlen(item->name) - (int)strlen(v);
     if (pad < 1)
       pad = 1;
-    int n = snprintf(p, end - p, "%s%*s%s%s", ctx.items[idx].name, pad, "", v,
-                     idx + 1 < ctx.count ? "\n" : "");
+    if (na) {
+      int n = snprintf(p, end - p, "%s", NA_COLOR);
+      if (n < 0 || n >= end - p)
+        break;
+      p += n;
+    }
+    p = appendText(p, end, item->name);
+    int n = snprintf(p, end - p, "%*s", pad, "");
     if (n < 0 || n >= end - p)
       break;
     p += n;
+    p = appendText(p, end, v);
+    if (na) {
+      if (p + 1 >= end)
+        break;
+      *p++ = '#';
+    }
+    if (idx + 1 < ctx.count) {
+      if (p + 1 >= end)
+        break;
+      *p++ = '\n';
+    }
+    *p = 0;
     shown++;
   }
   /* Без хвостового \n, если последний видимый пункт не последний в списке:
@@ -250,6 +285,8 @@ void MenuOverlay_Open(const MenuItem *items, uint8_t count, lv_coord_t x,
     lv_label_set_text_static(ctx.hint, HINT);
   ctx.rows = lvLabel(ctx.box, F_S, C_WHITE, 4, 1 + ROW_H, w - 8,
                      LV_TEXT_ALIGN_LEFT);
+  if (ctx.rows)
+    lv_label_set_recolor(ctx.rows, true);
   /* Скроллбар у правого края: 2 px дорожка и ползунок на видимую часть. */
   ctx.scrollTrack = lvBox(ctx.box, w - 4, 1 + ROW_H, 2,
                           (lv_coord_t)(ctx.visible * ROW_H), C_GRAY,
@@ -263,6 +300,15 @@ void MenuOverlay_Open(const MenuItem *items, uint8_t count, lv_coord_t x,
 }
 
 bool MenuOverlay_IsOpen(void) { return ctx.open; }
+
+uint8_t MenuOverlay_Selected(void) { return ctx.sel; }
+
+void MenuOverlay_SetSelected(uint8_t sel) {
+  if (!ctx.open || !ctx.count)
+    return;
+  ctx.sel = sel < ctx.count ? sel : (uint8_t)(ctx.count - 1);
+  ctx.dirty = true;
+}
 
 bool MenuOverlay_Render(void) {
   if (ctx.open && ctx.dirty) {

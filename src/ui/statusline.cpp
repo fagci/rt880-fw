@@ -9,6 +9,7 @@
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
 #include "../helper/measurements.h"
+#include "../helper/settings.h"
 #include "../modes/mode.h"
 #include "graphics.h"
 #include "lv_helpers.h"
@@ -30,8 +31,8 @@
 
 /* Напряжение внутри батареи: заливка уровня на всю высоту, под ней —
  * серая «дорожка» (иначе текст на чёрном фоне не читается). */
-#define BAT_W 44
-#define BAT_H 15
+#define BAT_W 37
+#define BAT_H 14
 #define BAT_X (LCD_WIDTH - 8 - BAT_W - 2)
 #define BAT_Y ((UI_STATUS_H - BAT_H) / 2)
 #define BAT_FILL_H (BAT_H - 2)
@@ -59,6 +60,7 @@ static uint8_t s_batIdx;
 static uint8_t s_batCnt;
 static uint32_t s_batLastMs;
 static uint16_t s_batCv;
+static uint8_t s_batStyle;
 static bool s_batInit;
 static bool s_antShown;
 static bool s_lockShown;
@@ -196,9 +198,13 @@ void STATUSLINE_render(void) {
     s_batCv = (uint16_t)(sum / s_batCnt);
   }
   uint16_t bat = s_batCv;
+  uint8_t style = (uint8_t)Settings_Get(SET_BATTERYSTYLE);
+  bool styleChanged = style != s_batStyle;
   /* гистерезис 2 cV: без него ADC-шум дёргает перерисовку каждый кадр */
-  if (s_prevBatDraw && bat >= s_prevBatDraw - 1 && bat <= s_prevBatDraw + 1)
+  if (!styleChanged && s_prevBatDraw && bat >= s_prevBatDraw - 1 &&
+      bat <= s_prevBatDraw + 1)
     return;
+  s_batStyle = style;
   s_prevBatDraw = bat;
 
   uint8_t fill =
@@ -213,7 +219,16 @@ void STATUSLINE_render(void) {
   }
   if (s_batText) {
     static char t[8];
-    snprintf(t, sizeof(t), "%u.%02uV", bat / 100, bat % 100);
+    if (style == 0) {
+      t[0] = 0;
+    } else if (style == 1) {
+      uint8_t pct = (uint8_t)ConvertDomain((int)bat, BAT_MIN, BAT_MAX, 0, 100);
+      if (pct > 100)
+        pct = 100;
+      snprintf(t, sizeof(t), "%u%%", (unsigned)pct);
+    } else {
+      snprintf(t, sizeof(t), "%u.%02u", bat / 100, bat % 100);
+    }
     lv_label_set_text_static(s_batText, t);
   }
 }

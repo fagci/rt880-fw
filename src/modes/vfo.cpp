@@ -11,10 +11,12 @@
 #include "../driver/board.h"
 #include "../driver/keyboard.h"
 #include "../driver/st7789.h"
+#include "../helper/keymap.h"
 #include "../helper/log.h"
 #include "../helper/lootlist.h"
 #include "../helper/measurements.h"
 #include "../helper/names.h"
+#include "../helper/settings.h"
 #include "../helper/store.h"
 #include "../helper/tone.h"
 #include "../helper/unit_fmt.h"
@@ -23,10 +25,9 @@
 #include "../radio.h"
 #include "../ui/band_colors.h"
 #include "../ui/graphics.h"
+#include "../ui/level_graph.h"
 #include "../ui/lv_helpers.h"
-#include "../ui/menu_overlay.h"
 #include "../ui/numval.h"
-#include "../ui/radio_menu.h"
 #include "../ui/statusline.h"
 #include "mode.h"
 #include "lvgl.h"
@@ -45,10 +46,10 @@
 #define COL_RIGHT 232 /* правый край колонок справа */
 #define MARGIN 8
 
-#define VFO_INFO_Y 6   /* строка диапазон / модуляция (M) */
-#define VFO_FREQ_Y 26  /* верх строки частоты (XL) */
-#define VFO_NAME_Y 34  /* имя канала: базовая линия как у частоты (L) */
-#define VFO_SUB_Y 64   /* строка чип / шаг — сразу под частотой (S) */
+#define VFO_INFO_Y 2   /* строка диапазон / модуляция (M) */
+#define VFO_FREQ_Y 10  /* верх строки частоты (XL) */
+#define VFO_NAME_Y 18  /* имя канала: базовая линия как у частоты (L) */
+#define VFO_SUB_Y 44   /* строка чип / шаг — сразу под частотой (S) */
 #define VFO_BADGE_W 44 /* «BK AUTO» / «MBK VHF» */
 #define VFO_TONE_X 52  /* CTCSS/DCS/DTMF — сразу перед AFC */
 #define VFO_TONE_W 92
@@ -67,7 +68,13 @@
 #define VFO_DBM_X (MARGIN + VFO_SMETER_W + 6)
 #define VFO_DBM_W (COL_RIGHT - VFO_DBM_X)
 #define VFO_DBM_Y 82
-#define VFO_METER_MS 250 /* обновление S-метра (RSSI/дБм/peak) */
+#define VFO_METER_MS 250 /* обновление S-метра/графика (RSSI/дБм/peak) */
+/* «Level in VFO»: история RSSI внизу активной строки. Частота и суб-строка
+ * подняты вверх, чтобы график был на строку среднего текста выше и между
+ * боксом AFC/DTMF (с запасом под descenders) и рамкой был явный зазор
+ * (суб-строка занимает 44..56). */
+#define VFO_LEVEL_Y 66
+#define VFO_LEVEL_H 32
 
 struct {
   NumVal_t numVal[DEVICE_VFO_COUNT];
@@ -108,6 +115,9 @@ struct {
   char s_afcBuf[12];
   char s_toneShown[20];
   bool s_inited;
+  int8_t s_graphRow; /* строка с нарисованным графиком Level in VFO, -1 — нет */
+  bool s_graphPending; /* пришла новая выборка RSSI — дорисовать после flush */
+  uint16_t s_graphRssi;
 } vfoCtx;
 
 /* lv_obj_add_flag/clear_flag(HIDDEN) инвалидируют область даже если флаг
@@ -138,36 +148,6 @@ static void leaveChannelMode(uint8_t idx) {
 static void onFreqEntered(uint32_t f) {
   leaveChannelMode(currentVfo);
   Radio_TuneToAuto(f);
-}
-
-/* ── Меню VFO: параметры приёмника (не на весь экран) ── */
-
-static const MenuItem VFO_MENU[] = {
-    RADIO_MENU_ITEM_STEP, RADIO_MENU_ITEM_FILTER, RADIO_MENU_ITEM_RADIO,
-    RADIO_MENU_ITEM_MOD,  RADIO_MENU_ITEM_BW,     RADIO_MENU_ITEM_SQL,
-    RADIO_MENU_ITEM_GAIN, RADIO_MENU_ITEM_AFC,
-};
-#define VFO_MENU_COUNT (uint8_t)(sizeof(VFO_MENU) / sizeof(VFO_MENU[0]))
-
-/* Шаг и фильтр RadioMenu меняет сам; остальные параметры применяем полной
- * настройкой VFO (модуляция/полоса/усиление). */
-static void vfoMenuApply(uint8_t id) {
-  switch (id) {
-  case RADIO_MENU_STEP:
-  case RADIO_MENU_FILTER:
-  case RADIO_MENU_RADIO:
-  case RADIO_MENU_SQL:
-  case RADIO_MENU_AFC:
-    break;
-  default:
-    Radio_TuneTo(vfos[currentVfo].rxF, true);
-    break;
-  }
-}
-
-static void openVfoMenu(void) {
-  MenuOverlay_Open(VFO_MENU, VFO_MENU_COUNT, 0, STATUS_H, LCD_WIDTH / 2,
-                   MENU_OVERLAY_BOX_H, false);
 }
 
 static void initNumVals() {
@@ -295,7 +275,8 @@ static void layoutMeter(uint8_t i) {
   uint16_t sy = STATUS_H + i * VFO_H;
   if (vfoCtx.s_meter) {
     lv_obj_set_pos(vfoCtx.s_meter, MARGIN, sy + VFO_SMETER_Y);
-    setHidden(vfoCtx.s_meter, false);
+    /* В режиме графика (Level in VFO) линейка S-метра не нужна. */
+    setHidden(vfoCtx.s_meter, Settings_Get(SET_SHOWLEVELINVFO));
     lv_obj_invalidate(vfoCtx.s_meter);
   }
   vfoCtx.s_meterW = 0;
@@ -318,6 +299,65 @@ static void updateMeter(uint8_t wR) {
     return;
   vfoCtx.s_meterW = wR;
   lv_obj_invalidate(vfoCtx.s_meter);
+}
+
+/* AFC активного приёмника — в суб-строке; без открытого шумодава не нужен. */
+static void updateAfc(int16_t afc, bool rx) {
+  if (!vfoCtx.s_afcLbl)
+    return;
+  if (!rx) {
+    setHidden(vfoCtx.s_afcLbl, true);
+    return;
+  }
+  if (afc != vfoCtx.s_prevAfc) {
+    vfoCtx.s_prevAfc = afc;
+    if (afc)
+      snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC %+d", (int)afc);
+    else
+      snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC 0");
+    lv_label_set_text_static(vfoCtx.s_afcLbl, vfoCtx.s_afcBuf);
+  }
+  setHidden(vfoCtx.s_afcLbl, false);
+}
+
+/* График «Level in VFO» рисуется прямым DMA, поэтому в VFO его нельзя
+ * трогать до lv_timer_handler(): отложенный flush LVGL затрёт пиксели.
+ * Перед flush только убираем график, когда он выключен, — тогда LVGL успеет
+ * перерисовать S-метр/дБм поверх очищенной полосы. */
+static bool levelGraphEnabled(void) {
+  return Settings_Get(SET_SHOWLEVELINVFO) &&
+         vfos[currentVfo].radio != RADIO_SI4732 && !Radio_TxActive();
+}
+
+static uint16_t levelGraphY(uint8_t row) {
+  return (uint16_t)(STATUS_H + row * VFO_H + VFO_LEVEL_Y);
+}
+
+static void prepareLevelGraph(void) {
+  if (levelGraphEnabled() || vfoCtx.s_graphRow < 0)
+    return;
+  FillRectNoInv(0, (int16_t)levelGraphY((uint8_t)vfoCtx.s_graphRow), LCD_WIDTH,
+                VFO_LEVEL_H, C_BLACK);
+  LevelGraph_Hide();
+  vfoCtx.s_graphRow = -1;
+  vfoCtx.s_graphPending = false;
+}
+
+static void renderLevelGraph(void) {
+  if (!levelGraphEnabled())
+    return;
+  uint16_t gy = levelGraphY(currentVfo);
+  if (vfoCtx.s_graphRow != (int8_t)currentVfo) {
+    if (vfoCtx.s_graphRow >= 0)
+      FillRectNoInv(0, (int16_t)levelGraphY((uint8_t)vfoCtx.s_graphRow),
+                    LCD_WIDTH, VFO_LEVEL_H, C_BLACK);
+    LevelGraph_Reset(gy, VFO_LEVEL_H);
+    vfoCtx.s_graphRow = (int8_t)currentVfo;
+  }
+  if (vfoCtx.s_graphPending) {
+    LevelGraph_Add(gy, vfoCtx.s_graphRssi, VFO_LEVEL_H);
+    vfoCtx.s_graphPending = false;
+  }
 }
 
 /* Активный ряд: белая частота; неактивные — серым все тексты. */
@@ -358,7 +398,6 @@ public:
     UI_ReleaseLabels();
     UI_ClearScreen(BG());
     Radio_Init();
-    RadioMenu_SetApply(vfoMenuApply);
     buildScreen();
     initNumVals();
     for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++)
@@ -383,11 +422,12 @@ public:
     memset(vfoCtx.s_prevFreq, 0, sizeof(vfoCtx.s_prevFreq));
     vfoCtx.s_prevStep = 0xFF;
     vfoCtx.s_inited = false;
+    vfoCtx.s_graphRow = -1;
+    vfoCtx.s_graphPending = false;
+    LevelGraph_Hide();
   }
 
   void exit() override {
-    MenuOverlay_Close();
-    RadioMenu_SetApply(nullptr);
     if (vfoCtx.s_scr) {
       lv_obj_del(vfoCtx.s_scr);
       vfoCtx.s_scr = NULL;
@@ -405,6 +445,7 @@ public:
 
   void render() override {
     bool first = !vfoCtx.s_inited;
+    STATUSLINE_SetTitle(Radio_TxActive() ? "TX" : "VFO");
     STATUSLINE_render();
 
     for (uint8_t i = 0; i < DEVICE_VFO_COUNT; i++) {
@@ -443,7 +484,8 @@ public:
       bool chChanged = (vc != nullptr) != vfoCtx.s_prevChValid[i] ||
                        (vc && strcmp(cn, vfoCtx.s_prevChName[i]) != 0) ||
                        chActive != vfoCtx.s_prevChMode[i];
-      bool showName = chActive && !editing;
+      bool showName =
+          chActive && !editing && Settings_Get(SET_CHDISPLAYMODE) != 1;
 
       if (vfoCtx.s_badgeLbl[i] &&
           (first || vfos[i].modulation != vfoCtx.s_prevMod[i] ||
@@ -477,8 +519,12 @@ public:
           if (chActive) {
             char fbuf[12];
             fmt_mhz3(fbuf, sizeof(fbuf), vfos[i].rxF);
-            snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
-                     "%s %s", bn, fbuf);
+            if (Settings_Get(SET_CHDISPLAYMODE) == 2)
+              snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
+                       "%s", bn);
+            else
+              snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
+                       "%s %s", bn, fbuf);
           } else if (vc) {
             snprintf(vfoCtx.s_bandText[i], sizeof(vfoCtx.s_bandText[i]),
                      "%s | %s", bn, vc->name[0] ? vc->name : "CH");
@@ -541,25 +587,33 @@ public:
         setHidden(vfoCtx.s_toneLbl, tone[0] == 0);
       }
 
-      /* S-метр активного VFO: квадратики по dBm, шкала S1..S9+, peak hold,
-       * рядом — значение в дБм без подписи. У SI своих измерений пока нет;
-       * обновляем раз в 250 мс. */
+      /* Уровень активного VFO (BK). Настройка SET_SHOWLEVELINVFO включает
+       * график «Level in VFO» вместо линейки S-метра; при выключенной
+       * настройке остаётся прежняя линейка. У SI своих измерений нет.
+       * Обновляем раз в 250 мс. */
       if (active) {
-        bool haveMeter = vfos[i].radio != RADIO_SI4732;
+        bool canMeasure = vfos[i].radio != RADIO_SI4732 && !Radio_TxActive();
+        bool graphMode = Settings_Get(SET_SHOWLEVELINVFO);
+        bool haveGraph = canMeasure && graphMode;
+        bool haveMeter = canMeasure && !graphMode;
         uint32_t now = millis();
         bool due = (uint32_t)(now - vfoCtx.s_lastMeterMs) >= VFO_METER_MS;
         if (due) {
           vfoCtx.s_lastMeterMs = now;
-          uint8_t wR = 0;
-          Color cR = C_GREEN;
-          int16_t dbm = 0;
-          int16_t afc = 0;
-          bool rx = false;
-          if (haveMeter) {
+          if (haveGraph) {
+            BK4819_SelectChip(vfos[i].radio == RADIO_BK4819B ? 1 : 0);
+            vfoCtx.s_graphRssi = BK4819_GetRSSI();
+            vfoCtx.s_graphPending = true;
+            updateAfc(BK4819_GetAFCValue(),
+                      (squelchLevel == 0) || BK4819_IsSquelchOpen());
+          } else if (haveMeter) {
+            uint8_t wR = 0;
+            Color cR = C_GREEN;
+            int16_t dbm = 0;
             BK4819_SelectChip(vfos[i].radio == RADIO_BK4819B ? 1 : 0);
             uint16_t rssi = BK4819_GetRSSI();
-            afc = BK4819_GetAFCValue();
-            rx = (squelchLevel == 0) || BK4819_IsSquelchOpen();
+            updateAfc(BK4819_GetAFCValue(),
+                      (squelchLevel == 0) || BK4819_IsSquelchOpen());
             dbm = Rssi2DBm(rssi);
             const uint8_t *r2 = rssi2s[vfos[i].rxF >= 30 * MHZ ? 1 : 0];
             int lo = -(int)r2[0];
@@ -569,10 +623,7 @@ public:
             if (cell >= VFO_CELLS)
               cell = VFO_CELLS - 1;
             cR = meterZoneColor(cell);
-          }
-          updateMeter(wR);
-
-          if (haveMeter) {
+            updateMeter(wR);
             if (vfoCtx.s_dbmLbl && cR != vfoCtx.s_prevDbmColor) {
               lv_obj_set_style_text_color(vfoCtx.s_dbmLbl, lvColor(cR),
                                           LV_PART_MAIN);
@@ -600,39 +651,18 @@ public:
             }
             if (vfoCtx.s_dbmLbl)
               setHidden(vfoCtx.s_dbmLbl, false);
-            if (vfoCtx.s_afcLbl) {
-              if (rx) {
-                if (afc != vfoCtx.s_prevAfc) {
-                  vfoCtx.s_prevAfc = afc;
-                  if (afc)
-                    snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC %+d",
-                             (int)afc);
-                  else
-                    snprintf(vfoCtx.s_afcBuf, sizeof(vfoCtx.s_afcBuf), "AFC 0");
-                  lv_label_set_text_static(vfoCtx.s_afcLbl, vfoCtx.s_afcBuf);
-                }
-                setHidden(vfoCtx.s_afcLbl, false);
-              } else {
-                /* Без приёма AFC не информативен. */
-                setHidden(vfoCtx.s_afcLbl, true);
-              }
-            }
-          } else {
-            if (vfoCtx.s_peak)
-              setHidden(vfoCtx.s_peak, true);
-            if (vfoCtx.s_dbmLbl)
-              setHidden(vfoCtx.s_dbmLbl, true);
-            if (vfoCtx.s_afcLbl)
-              setHidden(vfoCtx.s_afcLbl, true);
           }
-        } else if (!haveMeter) {
+        }
+        /* Линейка S-метра, peak и дБм — только без графика. */
+        setHidden(vfoCtx.s_meter, !haveMeter);
+        if (!haveMeter) {
           if (vfoCtx.s_peak)
             setHidden(vfoCtx.s_peak, true);
           if (vfoCtx.s_dbmLbl)
             setHidden(vfoCtx.s_dbmLbl, true);
-          if (vfoCtx.s_afcLbl)
-            setHidden(vfoCtx.s_afcLbl, true);
         }
+        if (!canMeasure && vfoCtx.s_afcLbl)
+          setHidden(vfoCtx.s_afcLbl, true);
       }
 
       /* Доп. точность: только при изменении значения */
@@ -654,28 +684,28 @@ public:
 
     vfoCtx.s_inited = true;
 
+    prepareLevelGraph();
+
     /* Сначала сбросить нарисованное на экран, потом — тяжёлое
        радио-применение (патч SSB): переключение VFO отзывается
        мгновенно, загрузка патча идёт уже после кадра. */
-    MenuOverlay_Render();
     lv_timer_handler();
+    renderLevelGraph();
     Radio_ApplyPending();
   }
 
   bool key(KEY_Code_t k, Key_State_t state) override {
-    if (MenuOverlay_IsOpen()) {
-      if (MenuOverlay_Key(k, state))
-        return true;
-      LOOTLIST_OpenFrom(MODE_VFO); /* STAR закрыл меню */
-      return true;
-    }
-
     /* Ввод частоты/шаг/смена диапазона — ручная настройка, канал снимаем. */
     if (state == KEY_EVT_RELEASE && k >= KEY_0 && k <= KEY_9 &&
         !NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
       leaveChannelMode(currentVfo);
 
     if (NumVal_Key(&vfoCtx.numVal[currentVfo], k, state))
+      return true;
+
+    /* Назначения кнопок VFO (меню → Buttons). Не назначенные клавиши
+     * проваливаются в штатные обработчики режима ниже. */
+    if (Keymap_Handle(k, state))
       return true;
 
     if (state == KEY_LONG_PRESSED_CONT) {
@@ -695,9 +725,9 @@ public:
 
     if (state == KEY_EVT_LONG_PRESS) {
       switch (k) {
-      case KEY_MENU: /* меню-оверлей: параметры приёмника */
+      case KEY_MENU: /* системное меню на весь экран */
         if (!NumVal_IsEditing(&vfoCtx.numVal[currentVfo]))
-          openVfoMenu();
+          Mode_Switch(MODE_SETTINGS);
         return true;
       case KEY_4:
         Mode_Switch(MODE_FC);
@@ -739,22 +769,6 @@ public:
       case KEY_HASH: /* приёмник: AUTO ↔ BK/SI, если чип поддерживает */
         Radio_NextReceiver();
         return true;
-      case KEY_1: /* канальный VFO — выключить; активный — включить;
-                     остальные — multiwatch */
-      case KEY_2:
-      case KEY_3: {
-        uint8_t idx = (uint8_t)(k - KEY_1);
-        if (VFO_ChannelMode(idx)) {
-          VFO_SetChannelMode(idx, false);
-          Store_MarkDirty();
-        } else if (idx == currentVfo) {
-          if (VFO_SetChannelMode(idx, true))
-            Store_MarkDirty();
-        } else {
-          Radio_ToggleMonitor(idx);
-        }
-        return true;
-      }
       default:
         break;
       }

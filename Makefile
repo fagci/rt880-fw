@@ -48,6 +48,7 @@ SRCS_C := $(shell find src -name '*.c' ! -path '*/external/*' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_i2c.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_misc.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_spi.c' \
+  -o -name '*.c' -path '*/external/drivers/src/at32f423_tmr.c' \
   -o -name '*.c' -path '*/external/drivers/src/at32f423_usart.c' \
   -o -name '*.c' -path '*/external/cmsis/cm4/device_support/system_at32f423.c' \
   -o -name '*.c' -path '*/external/printf/printf.c' \

@@ -3,6 +3,7 @@
 #include "at32f423.h"
 #include "bk4819-regs.h"
 #include "board.h"
+#include "../helper/settings.h"
 
 #define PIN_SET(port, pin) ((port)->scr = (pin))
 #define PIN_CLR(port, pin) ((port)->clr = (pin))
@@ -393,7 +394,7 @@ static BandState_t lastBand = BAND_UNSET;
 static BandState_t getBand(uint32_t f) {
   if (f >= 800 * MHZ)
     return BAND_800;
-  if (f >= 240 * MHZ)
+  if (f >= (uint32_t)(Settings_Get(SET_BOUND240_280) ? 280 : 240) * MHZ)
     return BAND_UHF;
   if (f >= 30 * MHZ)
     return BAND_VHF;
@@ -451,8 +452,7 @@ void BK4819_Init(void) {
 
   BK4819_WriteRegister(BK4819_REG_24, 0);
 
-  BK4819_WriteRegister(0x40, (BK4819_ReadRegister(0x40) & ~(0x7FF)) |
-                                 (50 * 10) | (1 << 12));
+  BK4819_SetDeviation(50 * 10);
 }
 
 int8_t BK4819_GetAgcIndex() {
@@ -615,6 +615,20 @@ void BK4819_RX_TurnOn(void) {
   delay_us(1500);
 }
 
+void BK4819_RxEnable(void) {
+  BK4819_WriteRegister(BK4819_REG_36, 0x0000);
+  BK4819_WriteRegister(BK4819_REG_37, 0x1F0F);
+  BK4819_WriteRegister(BK4819_REG_30, 0x0200);
+  delay_us(1500);
+  BK4819_WriteRegister(
+      BK4819_REG_30,
+      BK4819_REG_30_ENABLE_VCO_CALIB | BK4819_REG_30_DISABLE_UNKNOWN |
+          BK4819_REG_30_ENABLE_RX_LINK | BK4819_REG_30_ENABLE_AF_DAC |
+          BK4819_REG_30_ENABLE_DISC_MODE | BK4819_REG_30_ENABLE_PLL_VCO |
+          BK4819_REG_30_DISABLE_PA_GAIN | BK4819_REG_30_DISABLE_MIC_ADC |
+          BK4819_REG_30_DISABLE_TX_DSP | BK4819_REG_30_ENABLE_RX_DSP);
+}
+
 void BK4819_SetFilterBandwidth(BK4819_FilterBandwidth_t bw) {
   if (bw > 9)
     return;
@@ -774,10 +788,27 @@ void BK4819_SetupPowerAmplifier(uint8_t power, uint32_t freq) {
   }
 }
 
+void BK4819_SetDeviation(uint16_t dev10) {
+  if (dev10 > 0x0FFFu)
+    dev10 = 0x0FFFu;
+  uint16_t r = BK4819_ReadRegister(0x40);
+  BK4819_WriteRegister(0x40, (r & ~0x0FFFu) | dev10 | (1u << 12));
+}
+
+void BK4819_SetTailDetection(uint32_t freq10) {
+  if (!freq10)
+    return;
+  BK4819_WriteRegister(BK4819_REG_07,
+                       BK4819_REG_07_MODE_CTC2 |
+                           ((253910u + freq10 / 2u) / freq10));
+}
+
 void BK4819_PrepareTransmit(void) {
   BK4819_WriteRegister(BK4819_REG_48, 0);
   BK4819_WriteRegister(BK4819_REG_49, 0);
   BK4819_WriteRegister(BK4819_REG_7B, 0x8420);
+  if (Settings_Get(SET_STE))
+    BK4819_SetTailDetection(550);
 }
 
 void BK4819_ToggleGpioOut(BK4819_GPIO_PIN_t pin, bool enable) {
@@ -790,6 +821,18 @@ void BK4819_ToggleGpioOut(BK4819_GPIO_PIN_t pin, bool enable) {
   }
 
   BK4819_WriteRegister(BK4819_REG_33, g_bk->gpioOutState);
+}
+
+uint16_t BK4819_GetGpioOutState(void) { return g_bk->gpioOutState; }
+
+void BK4819_SetGpioOutState(uint16_t state) {
+  g_bk->gpioOutState = state;
+  BK4819_WriteRegister(BK4819_REG_33, state);
+}
+
+void BK4819_InvalidateFrequencyCache(void) {
+  g_bk->freqCacheLow = 0xFFFFFFFFu;
+  g_bk->freqCacheHigh = 0xFFFFFFFFu;
 }
 
 uint16_t BK4819_GetFilter() {

@@ -127,9 +127,20 @@ void BK4819_SetupSquelch(SQL sq, uint8_t delayO, uint8_t delayC);
 void BK4819_SquelchType(SquelchType t);
 
 void BK4819_RX_TurnOn(void);
+/* Вернуть RX-тракт после TX: REG_36/37 и REG_30 с импульсом VCO_CALIB. */
+void BK4819_RxEnable(void);
 void BK4819_SetupPowerAmplifier(uint8_t power, uint32_t freq);
 void BK4819_PrepareTransmit(void);
+/* TX deviation (младшие 12 бит REG_40, значение уже *10). */
+void BK4819_SetDeviation(uint16_t dev10);
+/* TX CTCSS tail detection для STE (частота в единицах 10 Гц). */
+void BK4819_SetTailDetection(uint32_t freq10);
 void BK4819_ToggleGpioOut(uint8_t pin, bool on);
+/* Полное состояние REG_33 (GPIO out) — для TX-гейтов и их снятия. */
+uint16_t BK4819_GetGpioOutState(void);
+void BK4819_SetGpioOutState(uint16_t state);
+/* Сбросить кэш частоты после прямой записи REG_38/39. */
+void BK4819_InvalidateFrequencyCache(void);
 void BK4819_ToggleAFDAC(bool on);
 void BK4819_ToggleAFBit(bool on);
 

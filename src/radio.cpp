@@ -5,7 +5,9 @@
 #include "driver/board.h"
 #include "driver/gpio.h"
 #include "driver/si473x.h"
+#include "driver/w25q32.h"
 #include "helper/log.h"
+#include "helper/settings.h"
 #include "helper/measurements.h"
 #include "helper/store.h"
 #include "helper/tone.h"
@@ -93,6 +95,12 @@ static void bkSleepB(void) {
 Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
   if (mod == MOD_WFM && f >= 6400000 && f <= 10800000)
     return RADIO_SI4732;
+  /* Upconverter: BK принимает сдвинутую частоту, даже если логическая
+   * ниже 18 МГц. SI4732 к преобразователю не подключён. */
+  int32_t up = Settings_Get(SET_UPCONVERTER) / 10;
+  if (up && (int64_t)f + up >= 1800000 &&
+      (int64_t)f + up <= BK4819_F_MAX)
+    return RADIO_BK4819A;
   if (f < 1800000) /* ниже 18 МГц BK4819 не принимает */
     return RADIO_SI4732;
   if (f < 3000000 && (mod == MOD_AM || mod == MOD_LSB || mod == MOD_USB))
@@ -104,8 +112,10 @@ Radio Radio_PickDevice(uint32_t f, uint8_t mod) {
 /* Частотные окна приёмников для ручного переключения: там, где чип
  * физически работает, даже если авторежим выбрал бы другой. */
 static bool deviceCovers(Radio r, uint32_t f) {
-  if (r == RADIO_BK4819A)
-    return f >= 1800000 && f <= BK4819_F_MAX;
+  if (r == RADIO_BK4819A) {
+    int64_t hw = (int64_t)f + Settings_Get(SET_UPCONVERTER) / 10;
+    return hw >= 1800000 && hw <= BK4819_F_MAX;
+  }
   if (r == RADIO_SI4732)
     return (f >= 15300 && f <= 3000000) || /* 153 кГц–30 МГц (AM/SSB) */
            (f >= 6400000 && f <= 10800000); /* 64–108 МГц (FM) */
@@ -172,7 +182,8 @@ static void applyMute(bool sqOpen) {
   bool activeSi = (ar == RADIO_SI4732);
 
   if (activeSi == siMuted) {
-    SI47XX_SetVolume(activeSi ? 63 : 0);
+    if (isSi4732On)
+      SI47XX_SetVolume(activeSi ? 63 : 0);
     siMuted = !activeSi;
   }
 
@@ -203,8 +214,10 @@ static uint8_t vfoChip(uint8_t idx) {
 /* Частота для тракта: логическая + коррекция диапазона из флеш-списка.
  * Логическая частота (rxF) остаётся неизменной — по ней работают границы
  * диапазонов, поиск и отображение. */
-static uint32_t hwFreq(uint32_t f10) {
+static uint32_t hwFreq(uint32_t f10, bool upconv) {
   int32_t f = (int32_t)f10 + Band_Corr10(f10);
+  if (upconv)
+    f += (int32_t)(Settings_Get(SET_UPCONVERTER) / 10);
   if (f < 1530)
     f = 1530;
   if (f > 134000000)
@@ -226,16 +239,22 @@ static void applyVfo(bool precise) {
   if (v->radio == RADIO_SI4732) {
     siEnsure(v); /* может откатить v->radio на BK */
     if (v->radio == RADIO_SI4732) {
-      SI47XX_TuneTo(hwFreq(v->rxF)); /* единицы 10 Гц */
+      SI47XX_TuneTo(hwFreq(v->rxF, false)); /* единицы 10 Гц */
       SI47XX_SetAutomaticGainControl(modToSi(v->modulation) == SI47XX_FM ? 0 : 1, 0);
     }
+  }
+
+  if (Settings_Get(SET_SI4732POWEROFF) && v->radio != RADIO_SI4732 &&
+      isSi4732On) {
+    SI47XX_PowerDown();
+    siMuted = true;
   }
 
   if (v->radio != RADIO_SI4732) {
     uint8_t chip = vfoChip(currentVfo);
     BK4819_SelectChip(chip);
-    BK4819_SelectFilterByFrequency(v->rxF);
-    BK4819_TuneTo(hwFreq(v->rxF), precise);
+    BK4819_SelectFilterByFrequency(hwFreq(v->rxF, true));
+    BK4819_TuneTo(hwFreq(v->rxF, true), precise);
     if (precise) {
       /* WFM на BK — свой широкий REG_43; в FM не подменяем */
       BK4819_SetModulation(
@@ -246,7 +265,9 @@ static void applyVfo(bool precise) {
       if (v->modulation != MOD_WFM)
         BK4819_SetFilterBandwidth(
             static_cast<BK4819_FilterBandwidth_t>(v->bw));
-      BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
+      BK4819_SetupSquelch(GetSql(squelchLevel),
+                       (uint8_t)Settings_Get(SET_SQLOPENTIME),
+                       (uint8_t)Settings_Get(SET_SQLCLOSETIME));
       audio_path_set(chip);
     }
   }
@@ -360,13 +381,15 @@ static void monitorTick(void) {
   /* Настраиваем кандидата полностью: при несовпадении модуляции/полосы с
    * тем, что осталось на BK, шумодав ложно открывается без сигнала. */
   BK4819_SelectFilterByFrequency(m->rxF);
-  BK4819_TuneTo(hwFreq(m->rxF), false);
+  BK4819_TuneTo(hwFreq(m->rxF, true), false);
   BK4819_SetModulation(static_cast<ModulationType>(m->modulation));
   BK4819_SetAGC(m->modulation != MOD_AM, m->gainIndex);
   if (m->modulation != MOD_WFM)
     BK4819_SetFilterBandwidth(
         static_cast<BK4819_FilterBandwidth_t>(m->bw));
-  BK4819_SetupSquelch(GetSql(squelchLevel), 1, 1);
+  BK4819_SetupSquelch(GetSql(squelchLevel),
+                       (uint8_t)Settings_Get(SET_SQLOPENTIME),
+                       (uint8_t)Settings_Get(SET_SQLCLOSETIME));
   delay_ms(MON_SETTLE_MS);
   /* Перестройка даёт короткий всплеск — требуем два открытых отсчёта. */
   bool open = BK4819_IsSquelchOpen();
@@ -388,6 +411,290 @@ static void monitorTick(void) {
     currentVfo = i;
     applyVfo(true);
   }
+}
+
+/* ── Передача (BK4819 A) ──────────────────────────────────────
+ * Последовательность повторяет uv98-rust/rf-sequence для обычного FM TX:
+ * внешние гейты, частота/фильтр/девиация/мощность из заводской калибровки
+ * W25Q (offset 0 или 0x1000), PF0 по правилу stock, затем REG_36 последним.
+ * B (U400) не используется: у него нет RX-входа, и отдельный relay-путь
+ * в этой прошивке не реализован. */
+#define TX_CAL_GENERAL_LEN 32u
+#define TX_CAL_BAND_LEN 112u
+#define TX_CAL_MARKER 0x9Au
+#define TX_CAL_BACKUP 0x1000u
+#define TX_RELAY_MIN_MS 300u
+
+typedef struct {
+  uint8_t tx3k;
+  uint16_t devWide;
+  uint16_t devNarrow;
+  uint8_t high;
+  uint8_t low;
+} TxCal;
+
+typedef struct {
+  uint32_t lo;
+  uint32_t hi;
+  uint32_t origin;
+  uint8_t band;
+} TxCalWindow;
+
+/* Порядок окон и повторы совпадают со stock selector 0x08012A30;
+ * частотные коды — единицы 10 Гц (13 600 000 = 136 МГц). */
+static const TxCalWindow TX_CAL_WINDOWS[] = {
+    {13600000, 17400000, 13500000, 0},  {40000000, 48000000, 40000000, 1},
+    {1800000, 6400000, 1500000, 2},     {6400000, 13600000, 6000000, 3},
+    {17400000, 24000000, 17000000, 4},  {24000000, 32000000, 24000000, 5},
+    {32000000, 40000000, 32000000, 6},  {48000000, 56000000, 48000000, 7},
+    {56000000, 66000000, 56000000, 8},  {84000000, 92000000, 84000000, 9},
+    {92000000, 100000000, 92000000, 10}, {100000000, 108000000, 100000000, 11},
+    {108000000, 116000000, 108000000, 12},
+    {116000000, 124000000, 116000000, 13},
+    {124000000, 130000000, 124000000, 13},
+};
+
+static bool s_txActive;
+static bool s_txTotLocked;
+static uint32_t s_txStartMs;
+static bool s_txSavedAnt;
+
+static bool txCalSelect(uint32_t f, uint8_t *band, uint8_t *point) {
+  for (uint8_t i = 0; i < (uint8_t)(sizeof(TX_CAL_WINDOWS) /
+                                    sizeof(TX_CAL_WINDOWS[0]));
+       ++i) {
+    const TxCalWindow *w = &TX_CAL_WINDOWS[i];
+    if (f < w->lo || f > w->hi)
+      continue;
+    uint32_t p = (f - w->origin) / 500000u;
+    *band = w->band;
+    *point = (uint8_t)(p > 15u ? 15u : p);
+    return true;
+  }
+  return false;
+}
+
+static bool txReadCal(uint32_t f, TxCal *out) {
+  if (!W25Q_Present())
+    return false;
+
+  uint8_t general[TX_CAL_GENERAL_LEN];
+  uint32_t base = 0;
+  W25Q_Read(base, general, sizeof(general));
+  if (general[0] != TX_CAL_MARKER) {
+    base = TX_CAL_BACKUP;
+    W25Q_Read(base, general, sizeof(general));
+    if (general[0] != TX_CAL_MARKER)
+      return false;
+  }
+
+  uint8_t band;
+  uint8_t point;
+  if (!txCalSelect(f, &band, &point))
+    return false;
+
+  uint8_t rec[TX_CAL_BAND_LEN];
+  W25Q_Read(base + TX_CAL_GENERAL_LEN + (uint32_t)band * TX_CAL_BAND_LEN,
+            rec, sizeof(rec));
+  out->tx3k = general[9];
+  out->devWide = (uint16_t)(rec[3] | ((uint16_t)rec[4] << 8));
+  out->devNarrow = (uint16_t)(rec[10] | ((uint16_t)rec[11] << 8));
+  out->high = rec[16 + point];
+  out->low = rec[32 + point];
+  return true;
+}
+
+static bool txRoute(uint32_t f, uint8_t *route, bool *pf0High) {
+  uint8_t r;
+  if (f >= 1800000u && f <= 6400000u)
+    r = (f < 3200000u) ? 1 : 3;
+  else if (f > 6400000u && f < 26000000u)
+    r = 3;
+  else if (f >= 26000000u && f <= 66000000u)
+    r = 4;
+  else if (f >= 84000000u && f <= 130000000u)
+    r = 5;
+  else
+    return false;
+
+  *route = r;
+  *pf0High = (r != 3 && r != 4);
+  return true;
+}
+
+static uint8_t txPowerCode(int32_t mode, uint8_t high, uint8_t low) {
+  if (mode >= 2)
+    return high;
+  if (mode == 1)
+    return (uint8_t)(((uint16_t)high + low) / 2u);
+  return low;
+}
+
+static uint16_t txPowerRegister(uint8_t code) {
+  return (uint16_t)(((uint16_t)(code & 0x3Fu) << 10) | 0x007Fu |
+                    (code ? 0x0080u : 0u));
+}
+
+static uint16_t txFilterWord(uint8_t index) {
+  switch (index) {
+  case 0:
+    return 0xE61C;
+  case 1:
+    return 0xDF22;
+  case 2:
+    return 0xD42D;
+  case 3:
+    return 0xCC35;
+  case 4:
+    return 0xFA02;
+  default:
+    return 0xF50B;
+  }
+}
+
+/* K200 — механическое реле: не дёргаем чаще 300 мс. */
+static void txApplyAntenna(bool high) {
+  if (ant_is_main() == high)
+    return;
+  uint32_t now = millis();
+  uint32_t last = ant_last_switch_ms();
+  if (last && (uint32_t)(now - last) < TX_RELAY_MIN_MS)
+    delay_ms((uint32_t)(TX_RELAY_MIN_MS - (now - last)));
+  ant_sw(high);
+  delay_ms(5);
+}
+
+bool Radio_TxActive(void) { return s_txActive; }
+
+void Radio_TxPttReleased(void) { s_txTotLocked = false; }
+
+void Radio_TxUpdate(void) {
+  if (!s_txActive)
+    return;
+  uint32_t timeout = Settings_TxTimeoutMs();
+  if (timeout && (uint32_t)(millis() - s_txStartMs) >= timeout) {
+    Radio_TxStop();
+    s_txTotLocked = true;
+  }
+}
+
+bool Radio_TxStart(void) {
+  if (s_txActive || s_txTotLocked)
+    return false;
+  if (!Settings_Get(SET_TX_ENABLE) || Settings_Get(SET_PTT_LOCK))
+    return false;
+
+  VFO *v = &vfos[currentVfo];
+  if (v->radio != RADIO_BK4819A || v->modulation != MOD_FM)
+    return false;
+  /* Upconverter сдвигает только приём: на передачу это вышло бы не туда. */
+  if (Settings_Get(SET_UPCONVERTER) != 0)
+    return false;
+
+  uint8_t route;
+  bool pf0High;
+  if (!txRoute(v->rxF, &route, &pf0High))
+    return false;
+
+  TxCal cal;
+  if (!txReadCal(v->rxF, &cal))
+    return false;
+
+  /* Как stock 04F0C: код усекается до 6 бит, а не отвергается. */
+  uint8_t code =
+      (uint8_t)(txPowerCode(Settings_Get(SET_TXPOWER), cal.high, cal.low) &
+                0x3Fu);
+  if (code == 0)
+    return false;
+
+  bool narrow = v->bw <= BK4819_FILTER_BW_10k;
+
+  if (Settings_Get(SET_BUSYCHANNELTXLOCK)) {
+    BK4819_SelectChip(0);
+    if (squelchLevel == 0 || BK4819_IsSquelchOpen())
+      return false;
+  }
+
+  s_txSavedAnt = ant_is_main();
+  s_txActive = true;
+
+  BK4819_SelectChip(0);
+  gpio_pin_write(&PIN_AF_MUTE, false);
+  board_tx_gates(false, false);
+  BK4819_SetGpioOutState((uint16_t)(BK4819_GetGpioOutState() & 0xFFF3u));
+  BK4819_WriteRegister(0x36, 0x007F);
+  BK4819_WriteRegister(0x30, 0x0000);
+  BK4819_WriteRegister(0x47, 0x6040);
+  BK4819_WriteRegister(0x43, narrow ? 0x4048 : 0x3028);
+  BK4819_SetGpioOutState((uint16_t)(BK4819_GetGpioOutState() & 0xFFCCu));
+  BK4819_WriteRegister(0x47, 0x6140);
+
+  uint32_t hw = hwFreq(v->rxF, true);
+  BK4819_WriteRegister(0x38, (uint16_t)(hw & 0xFFFFu));
+  BK4819_WriteRegister(0x39, (uint16_t)(hw >> 16));
+  BK4819_InvalidateFrequencyCache();
+
+  txApplyAntenna(pf0High);
+
+  BK4819_WriteRegister(0x51, 0x0000);
+  BK4819_WriteRegister(0x71, 0x68DC); /* option 0 */
+  BK4819_WriteRegister(0x31,
+                       (uint16_t)(BK4819_ReadRegister(0x31) & 0xFFFDu));
+  BK4819_WriteRegister(0x74, txFilterWord(cal.tx3k));
+  BK4819_WriteRegister(
+      0x7D, (uint16_t)(0xE940u + (uint16_t)Settings_Get(SET_MIC)));
+  BK4819_WriteRegister(0x40, narrow ? cal.devNarrow : cal.devWide);
+  BK4819_WriteRegister(0x37, 0x1D0F);
+  delay_ms(10);
+  BK4819_WriteRegister(0x52, 0x028F);
+  BK4819_WriteRegister(0x30, 0x0200);
+  BK4819_WriteRegister(0x30, 0xC1FE); /* FM TX DSP + MIC ADC */
+
+  board_tx_gates(false, false);
+  uint16_t gpio = (uint16_t)(BK4819_GetGpioOutState() & 0xFFF3u);
+  if (route == 1)
+    board_tx_gates(true, false);
+  else if (route == 2)
+    board_tx_gates(true, true);
+  else if (route == 3)
+    gpio |= 0x0008u; /* V-TXPOWER-EN */
+  else
+    gpio |= 0x0004u; /* U-TXPOWER-EN */
+  BK4819_SetGpioOutState(gpio);
+
+  BK4819_WriteRegister(0x36, txPowerRegister(code));
+  s_txStartMs = millis();
+  return true;
+}
+
+void Radio_TxStop(void) {
+  if (!s_txActive)
+    return;
+  s_txActive = false;
+
+  BK4819_SelectChip(0);
+  gpio_pin_write(&PIN_AF_MUTE, false);
+  board_tx_gates(false, false);
+  BK4819_SetGpioOutState(0);
+  BK4819_WriteRegister(0x36, 0x007F);
+  BK4819_WriteRegister(0x30, 0x0000);
+  BK4819_WriteRegister(0x47, 0x6040);
+  BK4819_InvalidateFrequencyCache();
+  BK4819_InvalidateFilterCache();
+
+  txApplyAntenna(s_txSavedAnt);
+
+  /* applyVfo() заново включит DAC/шумодав; синхронизируем учёт железа. */
+  bkDacOn[0] = bkDacOn[1] = false;
+  afMuteOn = false;
+  applyVfo(true);
+  /* applyVfo останавливается на RX-частоте/фильтре, но REG_30 после TX
+   * равен 0 — включаем RX-тракт и заново калибруем VCO. */
+  BK4819_RxEnable();
+  BK4819_SetDeviation((uint16_t)Settings_Get(SET_DEVIATION) * 10u);
+  bkDacOn[0] = bkDacOn[1] = false;
+  afMuteOn = false;
+  applyMute((squelchLevel == 0) || BK4819_IsSquelchOpen());
 }
 
 /* ── Public API ─────────────────────────────────────────────── */
@@ -423,6 +730,7 @@ void Radio_Init(void) {
   for (uint8_t c = 0; c < 2; c++) {
     BK4819_SelectChip(c);
     BK4819_Init(); /* сброс чипа в известное состояние */
+    BK4819_SetDeviation((uint16_t)Settings_Get(SET_DEVIATION) * 10u);
     if (c == 1) {
       bkSleepB(); /* B: не принимает (нет антенны), передачи пока нет — спит */
       continue;
@@ -452,6 +760,9 @@ void Radio_Init(void) {
 
 /* Каждый update-цикл: шумодав активного VFO + мониторинг. */
 void Radio_Update(void) {
+  Radio_TxUpdate();
+  if (s_txActive)
+    return;
   monitorReturnTick();
 
   Radio ar = vfos[currentVfo].radio;
@@ -531,7 +842,9 @@ void Radio_SetSquelch(uint8_t level) {
   squelchLevel = level;
   for (uint8_t c = 0; c < BK_RX_CHIPS; c++) {
     BK4819_SelectChip(c);
-    BK4819_SetupSquelch(GetSql(level), 1, 1);
+    BK4819_SetupSquelch(GetSql(level),
+                       (uint8_t)Settings_Get(SET_SQLOPENTIME),
+                       (uint8_t)Settings_Get(SET_SQLCLOSETIME));
   }
 }
 
@@ -692,6 +1005,8 @@ void Radio_SwitchToVfo(uint8_t idx) {
 /* Вызывать ПОСЛЕ отрисовки (из render режима): выполняет отложенное
    применение VFO, не блокируя перерисовку. */
 void Radio_ApplyPending(void) {
+  if (s_txActive)
+    return; /* не перестраивать RX посреди передачи */
   if (s_pendingApply) {
     s_pendingApply = false;
     applyVfo(true);

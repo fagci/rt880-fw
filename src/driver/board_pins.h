@@ -31,6 +31,12 @@ static const gpio_pin_t PIN_AF_MUTE =
 /* PC5, нога 25: FM-POWER-EN (SI4732). */
 static const gpio_pin_t PIN_FM_POWER =
     GPIO_PIN(GPIOC, GPIO_PINS_5, CRM_GPIOC_PERIPH_CLOCK);
+/* PC15, нога 4: HF-TXPOWER-EN (Q400/Q402, 5THF). */
+static const gpio_pin_t PIN_HF_TX_POWER =
+    GPIO_PIN(GPIOC, GPIO_PINS_15, CRM_GPIOC_PERIPH_CLOCK);
+/* PB11, нога 30: TX29/50M-SW. */
+static const gpio_pin_t PIN_TX29_50M =
+    GPIO_PIN(GPIOB, GPIO_PINS_11, CRM_GPIOB_PERIPH_CLOCK);
 /* PC4, нога 24: RXTS-SW — выбор источника звука U501. */
 static const gpio_pin_t PIN_RX_TS =
     GPIO_PIN(GPIOC, GPIO_PINS_4, CRM_GPIOC_PERIPH_CLOCK);

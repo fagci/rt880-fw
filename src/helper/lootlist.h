@@ -43,6 +43,18 @@ static_assert(sizeof(Loot) == 12, "Loot must be 12 bytes");
 
 typedef bool (*LootCmp)(const Loot *a, const Loot *b);
 
+/* Порядок сортировки общий для экрана находок и списка в сканере. */
+typedef enum {
+  LOOT_SORT_TIME,
+  LOOT_SORT_DUR,
+  LOOT_SORT_BL,
+  LOOT_SORT_F,
+  LOOT_SORT_COUNT
+} LootSort;
+
+extern const LootCmp LOOT_SORTERS[LOOT_SORT_COUNT];
+extern const char *const LOOT_SORT_NAMES[LOOT_SORT_COUNT];
+
 /* Последняя активная находка (для быстрого чёрного/белого списка) */
 extern Loot *gLastActiveLoot;
 

@@ -41,13 +41,6 @@
 #define DETAIL_Y (LIST_Y + ROWS * ROW_H + 3)
 #define HINT_Y (DETAIL_Y + 18)
 
-typedef enum { SORT_TIME, SORT_DUR, SORT_BL, SORT_F, SORT_COUNT } SortType;
-
-static const LootCmp SORTERS[SORT_COUNT] = {
-    LOOT_SortByLastOpenTime, LOOT_SortByDuration, LOOT_SortByBlacklist,
-    LOOT_SortByF};
-static const char *const SORT_NAMES[SORT_COUNT] = {"time", "dur", "bl", "freq"};
-
 static struct Ctx {
   Mode *s_prev;
   lv_obj_t *s_scr;
@@ -58,7 +51,7 @@ static struct Ctx {
   lv_obj_t *s_hint;
   uint16_t s_selIdx;
   uint16_t s_top;
-  SortType s_sort = SORT_TIME;
+  LootSort s_sort = LOOT_SORT_TIME;
   bool s_sortRev;
   bool s_dirty;
   bool s_keep; /* MENU: оставить выбранную частоту в VFO */
@@ -147,7 +140,7 @@ static void refresh(void) {
     ctx.s_msg[0] = 0;
     snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "LOOT %u/%u  by %s %s",
              (unsigned)(n ? ctx.s_selIdx + 1 : 0), (unsigned)n,
-             SORT_NAMES[ctx.s_sort], ctx.s_sortRev ? "rev" : "");
+             LOOT_SORT_NAMES[ctx.s_sort], ctx.s_sortRev ? "rev" : "");
     setTextIfChanged(ctx.s_title, ctx.s_titleShown, sizeof(ctx.s_titleShown),
                      ctx.s_titleBuf);
   }
@@ -222,7 +215,7 @@ static void move(int8_t d) {
   tuneSel();
 }
 
-static void sortBy(SortType t) {
+static void sortBy(LootSort t) {
   if (ctx.s_sort == t)
     ctx.s_sortRev = !ctx.s_sortRev;
   else {
@@ -232,7 +225,7 @@ static void sortBy(SortType t) {
   /* запоминаем выбранную по частоте — после сортировки найдём заново */
   const Loot *cur = LOOT_Item(ctx.s_selIdx);
   uint32_t f = cur ? cur->f : 0;
-  LOOT_Sort(SORTERS[t], ctx.s_sortRev);
+  LOOT_Sort(LOOT_SORTERS[t], ctx.s_sortRev);
   if (f) {
     int16_t i = LOOT_IndexOf(LOOT_Get(f));
     ctx.s_selIdx = i < 0 ? 0 : i;
@@ -359,16 +352,16 @@ public:
       move(+1);
       return true;
     case KEY_1:
-      sortBy(SORT_TIME);
+      sortBy(LOOT_SORT_TIME);
       return true;
     case KEY_2:
-      sortBy(SORT_DUR);
+      sortBy(LOOT_SORT_DUR);
       return true;
     case KEY_3:
-      sortBy(SORT_BL);
+      sortBy(LOOT_SORT_BL);
       return true;
     case KEY_4:
-      sortBy(SORT_F);
+      sortBy(LOOT_SORT_F);
       return true;
     case KEY_SIDE1:
       LOOT_ToggleBlacklist(LOOT_Item(ctx.s_selIdx));

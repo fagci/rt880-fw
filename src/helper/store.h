@@ -31,6 +31,9 @@ void Store_UnpinRadio(void);
  * настройки VFO/диапазонов — из Radio_Init после дефолтов. */
 bool Store_ApplyUi(void);
 bool Store_ApplyRadio(void);
+/* Настройки системы и карта кнопок. Вызывать до первого Radio_Init; при
+ * записи старого формата (v1/v2) остаются умолчания. */
+bool Store_ApplySettings(void);
 
 /* Диагностика для UART-консоли. */
 void Store_DebugPrint(void);

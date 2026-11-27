@@ -1,6 +1,8 @@
 #include "store.h"
 
+#include "keymap.h"
 #include "lootlist.h"
+#include "settings.h"
 
 #include "../bands.h"
 #include "../driver/board.h"
@@ -18,7 +20,8 @@
 #define STORE_SLOTS 32u
 #define STORE_STATE_SLOTS 24u /* 0..23 — кольцо состояния */
 #define STORE_MAGIC 0x30383852u /* "R880" */
-#define STORE_VERSION 2u    /* v2: канал, закреплённый за VFO */
+#define STORE_VERSION 3u    /* v3: настройки системы и карта кнопок */
+#define STORE_VERSION_V2 2u /* v2: канал, закреплённый за VFO */
 #define STORE_VERSION_V1 1u /* старый формат без vfoChannels */
 #define STORE_BANDS_MAX 48u
 #define STORE_SAVE_DELAY_MS 2500u
@@ -62,10 +65,13 @@ typedef struct __attribute__((packed)) {
   int8_t groupLast[CAT_COUNT];
   uint32_t bandMem[STORE_BANDS_MAX];
   VFOChannel vfoCh[DEVICE_VFO_COUNT];
+  int32_t settings[SET_COUNT];
+  KeyBinding keymap[KEY_COUNT][2];
 } StoreFixed;
 
-/* Размер записи v1: до полей закреплённых каналов. */
+/* Размеры старых записей: v1 — до закреплённых каналов, v2 — до настроек. */
 #define STORE_FIXED_V1_SIZE ((uint16_t)offsetof(StoreFixed, vfoCh))
+#define STORE_FIXED_V2_SIZE ((uint16_t)offsetof(StoreFixed, settings))
 
 /* Радио-часть состояния на входе в сканирующий режим (см. Store_PinRadio). */
 typedef struct __attribute__((packed)) {
@@ -195,14 +201,18 @@ static uint32_t crc32_update(uint32_t crc, const void *data, uint32_t len) {
 }
 
 static uint16_t fixed_size(uint16_t version) {
-  return version == STORE_VERSION_V1 ? STORE_FIXED_V1_SIZE
-                                     : (uint16_t)sizeof(StoreFixed);
+  if (version == STORE_VERSION_V1)
+    return STORE_FIXED_V1_SIZE;
+  if (version == STORE_VERSION_V2)
+    return STORE_FIXED_V2_SIZE;
+  return (uint16_t)sizeof(StoreFixed);
 }
 
 static bool rec_valid(const StoreRec *r) {
   if (r->magic != STORE_MAGIC)
     return false;
-  if (r->version != STORE_VERSION && r->version != STORE_VERSION_V1)
+  if (r->version != STORE_VERSION && r->version != STORE_VERSION_V2 &&
+      r->version != STORE_VERSION_V1)
     return false;
   return r->payloadLen >= fixed_size(r->version) &&
          r->payloadLen <= W25Q_SECTOR_SIZE - sizeof(StoreRec);
@@ -241,6 +251,11 @@ static bool fixed_valid(const StoreFixed *f) {
   for (uint8_t c = 0; c < CAT_COUNT; ++c)
     if (f->groupLast[c] < -1 || f->groupLast[c] >= (int8_t)STORE_BANDS_MAX)
       return false;
+  for (uint8_t k = 0; k < KEY_COUNT; ++k)
+    for (uint8_t s = 0; s < 2; ++s)
+      if (f->keymap[k][s].bound > 1 ||
+          f->keymap[k][s].action >= (uint8_t)KA_COUNT)
+        return false;
   return true;
 }
 
@@ -385,6 +400,8 @@ static bool save_record(void) {
   }
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i)
     f.vfoCh[i] = vfoChannels[i];
+  memcpy(f.settings, gSettings, sizeof(f.settings));
+  memcpy(f.keymap, gKeymap, sizeof(f.keymap));
   f.bandCount = Band_Count();
   if (f.bandCount > STORE_BANDS_MAX)
     return false;
@@ -456,11 +473,13 @@ void Store_Poll(void) {
     s_dirtyAt = millis();
 }
 
-static bool read_last_fixed(StoreFixed *f) {
+static bool read_last_fixed(StoreFixed *f, uint16_t *version) {
   if (!s_valid)
     return false;
   StoreRec rec;
   W25Q_Read(slot_addr(s_last), &rec, sizeof(rec));
+  if (version)
+    *version = rec.version;
   memset(f, 0, sizeof(*f));
   W25Q_Read(slot_addr(s_last) + sizeof(StoreRec), f,
             fixed_size(rec.version));
@@ -469,7 +488,8 @@ static bool read_last_fixed(StoreFixed *f) {
 
 bool Store_ApplyUi(void) {
   StoreFixed f;
-  if (!read_last_fixed(&f))
+  uint16_t ver;
+  if (!read_last_fixed(&f, &ver))
     return false;
   gThemeLight = (f.flags & 1u) != 0;
   ant_sw((f.flags & 2u) != 0);
@@ -477,9 +497,24 @@ bool Store_ApplyUi(void) {
   return true;
 }
 
+bool Store_ApplySettings(void) {
+  Settings_LoadDefaults();
+  Keymap_LoadDefaults();
+
+  StoreFixed f;
+  uint16_t ver;
+  if (!read_last_fixed(&f, &ver) || ver < STORE_VERSION)
+    return false;
+
+  memcpy(gSettings, f.settings, sizeof(gSettings));
+  memcpy(gKeymap, f.keymap, sizeof(gKeymap));
+  return true;
+}
+
 bool Store_ApplyRadio(void) {
   StoreFixed f;
-  if (!read_last_fixed(&f))
+  uint16_t ver;
+  if (!read_last_fixed(&f, &ver))
     return false;
 
   for (uint8_t i = 0; i < DEVICE_VFO_COUNT; ++i) {
@@ -527,6 +562,8 @@ bool Store_Wipe(void) {
   s_bdCount = 0;
   CH_Reset();
   Band_Reset();
+  Settings_LoadDefaults();
+  Keymap_LoadDefaults();
   return ok;
 }
 
@@ -943,7 +980,8 @@ void Store_DebugPrint(void) {
     uart_puts("STORE empty\r\n");
   } else {
     StoreFixed f;
-    read_last_fixed(&f);
+    uint16_t ver;
+    read_last_fixed(&f, &ver);
     StoreRec rec;
     W25Q_Read(slot_addr(s_last), &rec, sizeof(rec));
     uart_printf("STORE slot=%u seq=%lu loot=%u vfo=%u sq=%u flt=%d light=%u "

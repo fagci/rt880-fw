@@ -60,6 +60,9 @@ static inline TextStyle text_style(Color fg, Color bg, TextPos align,
 
 void UI_ClearScreen(Color bg);
 void UI_ReleaseLabels(void); /* удалить лейблы пула Printf* (см. graphics.cpp) */
+/* Сбросить хеши пула: следующий Printf* перепечатает текст. Нужно после
+ * прямых DMA-заливок, которые затёрли лейблы (смена диапазона в сканере). */
+void UI_RedrawLabels(void);
 
 void PutPixel(int16_t x, int16_t y, Color c);
 void DrawVLine(int16_t x, int16_t y, int16_t h, Color c);

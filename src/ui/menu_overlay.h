@@ -25,6 +25,9 @@ void MenuOverlay_Open(const MenuItem *items, uint8_t count, lv_coord_t x,
                       bool spectrumOverlay);
 void MenuOverlay_Close(void);
 bool MenuOverlay_IsOpen(void);
+/* Выбранный пункт (для вложенных меню и редактора кнопок). */
+uint8_t MenuOverlay_Selected(void);
+void MenuOverlay_SetSelected(uint8_t sel);
 /* true — клавиша обработана; STAR закрывает меню и возвращает false,
  * чтобы режим открыл loot. */
 bool MenuOverlay_Key(KEY_Code_t key, Key_State_t state);

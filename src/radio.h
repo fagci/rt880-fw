@@ -107,4 +107,13 @@ void Radio_SetSquelch(uint8_t level);
 void Radio_ToggleSquelchForce(void);
 void Radio_NextStep(void);
 
+/* Передача (BK4819 A, FM): глобальный выключатель в Settings, TOT,
+ * калибровка из W25Q и переключение PF0 по правилу stock. */
+bool Radio_TxStart(void);
+void Radio_TxStop(void);
+void Radio_TxUpdate(void);
+bool Radio_TxActive(void);
+/* Отпускание PTT снимает блокировку после сработавшего TOT. */
+void Radio_TxPttReleased(void);
+
 extern uint8_t squelchLevel;

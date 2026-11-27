@@ -183,9 +183,60 @@ void st7789_set_spi_div(uint8_t div) {
   spi_enable(SPI1, TRUE);
 }
 
-void st7789_backlight_off() { PIN_CLR(PORT_BL, PIN_BL); }
+/* Подсветка: PA4 = TMR14_CH1 (MUX9). TMR14 на APB1: 135/4 = 33.75 МГц,
+ * тактовый вход таймера ×2 = 67.5 МГц; 67.5 / (134+1) / (2499+1) = 200 Гц.
+ * Частота намеренно низкая: затвор Q500 заряжается через 390К при 1нФ
+ * (τ≈0.4 мс), выше 200 Гц фронты съедают период. MODERATE — мягче фронты,
+ * меньше широкополосной помехи в приёмник. */
+#define ST7789_BL_PSC 134u
+#define ST7789_BL_ARR 2499u
+#define ST7789_BL_MUX GPIO_MUX_9
 
-void st7789_backlight_on() { PIN_SET(PORT_BL, PIN_BL); }
+static void backlight_pwm_init(void) {
+  gpio_init_type g;
+  tmr_output_config_type oc;
+
+  crm_periph_clock_enable(CRM_GPIOA_PERIPH_CLOCK, TRUE);
+  crm_periph_clock_enable(CRM_TMR14_PERIPH_CLOCK, TRUE);
+
+  gpio_default_para_init(&g);
+  g.gpio_pins = PIN_BL;
+  g.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
+  g.gpio_pull = GPIO_PULL_NONE;
+  g.gpio_mode = GPIO_MODE_MUX;
+  g.gpio_drive_strength = GPIO_DRIVE_STRENGTH_MODERATE;
+  gpio_init(PORT_BL, &g);
+  gpio_pin_mux_config(PORT_BL, GPIO_PINS_SOURCE4, ST7789_BL_MUX);
+
+  tmr_base_init(TMR14, ST7789_BL_ARR, ST7789_BL_PSC);
+  tmr_cnt_dir_set(TMR14, TMR_COUNT_UP);
+  tmr_clock_source_div_set(TMR14, TMR_CLOCK_DIV1);
+
+  tmr_output_default_para_init(&oc);
+  oc.oc_mode = TMR_OUTPUT_CONTROL_PWM_MODE_A;
+  oc.oc_idle_state = FALSE;
+  oc.oc_polarity = TMR_OUTPUT_ACTIVE_HIGH;
+  oc.oc_output_state = TRUE;
+  tmr_output_channel_config(TMR14, TMR_SELECT_CHANNEL_1, &oc);
+  tmr_channel_value_set(TMR14, TMR_SELECT_CHANNEL_1, 0);
+  tmr_output_channel_buffer_enable(TMR14, TMR_SELECT_CHANNEL_1, TRUE);
+  tmr_period_buffer_enable(TMR14, TRUE);
+
+  tmr_counter_enable(TMR14, TRUE);
+  tmr_output_enable(TMR14, TRUE);
+}
+
+void st7789_backlight_set(uint16_t duty) {
+  if (duty > ST7789_BACKLIGHT_MAX)
+    duty = ST7789_BACKLIGHT_MAX;
+  tmr_channel_value_set(TMR14, TMR_SELECT_CHANNEL_1,
+                        (uint16_t)((uint32_t)duty * (ST7789_BL_ARR + 1) /
+                                   ST7789_BACKLIGHT_MAX));
+}
+
+void st7789_backlight_off() { st7789_backlight_set(0); }
+
+void st7789_backlight_on() { st7789_backlight_set(ST7789_BACKLIGHT_MAX); }
 
 void st7789_cs_low(void) { PIN_CLR(PORT_CS, PIN_CS); }
 
@@ -265,7 +316,7 @@ void st7789_init(void) {
   gpio_pin_init(PORT_DCX, PIN_DCX);
   gpio_pin_init(PORT_RESET, PIN_RESET);
   gpio_pin_init(PORT_CS, PIN_CS);
-  gpio_pin_init(PORT_BL, PIN_BL);
+  backlight_pwm_init();
 
   spi_hw_init();
   spi_dma_init();
@@ -305,6 +356,17 @@ void st7789_init(void) {
   st7789_write_cmd(0x29);
   st7789_cs_high();
   delay_ms(50);
+}
+
+void st7789_set_gamma(uint8_t curve) {
+  /* GAMSET (26h): встроенные кривые 01h G2.2, 02h G1.8, 04h G2.5, 08h G1.0. */
+  static const uint8_t GAMMA_PARAM[4] = {0x01, 0x02, 0x04, 0x08};
+  if (curve > 3)
+    curve = 0;
+  st7789_cs_low();
+  st7789_write_cmd(0x26);
+  st7789_write_data(GAMMA_PARAM[curve]);
+  st7789_cs_high();
 }
 
 void st7789_fill_rect_dma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,

@@ -10,6 +10,10 @@ extern Mode &MODE_RADIO;
 extern Mode &MODE_LOOTLIST;
 extern Mode &MODE_CHANNELS;
 extern Mode &MODE_BANDLIST;
+extern Mode &MODE_SETTINGS;
+
+/* Открыть системное меню сразу на странице multiwatch (из карты кнопок). */
+void SETTINGS_OpenMultiwatch(void);
 
 /* Экран списка находок (loot). Открывается коротким STAR во всех режимах
  * (в редакторе частоты STAR — десятичная точка). EXIT — назад в тот режим,

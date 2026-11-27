@@ -197,6 +197,12 @@ bool LOOT_SortByBlacklist(const Loot *a, const Loot *b) {
   return a->blacklist < b->blacklist;
 }
 
+const LootCmp LOOT_SORTERS[LOOT_SORT_COUNT] = {
+    LOOT_SortByLastOpenTime, LOOT_SortByDuration, LOOT_SortByBlacklist,
+    LOOT_SortByF};
+const char *const LOOT_SORT_NAMES[LOOT_SORT_COUNT] = {"time", "dur", "bl",
+                                                      "freq"};
+
 void LOOT_Sort(LootCmp compare, bool reverse) {
   /* пузырёк: n ≤ 200, вызывается по нажатию — хватает */
   for (uint16_t i = 0; i + 1 < lootCount; i++) {

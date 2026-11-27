@@ -23,6 +23,7 @@
 #include "../driver/st7789.h"
 #include "../helper/log.h"
 #include "../helper/lootlist.h"
+#include "../helper/settings.h"
 #include "../helper/measurements.h"
 #include "../misc.h"
 #include "../radio.h"
@@ -202,7 +203,9 @@ public:
     fcCtx.savedFreq = vfos[fcCtx.scanVfo].rxF; /* после Radio_Init */
 
     fcCtx.band = 0;
-    fcCtx.scanSpeed = 0;
+    fcCtx.scanSpeed = (uint8_t)Settings_Get(SET_FCTIME);
+    if (fcCtx.scanSpeed > 3)
+      fcCtx.scanSpeed = 3;
     fcCtx.thr = 0x244;
     fcCtx.bandAutoSwitch = false; /* без авто-переключения: реле не щёлкает */
     fcCtx.isScanning = false;

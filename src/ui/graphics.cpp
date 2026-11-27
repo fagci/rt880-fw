@@ -237,6 +237,15 @@ void UI_ReleaseLabels(void) {
   }
 }
 
+/* Сбросить хеши пула: после прямых DMA-заливок, затёрших лейблы, следующий
+ * Printf* обязан перепечатать текст, даже если строка не изменилась. */
+void UI_RedrawLabels(void) {
+  for (uint8_t i = 0; i < LABEL_POOL; i++) {
+    s_pool[i].text_hash = 0;
+    s_pool[i].text_len = 0xFFFF;
+  }
+}
+
 void UI_ClearScreen(Color bg) {
   if (s_lvgl_ready) {
     /* Не удаляем лейблы — сбрасываем хеши: при следующем PrintfEx текст

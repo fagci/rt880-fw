@@ -16,7 +16,9 @@
  *       100..102  риски частот (3 px)
  *       103..118  строка 1 (F_M, baseline 116)
  *       122..134  строка 2 (F_S, baseline 132)
- *       138..319  водопад (аппаратный vscroll)
+ *       138..319  водопад (аппаратный vscroll) или список находок + график
+ *                 уровня (сканер: водопад выключен по умолчанию; нижние
+ *                 48 px — «Level in VFO», LVGL туда не пишет)
  *
  * Между зонами зазор ≥1 px. Зоны спектра (54..99), рисок (100..102) и
  * водопада (138..319) рисуются напрямую через DMA: LVGL в них не пишет
@@ -34,6 +36,14 @@
 #define UI_INFO1_BASE 116
 #define UI_INFO2_BASE 132
 #define UI_WATERFALL_Y 138
+
+/* Сканер без водопада: под спектром список находок, внизу — история уровня
+ * RSSI (Level in VFO; рисуется прямым DMA, потому исключена из зоны LVGL). */
+#define UI_LOOT_Y UI_WATERFALL_Y
+#define UI_LOOT_ROW_H 16
+#define UI_LOOT_ROWS 8
+#define UI_LEVEL_H 48
+#define UI_LEVEL_Y (LCD_HEIGHT - UI_LEVEL_H - 2)
 
 #define UI_LEFT_X 8
 #define UI_RIGHT_X (LCD_WIDTH - 8)

@@ -1,6 +1,8 @@
 #include <stdlib.h>
 /* Хост-превью экранов: гоняет настоящие режимы и сохраняет кадры в PPM. */
+#include "helper/keymap.h"
 #include "helper/lootlist.h"
+#include "helper/settings.h"
 #include "lvgl.h"
 #include "modes/mode.h"
 #include "modes/modes.h"
@@ -49,7 +51,18 @@ static void screens(const char *tag) {
   char n[64];
   Mode_Switch(MODE_VFO); step(60);
   snprintf(n, sizeof(n), "%s_vfo", tag); dump(n);
-  Mode_Switch(MODE_SCANNER); step(500);
+  Mode_Switch(MODE_SETTINGS); step(20);
+  snprintf(n, sizeof(n), "%s_settings", tag); dump(n);
+  for (int i = 0; i < 6; i++) key(KEY_DOWN);
+  key(KEY_MENU); step(20);
+  snprintf(n, sizeof(n), "%s_multiwatch", tag); dump(n);
+  key(KEY_EXIT); step(10);
+  for (int i = 0; i < 7; i++) key(KEY_DOWN);
+  key(KEY_MENU); step(20);
+  snprintf(n, sizeof(n), "%s_buttons", tag); dump(n);
+  key(KEY_MENU); step(20);
+  snprintf(n, sizeof(n), "%s_actions", tag); dump(n);
+  Mode_Switch(MODE_SCANNER); step(4000);
   snprintf(n, sizeof(n), "%s_scanner", tag); dump(n);
   Mode_Switch(MODE_BC_SCANNER); step(4500);
   snprintf(n, sizeof(n), "%s_bc", tag); dump(n);
@@ -64,6 +77,8 @@ static void screens(const char *tag) {
 int main(int argc, char **argv) {
   if (argc > 1) outdir = argv[1];
   lv_port_init();
+  Settings_LoadDefaults();
+  Keymap_LoadDefaults();
   { lv_mem_monitor_t m; lv_mem_monitor(&m); fprintf(stderr,"mem total=%u free=%u\n",(unsigned)m.total_size,(unsigned)m.free_size); }
   Radio_Init();
   g_bat_cv = 744;

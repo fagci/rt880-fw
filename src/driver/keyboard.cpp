@@ -101,8 +101,9 @@ static void process_key(uint8_t idx, key_id_t key_id, bool pressed) {
       } else {
         /* Отпускание: генерируем KEY_EVT_RELEASE только если не было
            долгого нажатия. Если long_sent == true, значит кнопка уже
-           сработала как долгая — короткое RELEASE подавляем. */
-        if (!long_sent[idx]) {
+           сработала как долгая — короткое RELEASE подавляем.
+           PTT — исключение: для push-to-talk отпускание нужно всегда. */
+        if (key_id == KEY_PTT || !long_sent[idx]) {
           queue_push(key_id, KEY_EVT_RELEASE, idx);
         }
         hold_ticks[idx] = 0;
@@ -110,8 +111,10 @@ static void process_key(uint8_t idx, key_id_t key_id, bool pressed) {
     }
   }
 
-  /* --- Удержание (работает только пока кнопка физически нажата) --- */
-  if (key_debounced[idx]) {
+  /* --- Удержание (работает только пока кнопка физически нажата) ---
+   * PTT не считается долгим нажатием: иначе подавляется RELEASE и
+   * передача останется включённой. */
+  if (key_debounced[idx] && key_id != KEY_PTT) {
     hold_ticks[idx]++;
 
     if (!long_sent[idx]) {
@@ -144,8 +147,12 @@ void keyboard_init(void) {
   col_idx = 0;
 
   /* прямые кнопки — все входы с pull-up */
-  for (int i = 0; i < DIRECT_COUNT; i++)
+  for (int i = 0; i < DIRECT_COUNT; i++) {
     gpio_pin_init_input(DIRECT[i].pin, GPIO_PULL_UP);
+    /* Кнопка, зажатая в момент старта (например, PTT после загрузчика),
+     * не должна дать PRESS: сначала нужно отпустить и нажать снова. */
+    key_debounced[DIRECT_BASE + i] = !gpio_pin_read(DIRECT[i].pin);
+  }
 }
 
 /* ── Сканирование (вызывать каждые KEY_SCAN_PERIOD_MS мс) ───────────── */

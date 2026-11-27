@@ -29,5 +29,6 @@ bool Mode_DisplayRxGate(void);
 uint16_t Mode_RenderInterval(void);
 void Mode_Key(KEY_Code_t key, Key_State_t state);
 bool Mode_KeyLocked(void);
+void Mode_ToggleKeyLock(void);
 
 Mode *Mode_Current(void);

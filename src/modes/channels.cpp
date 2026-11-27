@@ -40,6 +40,7 @@
 #include "../driver/si473x.h"
 #include "../helper/channels.h"
 #include "../helper/names.h"
+#include "../helper/settings.h"
 #include "../helper/store.h"
 #include "../helper/unit_fmt.h"
 #include "../misc.h"
@@ -78,8 +79,8 @@
 #define SQL_DELAY_MS 30  /* подтверждение открытия повторным замером */
 #define SQL_MARGIN 10    /* ~5 дБ над шумом (RSSI: 2 ед. = 1 дБ) */
 #define SQL_HYST 4
-#define LISTEN_TIMEOUT_MS 5000
-#define RX_SNR_THR 6 /* порог станции SI, дБ */
+#define RX_SNR_THR 6   /* порог станции SI, дБ */
+#define SI_HOLD_MS 5000 /* у SI нет шумодава — HOLD всё равно по таймеру */
 
 typedef enum { PH_IDLE, PH_SETTLE, PH_CONFIRM, PH_HOLD } ScanPhase;
 typedef enum { VIEW_LIST, VIEW_FORM } ChView;
@@ -128,6 +129,7 @@ static struct Ctx {
   ScanPhase s_phase;
   uint32_t s_nextAt;
   uint32_t s_holdUntil;
+  uint32_t s_closedAt; /* момент закрытия шумодава (0 — сигнал есть) */
   uint16_t s_floorRssi;
   uint16_t s_confirmThr;
   uint16_t s_calibMin;
@@ -291,6 +293,7 @@ static void clearAudio(void) { Radio_ScanAudio(false); }
 static void stopScan(void) {
   ctx.s_scanning = false;
   ctx.s_hold = false;
+  ctx.s_closedAt = 0;
   ctx.s_phase = PH_IDLE;
   clearAudio();
   ctx.s_dirty = true;
@@ -328,6 +331,7 @@ static void startScan(void) {
   }
   ctx.s_scanning = true;
   ctx.s_hold = false;
+  ctx.s_closedAt = 0;
   ctx.s_phase = PH_SETTLE;
   ctx.s_calib = true; /* первый проход — шумовой пол, без остановок */
   ctx.s_calibMin = 0xFFFF;
@@ -358,13 +362,19 @@ static void beginHold(void) {
     Radio_ScanAudio(true);
   ctx.s_hold = true;
   ctx.s_phase = PH_HOLD;
-  ctx.s_holdUntil = millis() + LISTEN_TIMEOUT_MS;
+  ctx.s_closedAt = 0;
+  uint32_t tmo = Settings_ScanTimeoutMs(SET_SQOPENEDTIMEOUT);
+  /* Listen t/o = None означает «до закрытия шумодава», но у SI его нет. */
+  if (tmo == 0xFFFFFFFFu && si)
+    tmo = SI_HOLD_MS;
+  ctx.s_holdUntil = tmo == 0xFFFFFFFFu ? tmo : millis() + tmo;
   ctx.s_dirty = true;
 }
 
 static void endHold(void) {
   clearAudio();
   ctx.s_hold = false;
+  ctx.s_closedAt = 0;
   advanceScan();
 }
 
@@ -380,7 +390,8 @@ static void scanTick(void) {
       advanceScan();
       return;
     }
-    if ((int32_t)(now - ctx.s_holdUntil) >= 0) {
+    if (ctx.s_holdUntil != 0xFFFFFFFFu &&
+        (int32_t)(now - ctx.s_holdUntil) >= 0) {
       endHold();
       return;
     }
@@ -389,8 +400,24 @@ static void scanTick(void) {
     if (!curIsSi()) {
       uint16_t thr = (uint16_t)(ctx.s_floorRssi + SQL_MARGIN);
       uint16_t rssi = BK4819_GetRSSI();
-      if (rssi + SQL_HYST < thr)
-        endHold();
+      if (rssi + SQL_HYST < thr) {
+        /* Stay time: сигнал пропал, но короткая пауза в речи — не повод
+         * ехать дальше. Звук выключаем, HOLD держим до таймаута. */
+        uint32_t stay = Settings_ScanTimeoutMs(SET_SQCLOSEDTIMEOUT);
+        if (!ctx.s_closedAt) {
+          ctx.s_closedAt = now ? now : 1; /* 0 — «ещё не закрыт» */
+          clearAudio();
+        }
+        if (stay != 0xFFFFFFFFu &&
+            (int32_t)(now - ctx.s_closedAt) >= (int32_t)stay) {
+          endHold();
+          return;
+        }
+      } else if (ctx.s_closedAt) {
+        /* сигнал вернулся — снова слушаем */
+        ctx.s_closedAt = 0;
+        Radio_ScanAudio(true);
+      }
     }
     return;
   }
@@ -1056,6 +1083,7 @@ public:
     ctx.s_menuLong = false;
     ctx.s_scanning = false;
     ctx.s_hold = false;
+    ctx.s_closedAt = 0;
     ctx.s_phase = PH_IDLE;
     ctx.s_msg[0] = 0;
     ctx.s_page = VIEW_LIST;
@@ -1115,6 +1143,7 @@ public:
     ctx.s_edit = EDIT_NONE;
     ctx.s_scanning = false;
     ctx.s_hold = false;
+    ctx.s_closedAt = 0;
     if (ctx.s_scr) {
       lv_obj_del(ctx.s_scr);
       ctx.s_scr = ctx.s_sel = ctx.s_title = ctx.s_list = ctx.s_detail =

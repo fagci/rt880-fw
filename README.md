@@ -13,7 +13,8 @@ Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (re
 - **Wide-range scanner** (VFO → `MENU`): arbitrary limits across the whole
   receiver range, step, dwell, black/white lists; a candidate is an RSSI peak
   above the calibrated noise floor confirmed by a local window, and finds go
-  to the loot list.
+  to the loot list. The screen shows the spectrum, the newest finds with age
+  and peak level, and an RSSI history graph during HOLD.
 - **Channel editor and 8 scanlists** (VFO → long `7`): up to 200 channels with
   name, frequency, modulation, bandwidth, receiver, list mask and blacklist
   flag; a 7-field form, scanning over the list, a channel pinned behind a VFO.
@@ -33,7 +34,12 @@ Firmware for the Radtel RT-880 (AT32F423, BK4819 ×2, SI4732). Build: `make` (re
   restores stage-2, application and metadata for recovery.
 - **Three VFOs and multiwatch**: short `EXIT` cycles the VFOs, each with its
   own receiver, modulation, step and bandwidth; BK and SI can be pinned for
-  background monitoring (channel mode included); manual receiver selection.
+  background monitoring (channel mode included) from the full-screen menu
+  (`1`/`2`/`3` inside Multiwatch); manual receiver selection.
+- **System settings and button map** (long `MENU`): a full-screen menu with
+  the k1-fw settings set (Scan, Radio, Equalizer, Display, Battery), a
+  built-in receiver menu, Multiwatch and per-key click/long action assignment;
+  settings unsupported by the RT-880 hardware are shown as `N/A`.
 - **BAND screen and broadcast SW scanner**: LW/MW, broadcast SW, FM 64–108
   and amateur SSB with an SNR scan and station marks; a separate scanner over
   the 120–11 m broadcast bands.
@@ -59,6 +65,15 @@ General view (VFO) in the dark and light themes:
 |---|---|
 | <img src="docs/screenshots/vfo-dark.png" width="240" alt="VFO, dark theme"> | <img src="docs/screenshots/vfo-light.png" width="240" alt="VFO, light theme"> |
 
+Settings (long `MENU`), Multiwatch and the button editor:
+
+| Dark theme | Light theme |
+|---|---|
+| <img src="docs/screenshots/settings-dark.png" width="180" alt="Settings, dark theme"> | <img src="docs/screenshots/settings-light.png" width="180" alt="Settings, light theme"> |
+| <img src="docs/screenshots/multiwatch-dark.png" width="180" alt="Multiwatch, dark theme"> | <img src="docs/screenshots/multiwatch-light.png" width="180" alt="Multiwatch, light theme"> |
+| <img src="docs/screenshots/buttons-dark.png" width="180" alt="Button map, dark theme"> | <img src="docs/screenshots/buttons-light.png" width="180" alt="Button map, light theme"> |
+| <img src="docs/screenshots/actions-dark.png" width="180" alt="Action picker, dark theme"> | <img src="docs/screenshots/actions-light.png" width="180" alt="Action picker, light theme"> |
+
 The rest are in the sections below. Frames come from the host preview
 (`make -C tools/preview`); its receiver is a synthetic "live air" model —
 broadcast, aviation, LMR/repeater, PMR and packet stations with fading and
@@ -72,78 +87,147 @@ The scanner (VFO → `MENU`) collects found frequencies in a list (200 entries);
 the list and VFO settings are stored in the external W25Q32 and survive
 power-off.
 
+The screen follows k1-fw: the spectrum stays on top, the area below it is the
+live loot list (the newest 8 finds, with blacklist/whitelist marks, time ago
+and peak dBm), and the bottom 48 px are an RSSI history graph — the same idea
+as `Level in VFO` / `SP_RenderGraph` in k1-fw and s0v4. The graph samples the
+RSSI every 250 ms while listening (240 columns ≈ 60 s; old columns are
+overwritten one at a time with direct DMA, so the screen is not fully redrawn
+on each sample). The waterfall is off by default and can be switched on with
+long `SIDE1` (it replaces the list and the graph).
+
 | Dark theme | Light theme |
 |---|---|
 | <img src="docs/screenshots/scanner-dark.png" width="200" alt="Scanner, dark theme"> | <img src="docs/screenshots/scanner-light.png" width="200" alt="Scanner, light theme"> |
 | <img src="docs/screenshots/loot-dark.png" width="200" alt="Loot list, dark theme"> | <img src="docs/screenshots/loot-light.png" width="200" alt="Loot list, light theme"> |
 
-| Key | Scanner | Loot list |
+| Key | Scanner (live scan / selected find) | Loot list |
 |---|---|---|
-| `5` | enter limits: start first, then end | — |
-| `1` / `7` | dwell on a frequency (scan speed) | — |
-| `3` / `9` | scan step | — |
-| long `5` | reset peak hold | — |
-| `0` / long `0` | — | delete / clear all |
-| `*` | open the loot list | — |
-| `UP/DOWN` | scan step | select a row (the receiver tunes to it) |
-| `SIDE1` | add to the blacklist and continue | blacklist on/off |
-| `SIDE2` | add to the whitelist and continue | whitelist on/off |
-| long `SIDE1` | waterfall on/off | — |
-| `MENU` | frequency to VFO and exit | selected to VFO and exit |
-| long `MENU` | menu: step, speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level, waterfall, palette | — |
-| `1/2/3/4` | — | sort: time / duration / blacklist / frequency |
-| long `5` | — | whitelist finds → channels |
-| long `8` | — | blacklist finds → channels (with the blacklist flag) |
-| long `9` | — | channel blacklist → loot (manually) |
-| `EXIT` | to VFO | back |
+| `5` | live: enter limits: start first, then end | — |
+| `1` / `7` | live: dwell on a frequency (scan speed) | — |
+| `3` / `9` | live: scan step | — |
+| long `5` | live: reset peak hold; find: whitelist finds → channels | whitelist finds → channels |
+| `0` / long `0` | find: delete / clear all | delete / clear all |
+| `*` | live: open the loot list | — |
+| `UP/DOWN` | live: enter the findings list; find: next/previous (past the ends — back to scan) | select a row (the receiver tunes to it) |
+| `SIDE1` | live: add the last find to the blacklist and continue; find: blacklist on/off | blacklist on/off |
+| `SIDE2` | live: add the last find to the whitelist and continue; find: whitelist on/off | whitelist on/off |
+| long `SIDE1` | live: waterfall on/off (default: loot list + level graph) | — |
+| long `SIDE2` | find: save the selected find to a channel | — |
+| `MENU` | live: frequency to VFO and exit; find: selected to VFO and exit | selected to VFO and exit |
+| long `MENU` | live: menu: step, speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level, waterfall, palette | — |
+| `1/2/3/4` | find: sort: time / duration / blacklist / frequency | sort: time / duration / blacklist / frequency |
+| long `8` | find: blacklist finds → channels (with the blacklist flag) | blacklist finds → channels (with the blacklist flag) |
+| long `9` | find: channel blacklist → loot (manually) | channel blacklist → loot (manually) |
+| `EXIT` | live: to VFO; find: back to scan | back |
+
+The current scan is element zero of the findings list. `UP/DOWN` on the live
+scan move onto the newest (or oldest) find; walking past either end of the
+list returns to the live scan and resumes it. While a find is selected the
+scan is paused, the receiver is tuned to that frequency, the status shows
+`LOOT`, and the row is highlighted. The embedded list uses the same loot
+actions as the loot screen (sort, black/white lists, delete, save to channels,
+capture to VFO), so finds can be handled without leaving the scanner.
 
 Long `MENU` — a menu in the top-left corner under the status bar (half the
 width, a hint + 4 rows, the rest scrolls; a scrollbar on the right): the
-spectrum and waterfall keep running. `UP/DOWN` — item, `SIDE1` — increase,
-`SIDE2` — decrease, `MENU/EXIT` — close. In the scanner the items are: step,
-speed, modulation, bandwidth, squelch, gain, AFC, Min/Max/Auto level,
-waterfall, waterfall palette.
+spectrum (and the waterfall, when enabled) keeps running. `UP/DOWN` — item,
+`SIDE1` — increase, `SIDE2` — decrease, `MENU/EXIT` — close. In the scanner
+the items are: step, speed, modulation, bandwidth, squelch, gain, AFC,
+Min/Max/Auto level, waterfall, waterfall palette.
 
-The loot list is the entry point to channels: long `5` on the loot screen
-saves whitelist finds to channels, long `8` — blacklist finds (with the
-blacklist flag), long `9` manually loads the channel blacklist back into loot.
-Channels and scanning over them — long `7` in VFO.
+The loot list is the entry point to channels: long `5` on the loot screen (or
+on a selected find in the scanner) saves whitelist finds to channels, long
+`8` — blacklist finds (with the blacklist flag), long `9` manually loads the
+channel blacklist back into loot. Long `SIDE2` on a selected find saves just
+that find to a channel. Channels and scanning over them — long `7` in VFO.
 
-Active VFO row: a large frequency, modulation at its top edge; below, an
-S-meter as an LED bar: squares by zone (green/yellow/red), unlit ones dimmed,
-peak hold and the value in dBm (no label); the step (`25k`, `12.5k`) and the
-receiver — right under the frequency. Between the receiver and the step, with
-the squelch open, the AFC correction is visible (`AFC ±N`), next to it
+Active VFO row: a large frequency, modulation at its top edge; the step
+(`25k`, `12.5k`) and the receiver — right under the frequency. With Display →
+`Level in VFO` on (default), the bottom of the active row is an RSSI history
+graph (240 columns ≈ 60 s at 250 ms per sample, drawn one column at a time);
+with the item off it is the S-meter LED bar instead: squares by zone
+(green/yellow/red), unlit ones dimmed, peak hold and the value in dBm (no
+label). Between the receiver and the step, with the squelch open, the AFC
+correction is visible (`AFC ±N`), next to it
 CTCSS/DCS/DTMF (`CT 88.5`, `DCS 023`, digits `DTMF`). The status bar has: the
 title, a lock icon when locked, `A1/A2` and the battery: a level fill over the
-full height on a grey track, the voltage inside. Inactive VFOs are grey.
+full height on a grey track, the percentage (Battery → style: percent, voltage
+or clean). Inactive VFOs are grey.
 
 In VFO: long `0` — band and stations (BAND), long `7` — channels and scanning
-over them. Long `1/2/3`: for a channel VFO it turns the channel mode off, for
-the active frequency VFO it turns it on (if a channel is pinned), for the rest
-it pins/unpins the VFO for background multiwatch (the `MBK`/`MSI` mark). Each
-VFO can have a saved channel pinned behind it (long `SIDE2` in the channel
-list). In channel mode the VFO is tuned to the channel: the name is large, the
-band and channel frequency below, multiwatch polls it automatically. In
-frequency mode the VFO frequency is large, and the channel is shown small as
-`band | name`; manual frequency entry, a step or a band change return it to
-frequency mode, while the pinned channel stays. We listen to SI — the pinned BK
-is still checked: squelch opened — we switch to BK (only on a real squelch
-opening; at squelch level 0 monitoring does not work; BK has priority); after
-~1.5 s of silence on BK we return to the previous active VFO. Short `*` — the
-loot list (in any mode except the frequency editor, where `*` is the decimal
-point), long `MENU` — the VFO overlay menu on the left under the status bar:
-step, filter, receiver, modulation, bandwidth, squelch, gain, AFC (`SIDE1` —
-+, `SIDE2` — −), long `8` — the band list (plan editing), long `9` — the
-current frequency to the whitelist, long `SIDE2` — filter (AUTO/HF/VHF/UHF/800),
-long `#` — receiver AUTO ↔ BK/SI (if the chip supports the current frequency).
+over them. Long `3` — channel mode of the active VFO (on if a channel is
+pinned); long `1/2/3` are no longer occupied by multiwatch. Each VFO can have a
+saved channel pinned behind it (long `SIDE2` in the channel list). In channel
+mode the VFO is tuned to the channel: the name is large, the band and channel
+frequency below, multiwatch polls it automatically. In frequency mode the VFO
+frequency is large, and the channel is shown small as `band | name`; manual
+frequency entry, a step or a band change return it to frequency mode, while the
+pinned channel stays. We listen to SI — the pinned BK is still checked: squelch
+opened — we switch to BK (only on a real squelch opening; at squelch level 0
+monitoring does not work; BK has priority); after ~1.5 s of silence on BK we
+return to the previous active VFO. Short `*` — the loot list (in any mode
+except the frequency editor, where `*` is the decimal point), long `MENU` — the
+full-screen system menu: scan/radio/display/battery settings, receiver
+parameters, Multiwatch (`1`/`2`/`3` toggle the VFO monitors) and the button map,
+long `8` — the band list (plan editing), long `9` — the current frequency to
+the whitelist, long `SIDE2` — filter (AUTO/HF/VHF/UHF/800), long `#` — receiver
+AUTO ↔ BK/SI (if the chip supports the current frequency).
 On BK short `SIDE1` forces the squelch open/closed, and `SIDE2` does not step
 bands. In any mode short `ALARM` — the antenna connector (A1/A2), long `ALARM` —
 light/dark theme (in the light theme the spectrum and waterfall are inverted
-for a white background). Long `EXIT` — turn off the display and keyboard
-backlight; while they are off, other keys are ignored, and only a repeated long
-`EXIT` turns them on. Long `STAR` — keyboard lock (repeat to unlock; the lock
-icon in the status bar).
+for a white background). The LCD backlight timeout and the high/low brightness
+are set in Settings → Display (default: 20 s, dim to 25%); any key restores
+full brightness. Long `EXIT` — turn off the display and
+keyboard backlight; while they are off, other keys are ignored, and only a
+repeated long `EXIT` turns them on. Long `STAR` — keyboard lock (repeat to
+unlock; the lock icon in the status bar).
+
+## Settings and buttons (VFO → long `MENU`)
+
+Long `MENU` opens a full-screen menu. `UP/DOWN` — item, `SIDE1`/`SIDE2` —
+increase/decrease, `MENU` — enter a submenu (or assign an action), `EXIT` —
+one level back, and `EXIT` on the main page — return to VFO.
+
+The pages follow the k1-fw settings: **Scan** (squelch open/close time and
+delays, FC time, skip `X_X`, scan mode/delay), **Radio** (DTMF decode, filter
+bound `240`/`280`, SI power off, upconverter, STE, deviation, TX time, busy
+channel lock, mic gain), **Equalizer**, **Display** (gamma, backlight
+high/low/time, channel display mode, level in VFO), **Battery** (type, style,
+calibration), **Receiver** (the former VFO overlay menu: step, filter,
+receiver, modulation, bandwidth, squelch, gain, AFC), **Multiwatch**, and
+**Buttons**. The main page has the global **TX enable** (default **Off**) and
+**TX power** (`Low`/`Mid`/`High`, default `Low`). Items that the RT-880
+firmware does not have (unsupported k1-fw items, etc.) are
+shown with the value `N/A` and do not change anything. `Gamma` selects the
+ST7789 built-in curve: `G2.2` (default), `G1.8`, `G2.5` or `G1.0`.
+
+Scan timings are live: `Open t`/`Close t` are the BK4819 squelch open/close
+delays (5 ms units), `Listen t/o` limits the HOLD time while the squelch is
+open (`None` by default, as in k1-fw), `Stay time` keeps the channel after the
+signal disappears (2 s by default) and `Scan delay` is the RSSI warm-up after
+retune (1800 µs by default, also `Speed` in the scanner menu and `1`/`7`).
+`FC t` sets the BK frequency-counter scan time.
+
+The upconverter setting is a frequency offset in Hz (1 MHz step) applied to
+the BK4819 hardware frequency; when it is on, auto receiver selection prefers
+BK if the shifted frequency fits its range. SI power off powers the SI4732
+down while it is not the active receiver. STE configures BK tail detection for
+the transmit preparation path; deviation writes the BK `REG_40` deviation
+value (`0..255`, used as `value × 10`) for reception.
+
+**Multiwatch** lists all three VFOs; press `1`, `2`, `3` (or `SIDE1`/`SIDE2`)
+to pin/unpin a VFO for background monitoring. Long `1/2/3` in the VFO are
+therefore free.
+
+**Buttons** assigns actions to short and long presses. By default the VFO app
+keys are mapped (`MENU`, `EXIT`, `*`, long `0`, long `3`–`9`, long `SIDE1/SIDE2`,
+long `#`); other keys stay with the mode handlers. The action picker contains
+`Default (app)` (remove the assignment, the mode handler works again) and
+`NONE` (consume the key). Actions include app launch, band/channel/list
+navigation, step/bandwidth/modulation/squelch/gain/AFC, theme, antenna,
+keylock, S-meter visibility and brightness. Assignments are stored in flash
+together with the settings.
 
 ## Channels and scanlists (VFO → long `7`)
 
@@ -356,8 +440,18 @@ window.
 ## Board receivers
 
 - **BK4819 A** — the only BK on the antenna (18–660 and 840–1300 MHz, incl. 27 MHz, CB). All V/UHF and FM/other on 18–30 MHz goes here. CB AM (27 MHz) goes through the SI4732 by default; long `#` in VFO forces the receiver to BK and back.
-- **BK4819 B** — per the RT880 V2 schematic its LNAIN input is not connected to the antenna, and the EARO output is disconnected (C433 = NC); its RSSI is low. It is needed for transmit/repeater; while there is no transmit, **B sleeps** (as in stock: `REG_30=0`, `REG_37=0x1D00`, saving about 15–20 mA), the firmware does not select reception on B.
+- **BK4819 B** — per the RT880 V2 schematic its LNAIN input is not connected to the antenna, and the EARO output is disconnected (C433 = NC); its RSSI is low. **B sleeps** (as in stock: `REG_30=0`, `REG_37=0x1D00`, saving about 15–20 mA); the firmware does not select reception on B and does not use B for transmission (the stock relay/cross-band path is not implemented).
 - **SI4732** — everything below 18 MHz, AM/SSB up to 30 MHz and FM broadcast 64–108 MHz (I2C1, 400 kHz). The SI4732 input is `HF-ANT` (the second connector). Retuning is seamless: a frequency change is a single `TUNE_FREQ` (FAST) command with soft mute attenuation set to 0, so tuning does not click, mute or re-power the chip, and the resident continuous patch keeps fine tuning in the chip (LSB ↔ USB is instant). The continuous patch is reloaded only when the mode family changes (AM ↔ SSB, FM ↔ AM/SSB).
+
+## Transmit (PTT)
+
+Transmission is **off by default**: enable it in `MENU → TX enable` (main page). The PTT key then transmits on the active VFO when it is on **BK4819 A in FM**. TX power (`Low`/`Mid`/`High`), TOT (`TX time`, default 60 s), busy-channel lock and mic gain are in the settings. `Lock PTT` disables PTT independently of the global switch.
+
+The RF sequence follows the related stock/uv98-rust plan: external TX gates (PC15 `HF-TXPOWER-EN`, PB11 `TX29/50M-SW`), `REG_33` V/U TX bits, frequency, TX filter (`REG_74`), deviation (`REG_40`), mic gain (`REG_7D`), then the PA code (`REG_36`) last. Power, deviation and TX filter are read from the factory calibration block in the W25Q32 (primary or backup copy); without a valid `0x9A` marker transmission is refused. While transmitting, the receiver path is muted and the S-meter is hidden; on release the RX filter/AGC/squelch/VCO are restored.
+
+**Antenna.** PF0/K200 follows the stock TX route rule (frequency codes are 10 Hz in the stock selector): TX on 18–32 MHz and 840–1300 MHz selects the HF/U8 path (`A2`); 32–660 MHz selects the V/U path (`A1`). The user's antenna choice is saved and restored after TX; the relay is not moved more often than once per 300 ms. The audio/PA path is A only: the second BK (B) stays asleep.
+
+Limitations: FM only (AM/SSB/WFM and the SI4732 HF/broadcast path are receive-only), upconverter must be off, and there is no repeater/cross-band relay.
 
 ## UART on the USB connector
 
@@ -407,7 +501,7 @@ length in hex) — a hex dump.
 
 ## Antenna and filter
 
-- **Antenna:** relay K200 is driven by PF0 (`UV/HF ANT-SW`). Short `ALARM` switches `A1` (second connector only, V/U path) ↔ `A2` (the main antenna is added to the HF path). Default `A1`.
+- **Antenna:** relay K200 is driven by PF0 (`UV/HF ANT-SW`). Short `ALARM` switches `A1` (second connector only, V/U path) ↔ `A2` (the main antenna is added to the HF path). Default `A1`. During PTT the position is temporarily chosen by the stock TX route rule and restored on release (see **Transmit**).
 - **Filter:** long `SIDE2` in VFO cycles `AUTO → HF → VHF → UHF → 800`. `AUTO` (default) picks the filter by frequency; manual is held until returning to `AUTO`.
 - Pins and pin numbers are summarised in `src/driver/board_pins.h`.
 

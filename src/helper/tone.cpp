@@ -1,4 +1,6 @@
 #include "tone.h"
+
+#include "settings.h"
 #include "../driver/bk4819-regs.h"
 #include "../driver/bk4819.h"
 #include "../driver/board.h"
@@ -244,7 +246,10 @@ void Tone_Update(bool enabled, uint8_t chip, uint32_t freq, bool squelchOpen) {
     s_dtmfLen = 0;
     s_dtmf[0] = 0;
   }
-  if ((uint32_t)(now - s_lastPollMs) >= TONE_DTMF_POLL_MS) {
+  if (!Settings_Get(SET_DTMFDECODE)) {
+    s_dtmfLen = 0;
+    s_dtmf[0] = 0;
+  } else if ((uint32_t)(now - s_lastPollMs) >= TONE_DTMF_POLL_MS) {
     s_lastPollMs = now;
     if (BK4819_ReadRegister(BK4819_REG_0C) & 1) {
       BK4819_WriteRegister(BK4819_REG_02, 0);

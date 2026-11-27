@@ -7,11 +7,14 @@
 #include "helper/bootprof.h"
 #include "helper/channels.h"
 #include "helper/console.h"
+#include "helper/settings.h"
 #include "helper/store.h"
 #include "modes/mode.h"
 #include "modes/modes.h"
+#include "radio.h"
 #include "ui/graphics.h"
 #include "ui/lv_port.h"
+#include "driver/st7789.h"
 #include "lvgl.h"
 #include "misc.h"
 
@@ -43,6 +46,8 @@ int main(void) {
   /* Внешняя W25Q32: состояние и список находок переживают выключение. */
   Store_Init();
   Store_ApplyUi();
+  Store_ApplySettings();
+  st7789_set_gamma(Settings_GammaCurve());
   CH_Init();
   Band_Init();
 
@@ -50,12 +55,26 @@ int main(void) {
   gpio_pin_set(&PIN_LED_GREEN);
 
   lv_port_init();
+  st7789_backlight_set(Settings_BacklightHighDuty());
   Prof_Mark(PROF_LV);
 
   gpio_pin_clr(&PIN_LED_GREEN); // past lv_port_init
   gpio_pin_set(&PIN_LED_RED);
 
-  Mode_Switch(MODE_VFO);
+  switch (Settings_MainApp()) {
+  case 1:
+    Mode_Switch(MODE_RADIO);
+    break;
+  case 2:
+    Mode_Switch(MODE_SCANNER);
+    break;
+  case 3:
+    Mode_Switch(MODE_ANALYSER);
+    break;
+  default:
+    Mode_Switch(MODE_VFO);
+    break;
+  }
   Prof_Mark(PROF_SWITCH);
 
   gpio_pin_clr(&PIN_LED_RED);   // past Mode_Switch
@@ -66,9 +85,13 @@ int main(void) {
 
   for (;;) {
     Console_Poll();
-    Store_Poll();
-    CH_Poll();
-    Band_Poll();
+    /* Во время передачи не пишем во внешний флеш: SPI2 и стирание
+     * добавляют помеху/задержку. Отложенные записи уйдут после PTT. */
+    if (!Radio_TxActive()) {
+      Store_Poll();
+      CH_Poll();
+      Band_Poll();
+    }
 
     key_event_t evt;
     while (keyboard_get_event(&evt))

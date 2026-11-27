@@ -2,6 +2,7 @@
 #define LV_PORT_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -17,6 +18,11 @@ void lv_port_set_direct_areas(bool on);
 /* Меню-оверлей в зоне спектра: разрешить LVGL писать поверх прямого DMA
  * (спектр и водопад продолжают рисоваться), водопад не трогаем. */
 void lv_port_set_spectrum_overlay(bool on);
+
+/* Последняя строка, которую LVGL может писать в режиме direct areas
+ * (по умолчанию — над зоной водопада). Сканер без водопада расширяет её
+ * вниз до S-метра: под спектром живут лейблы списка находок. */
+void lv_port_set_text_bottom(uint16_t y);
 
 /* Диагностика по UART (команда `lv`): кадры/пиксели/время LVGL и куча. */
 void lv_port_stats_reset(void);

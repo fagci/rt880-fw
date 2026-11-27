@@ -29,6 +29,10 @@ void audio_path_set(uint8_t source); /* 0=BK1, 1=BK2 */
 /* PF0/K200: true — ВЧ-тракт (HF/U8), false — V/U. */
 void ant_sw(bool hf);
 bool ant_is_main(void);      /* текущее положение реле: PF0 == HIGH */
+/* Время последнего движения K200 (millis), 0 — ещё не переключали. */
+uint32_t ant_last_switch_ms(void);
+/* Внешние TX-гейты: PC15 HF-TXPOWER-EN, PB11 TX29/50M-SW. */
+void board_tx_gates(bool hf, bool tx29);
 
 void board_init(void);
 

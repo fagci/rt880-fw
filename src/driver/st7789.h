@@ -29,6 +29,13 @@ extern "C" {
 void st7789_init(void);
 void st7789_reset(void);
 
+/* Гамма ST7789 (GAMSET, 26h): 0 — G2.2, 1 — G1.8, 2 — G2.5, 3 — G1.0. */
+void st7789_set_gamma(uint8_t curve);
+
+/* Подсветка LCD: ШИМ 200 Гц на PA4 (TMR14_CH1), 0..ST7789_BACKLIGHT_MAX.
+ * Медленный ключ Q500 (390К/1нФ) выше 200 Гц не даёт чистых фронтов. */
+#define ST7789_BACKLIGHT_MAX 1000
+void st7789_backlight_set(uint16_t duty);
 void st7789_backlight_off();
 void st7789_backlight_on();
 void st7789_set_spi_div(uint8_t div); /* TEMP: тест гармоник */
