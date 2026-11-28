@@ -311,6 +311,9 @@ together with the settings.
 
 ## Channels and scanlists (VFO → long `7`)
 
+| <img src="docs/screenshots/channels-dark.png" width="200" alt="Channel scan, dark theme"> | <img src="docs/screenshots/channels-light.png" width="200" alt="Channel scan, light theme"> |
+|---|---|
+
 Saved channels: name, frequency, modulation, bandwidth, receiver, tone and
 tone-filter flag, scanlist mask and the blacklist flag. Up to 200 channels, in
 save order. There are 8 scanlists; `0` — ALL. A channel with `scanlists == 0`
@@ -336,10 +339,14 @@ rewritten as v3 on the first list change.
 | `*` | loot list | — |
 | `EXIT` | to VFO (restore the VFO snapshot) | stop the sound and exit to VFO |
 
-In `PAUSE`/`HOLD` the top shows the selected channel name in a large font,
-below in a medium one — the frequency, modulation and receiver, and below
-that — `CH x/y`, the scanlist and the state. During an active scan the header
-is hidden and the list fills the whole screen.
+The list follows the frequency-scanner grid: the scanlist on top, the current
+channel frequency in the large font, a detail line with the channel name,
+modulation and receiver plus `CH x/y` on the right, and the channel list below.
+The selected/current row is marked with a small `>` cursor; stepping moves only
+the cursor instead of repainting a highlighted row, which keeps the scan fast.
+While HOLD listens on a BK channel, the bottom shows the RSSI level history
+(the same level graph as the frequency scanner); in the form the bottom is used
+by the key hints.
 
 Form (`#`): 8 fields — name, frequency, modulation, bandwidth, tone, receiver
 (`BK-A`/`SI`), scanlists, blacklist. `UP/DOWN` — field, `SIDE1/SIDE2` — change

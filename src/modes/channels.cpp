@@ -1,9 +1,11 @@
 /* Канальный режим: список сохранённых каналов и скан по ним.
  *
  * Вход — VFO → длинный 7. Каналы лежат в W25Q32 (src/helper/channels.cpp),
- * в RAM только индексы видимого списка. Экран — нативный LVGL, как в
- * loot_screen.cpp: заголовок, один многострочный label с recolor,
- * подложка выбранной строки, детали и подсказка.
+ * в RAM только индексы видимого списка. Экран списка — та же сетка, что у
+ * сканера частот (screen_layout.h): сканлист, крупная частота (F_XL), строка
+ * деталей (F_S), список каналов и график уровня в HOLD. Текст — нативные
+ * LVGL-лейблы, подложка выбранной строки — lvBox; форма правки — отдельная
+ * страница с подсказками внизу.
  *
  * Клавиши (список / пауза):
  *   UP/DOWN   — выбор канала (приёмник настраивается на него);
@@ -49,8 +51,11 @@
 #include "../misc.h"
 #include "../radio.h"
 #include "../ui/graphics.h"
+#include "../ui/level_graph.h"
 #include "../ui/lv_helpers.h"
+#include "../ui/lv_port.h"
 #include "../ui/numval.h"
+#include "../ui/screen_layout.h"
 #include "../ui/statusline.h"
 #include "lvgl.h"
 #include "mode.h"
@@ -59,7 +64,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TITLE_Y 26
 #define LIST_Y 42
 #define ROW_H 16 /* line_height шрифта F_M */
 #define ROWS 13
@@ -67,13 +71,15 @@
 #define HINT_Y (DETAIL_Y + 18)
 #define VALUE_X 68 /* 4 + 8 символов F_M (8 px) */
 
-/* Пауза/HOLD: сверху имя выбранного канала (F_XL), ниже частота (F_M)
- * и служебная строка (F_S); список сдвигается вниз. */
-#define HEADER_Y 24
-#define HEADER_FREQ_Y 56
-#define HEADER_SUB_Y 74
-#define HEADER_LIST_Y 94
-#define ROWS_HEADER 9
+/* Экран списка — та же сетка, что у сканера частот (screen_layout.h):
+ * верхняя строка — сканлист, крупная частота (F_XL), строка деталей (F_S),
+ * список каналов от UI_LOOT_Y и график уровня внизу в HOLD. */
+#define TOP_Y (UI_RANGE_BASE - 13)          /* F_M: baseline 38 */
+#define BIGFREQ_Y (UI_SCAN_FREQ_BASE - 32)  /* F_XL: baseline 74 */
+#define INFO_Y (UI_SCAN_INFO_BASE - 10)     /* F_S: baseline 94 */
+#define LIST_VIEW_Y UI_LOOT_Y
+#define LIST_VIEW_ROWS UI_LOOT_ROWS
+#define SCAN_LEVEL_MS 250 /* шаг истории уровня в HOLD (как в сканере) */
 
 #define EDIT_BLINK_MS 500
 #define NAME_TAP_MS 900
@@ -116,26 +122,38 @@ static const char *const TAP_CHARS[10] = {
 
 static struct Ctx {
   lv_obj_t *s_scr;
-  lv_obj_t *s_sel;
+  lv_obj_t *s_sel;    /* подсветка поля в форме */
+  lv_obj_t *s_cursor; /* мелкий курсор выбранной строки в списке */
   lv_obj_t *s_title;
   lv_obj_t *s_list;
   lv_obj_t *s_detail;
   lv_obj_t *s_hint;
-  lv_obj_t *s_nameLbl; /* шапка паузы: имя канала */
-  lv_obj_t *s_freqLbl;
-  lv_obj_t *s_subLbl;
-  char s_hdrName[16];
-  char s_hdrFreq[40];
-  char s_hdrSub[40];
+  lv_obj_t *s_bigFreq; /* крупная частота выбранного канала (F_XL) */
+  lv_obj_t *s_infoL;
+  lv_obj_t *s_infoR;
+  char s_bigBuf[16];
+  char s_infoBuf[32];
+  char s_infoRBuf[20];
+  const char *s_statusTitle;
   uint8_t s_view[CH_MAX]; /* индексы хранения видимого списка */
   uint16_t s_viewCount;
   uint16_t s_selIdx;
   uint16_t s_top;
+  /* Кэш текста списка: во время скана меняется только курсор, а не строки.
+   * Без него lv_label_set_text_static перерисовывает все 10 строк на каждом
+   * шаге (240x160 px SPI) и скан идёт заметно медленнее. */
+  uint16_t s_listVer;
+  uint16_t s_listTopShown;
+  uint16_t s_listVerShown;
+  uint16_t s_maskShown;
   bool s_dirty;
   bool s_keep;     /* MENU: оставить выбранный канал в VFO */
   bool s_menuLong; /* длинный MENU уже отработал — отпускание игнорируем */
   bool s_scanning;
   bool s_hold;
+  bool s_graphOn; /* зона графика уровня активна (не в форме) */
+  uint16_t s_lastRssi;
+  uint32_t s_lastLevelMs;
   ScanPhase s_phase;
   uint32_t s_nextAt;
   uint32_t s_holdUntil;
@@ -172,6 +190,10 @@ static struct Ctx {
   uint8_t s_nameTapKey;
 } ctx;
 
+/* Нижняя зона: график уровня в списке, подсказки в форме. */
+static void graphShow(void);
+static void graphHide(void);
+
 /* ─── Список ─── */
 
 static const char *stateStr(void) {
@@ -182,13 +204,24 @@ static const char *stateStr(void) {
 
 static uint16_t listY(ChField f) { return (uint16_t)(LIST_Y + f * ROW_H); }
 
-/* Крупная шапка — только когда скан не идёт: PAUSE и HOLD. */
-static bool headerOn(void) {
-  return ctx.s_page == VIEW_LIST && (!ctx.s_scanning || ctx.s_hold);
+/* Экран списка — сетка сканера частот: 10 строк до графика уровня. */
+static uint16_t viewRows(void) { return LIST_VIEW_ROWS; }
+
+/* Заголовок статуслайна: в списке — состояние, в форме — CHAN. */
+static const char *statusTitle(void) {
+  return ctx.s_page == VIEW_FORM ? "CHAN" : stateStr();
 }
 
-static uint16_t viewRows(void) { return headerOn() ? ROWS_HEADER : ROWS; }
-static uint16_t viewListY(void) { return headerOn() ? HEADER_LIST_Y : LIST_Y; }
+/* HIDDEN трогаем только при реальной смене: lv_obj_add/clear_flag
+ * инвалидируют объект даже без изменения, а скан обновляется часто. */
+static void setHidden(lv_obj_t *o, bool hidden) {
+  if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) == hidden)
+    return;
+  if (hidden)
+    lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
 
 static char *append(char *p, char *end, const char *fmt, ...) {
   if (p >= end)
@@ -242,6 +275,7 @@ static void clampTop(void) {
 
 static void rebuildView(void) {
   ctx.s_viewCount = CH_BuildList(CH_GetScanlistMask(), ctx.s_view, CH_MAX);
+  ctx.s_listVer++;
   if (ctx.s_selIdx >= ctx.s_viewCount)
     ctx.s_selIdx = ctx.s_viewCount ? (uint16_t)(ctx.s_viewCount - 1) : 0;
   /* Приоритет хранится частотой (индексы хранения плывут при правках). */
@@ -452,6 +486,7 @@ static void scanTick(void) {
     if (!curIsSi()) {
       uint16_t thr = (uint16_t)(ctx.s_floorRssi + SQL_MARGIN);
       uint16_t rssi = BK4819_GetRSSI();
+      ctx.s_lastRssi = rssi;
       if (rssi + SQL_HYST < thr) {
         /* Stay time: сигнал пропал, но короткая пауза в речи — не повод
          * ехать дальше. Звук выключаем, HOLD держим до таймаута. */
@@ -498,6 +533,7 @@ static void scanTick(void) {
   }
 
   uint16_t rssi = BK4819_GetRSSI();
+  ctx.s_lastRssi = rssi;
 
   if (ctx.s_phase == PH_CONFIRM) {
     /* SE: строже повторное подтверждение (выше порога на SQL_MARGIN). */
@@ -805,6 +841,12 @@ static void openForm(void) {
   ctx.s_field = FIELD_NAME;
   ctx.s_edit = EDIT_NONE;
   ctx.s_formChanged = false;
+  /* Форма переиспользует s_list и его буфер — после возврата список нужно
+   * собрать заново. */
+  ctx.s_listVerShown = 0xFFFF;
+  ctx.s_maskShown = 0xFFFF;
+  graphHide();
+  lv_obj_invalidate(lv_scr_act());
   ctx.s_dirty = true;
 }
 
@@ -839,6 +881,9 @@ static void closeForm(void) {
     if (readSel(&ch))
       applyCh(&ch, false);
   }
+  ctx.s_listVerShown = 0xFFFF;
+  ctx.s_maskShown = 0xFFFF;
+  lv_obj_invalidate(lv_scr_act());
   ctx.s_dirty = true;
 }
 
@@ -871,138 +916,159 @@ static void addFromVfo(void) {
   setMsg("SAVED");
 }
 
-/* Шапка паузы/HOLD: имя первично (F_XL), частота — средним (F_M). */
-static void refreshHeader(void) {
-  CH ch;
-  if (!ctx.s_nameLbl || !ctx.s_freqLbl || !ctx.s_subLbl)
+/* Нижняя полоса — график уровня как в сканере частот. Прямой DMA в зоне
+ * UI_LEVEL_Y..; LVGL пишет только выше (textBottom), иначе flush затирает
+ * столбцы графика. В форме зона отдаётся подсказке, график стирается. */
+static void graphShow(void) {
+  if (ctx.s_graphOn)
     return;
-  if (!readSel(&ch)) {
-    lv_obj_add_flag(ctx.s_nameLbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ctx.s_freqLbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ctx.s_subLbl, LV_OBJ_FLAG_HIDDEN);
-    return;
-  }
-  if (ch.name[0])
-    snprintf(ctx.s_hdrName, sizeof(ctx.s_hdrName), "%s", ch.name);
-  else
-    snprintf(ctx.s_hdrName, sizeof(ctx.s_hdrName), "CH %u",
-             (unsigned)(ctx.s_view[ctx.s_selIdx] + 1));
-  lv_label_set_text_static(ctx.s_nameLbl, ctx.s_hdrName);
-  lv_obj_set_style_text_color(ctx.s_nameLbl,
-                              lvColor(ch.blacklist ? C_GRAY : C_WHITE),
-                              LV_PART_MAIN);
-
-  char f[16];
-  fmt_mhz5(f, sizeof(f), ch.f);
-  snprintf(ctx.s_hdrFreq, sizeof(ctx.s_hdrFreq), "%s %s %s", f,
-           MOD_NAMES[ch.modulation & 7], radioName(ch.radio));
-  lv_label_set_text_static(ctx.s_freqLbl, ctx.s_hdrFreq);
-
-  char ms[16];
-  CH_MaskString(ms, sizeof(ms), CH_GetScanlistMask());
-  snprintf(ctx.s_hdrSub, sizeof(ctx.s_hdrSub), "CH %u/%u  SL %s  %s",
-           (unsigned)(ctx.s_selIdx + 1), (unsigned)ctx.s_viewCount, ms,
-           stateStr());
-  lv_label_set_text_static(ctx.s_subLbl, ctx.s_hdrSub);
+  ctx.s_graphOn = true;
+  lv_port_set_text_bottom(UI_LEVEL_Y - 1);
+  /* LVGL-flush ниже UI_LEVEL_Y обрезается — очищаем полосу сами, включая
+   * 2 px под рамкой графика. */
+  FillRectNoInv(0, UI_LEVEL_Y, LCD_WIDTH, LCD_HEIGHT - UI_LEVEL_Y, BG());
+  LevelGraph_Reset(UI_LEVEL_Y, UI_LEVEL_H);
+  ctx.s_lastLevelMs = millis() - SCAN_LEVEL_MS;
 }
 
-static void refreshList(void) {
-  uint16_t n = ctx.s_viewCount;
-  bool head = headerOn() && n > 0;
-  char ms[16];
-  CH_MaskString(ms, sizeof(ms), CH_GetScanlistMask());
-  snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "CH %u/%u SL %s %s",
-           (unsigned)(n ? ctx.s_selIdx + 1 : 0), (unsigned)n, ms, stateStr());
-  lv_label_set_text_static(ctx.s_title, ctx.s_titleBuf);
+static void graphHide(void) {
+  if (!ctx.s_graphOn)
+    return;
+  ctx.s_graphOn = false;
+  lv_port_set_text_bottom(LCD_HEIGHT - 1);
+  LevelGraph_Hide();
+  FillRectNoInv(0, UI_LEVEL_Y, LCD_WIDTH, LCD_HEIGHT - UI_LEVEL_Y, BG());
+}
 
-  if (head)
-    lv_obj_add_flag(ctx.s_title, LV_OBJ_FLAG_HIDDEN);
-  else
-    lv_obj_clear_flag(ctx.s_title, LV_OBJ_FLAG_HIDDEN);
-  if (ctx.s_nameLbl) {
-    if (head) {
-      lv_obj_clear_flag(ctx.s_nameLbl, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_clear_flag(ctx.s_freqLbl, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_clear_flag(ctx.s_subLbl, LV_OBJ_FLAG_HIDDEN);
-      refreshHeader();
-    } else {
-      lv_obj_add_flag(ctx.s_nameLbl, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(ctx.s_freqLbl, LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(ctx.s_subLbl, LV_OBJ_FLAG_HIDDEN);
-    }
+/* Очередная выборка истории уровня: только в HOLD и только на BK (у SI
+ * при прослушивании RSSI не читаем — I2C щёлкает). */
+static void levelTick(uint32_t now) {
+  if (!ctx.s_graphOn || !ctx.s_hold || curIsSi())
+    return;
+  if (now - ctx.s_lastLevelMs < SCAN_LEVEL_MS)
+    return;
+  ctx.s_lastLevelMs = now;
+  LevelGraph_Add(UI_LEVEL_Y, ctx.s_lastRssi, UI_LEVEL_H);
+}
+
+/* Экран списка в стиле сканера частот: сканлист сверху, крупная частота,
+ * строка деталей, список каналов и график уровня. */
+static void refreshList(void) {
+  graphShow();
+
+  uint16_t n = ctx.s_viewCount;
+  CH ch;
+  bool have = n && readSel(&ch);
+
+  uint16_t mask = CH_GetScanlistMask();
+  if (mask != ctx.s_maskShown) {
+    ctx.s_maskShown = mask;
+    char ms[16];
+    CH_MaskString(ms, sizeof(ms), mask);
+    snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "SL %s", ms);
+    lv_obj_set_style_text_align(ctx.s_title, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_label_set_text_static(ctx.s_title, ctx.s_titleBuf);
   }
-  lv_obj_set_pos(ctx.s_list, 4, head ? HEADER_LIST_Y : LIST_Y);
+  setHidden(ctx.s_title, false);
+
+  if (have) {
+    fmt_mhz5(ctx.s_bigBuf, sizeof(ctx.s_bigBuf), ch.f);
+    lv_label_set_text_static(ctx.s_bigFreq, ctx.s_bigBuf);
+    setHidden(ctx.s_bigFreq, false);
+
+    if (ctx.s_msg[0]) {
+      snprintf(ctx.s_infoBuf, sizeof(ctx.s_infoBuf), "%s", ctx.s_msg);
+    } else if (ch.name[0]) {
+      snprintf(ctx.s_infoBuf, sizeof(ctx.s_infoBuf), "%s %s %s", ch.name,
+               MOD_NAMES[ch.modulation & 7], radioName(ch.radio));
+    } else {
+      snprintf(ctx.s_infoBuf, sizeof(ctx.s_infoBuf), "CH %u %s %s",
+               (unsigned)(ctx.s_view[ctx.s_selIdx] + 1),
+               MOD_NAMES[ch.modulation & 7], radioName(ch.radio));
+    }
+    lv_obj_set_style_text_color(ctx.s_infoL,
+                                lvColor(ch.blacklist ? C_GRAY : C_WHITE),
+                                LV_PART_MAIN);
+    lv_label_set_text_static(ctx.s_infoL, ctx.s_infoBuf);
+    setHidden(ctx.s_infoL, false);
+
+    snprintf(ctx.s_infoRBuf, sizeof(ctx.s_infoRBuf), "CH %u/%u",
+             (unsigned)(ctx.s_selIdx + 1), (unsigned)n);
+    lv_label_set_text_static(ctx.s_infoR, ctx.s_infoRBuf);
+    setHidden(ctx.s_infoR, false);
+  } else {
+    setHidden(ctx.s_bigFreq, true);
+    setHidden(ctx.s_infoL, true);
+    setHidden(ctx.s_infoR, true);
+  }
+
+  setHidden(ctx.s_detail, true);
+  setHidden(ctx.s_hint, true);
+  setHidden(ctx.s_sel, true);
+  lv_obj_set_pos(ctx.s_list, 0, LIST_VIEW_Y);
+  setHidden(ctx.s_list, false);
   clampTop();
 
-  char *p = ctx.s_listBuf;
-  char *end = ctx.s_listBuf + sizeof(ctx.s_listBuf);
-  p[0] = 0;
-  if (!n) {
-    snprintf(p, (size_t)(end - p), "#808080 no channels: L5 ADD from VFO#");
+  /* Строки пересобираем только при смене окна или содержимого: на каждом
+   * шаге скана меняется только курсор, и полная перерисовка списка бьёт по
+   * скорости (SPI-flush). */
+  if (ctx.s_top != ctx.s_listTopShown ||
+      ctx.s_listVer != ctx.s_listVerShown) {
+    char *p = ctx.s_listBuf;
+    char *end = ctx.s_listBuf + sizeof(ctx.s_listBuf);
+    p[0] = 0;
+    if (!n) {
+      snprintf(p, (size_t)(end - p), "#808080 no channels: L5 ADD from VFO#");
+    }
+    const bool L = gThemeLight;
+    for (uint16_t r = 0; r < LIST_VIEW_ROWS && ctx.s_top + r < n; ++r) {
+      CH row;
+      if (!CH_Read(ctx.s_view[ctx.s_top + r], &row))
+        continue;
+      const char *col = row.blacklist ? (L ? "606060" : "909090")
+                                      : (L ? "000000" : "ffffff");
+      int w =
+          snprintf(p, (size_t)(end - p), "#%s %c%-7.7s %4u.%05u %s %s#\n", col,
+                   row.blacklist ? '-' : ' ', row.name, (unsigned)(row.f / MHZ),
+                   (unsigned)(row.f % MHZ), MOD_NAMES[row.modulation & 7],
+                   radioName(row.radio));
+      if (w < 0 || w >= end - p)
+        break;
+      p += w;
+    }
+    lv_label_set_text_static(ctx.s_list, ctx.s_listBuf);
+    ctx.s_listTopShown = ctx.s_top;
+    ctx.s_listVerShown = ctx.s_listVer;
   }
-  const bool L = gThemeLight;
-  uint16_t rows = head ? ROWS_HEADER : ROWS;
-  for (uint16_t r = 0; r < rows && ctx.s_top + r < n; ++r) {
-    CH ch;
-    if (!CH_Read(ctx.s_view[ctx.s_top + r], &ch))
-      continue;
-    const char *col = ch.blacklist ? (L ? "606060" : "909090")
-                                   : (L ? "000000" : "ffffff");
-    int w = snprintf(p, (size_t)(end - p), "#%s %c%-7.7s %4u.%05u %s %s#\n",
-                     col, ch.blacklist ? '-' : ' ', ch.name,
-                     (unsigned)(ch.f / MHZ), (unsigned)(ch.f % MHZ),
-                     MOD_NAMES[ch.modulation & 7], radioName(ch.radio));
-    if (w < 0 || w >= end - p)
-      break;
-    p += w;
-  }
-  lv_label_set_text_static(ctx.s_list, ctx.s_listBuf);
 
   if (n) {
-    lv_obj_clear_flag(ctx.s_sel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(ctx.s_sel, 0,
-                   (head ? HEADER_LIST_Y : LIST_Y) +
-                       (ctx.s_selIdx - ctx.s_top) * ROW_H);
+    setHidden(ctx.s_cursor, false);
+    lv_obj_set_pos(ctx.s_cursor, 0,
+                   LIST_VIEW_Y + (ctx.s_selIdx - ctx.s_top) * ROW_H);
   } else {
-    lv_obj_add_flag(ctx.s_sel, LV_OBJ_FLAG_HIDDEN);
+    setHidden(ctx.s_cursor, true);
   }
-
-  CH ch;
-  if (ctx.s_msg[0]) {
-    snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "%s", ctx.s_msg);
-  } else if (n && readSel(&ch)) {
-    char ms2[16];
-    CH_MaskString(ms2, sizeof(ms2), ch.scanlists);
-    snprintf(ctx.s_detailBuf, sizeof(ctx.s_detailBuf), "#%u %s %s %s %s",
-             (unsigned)(ctx.s_view[ctx.s_selIdx] + 1), ms2,
-             MOD_NAMES[ch.modulation & 7], radioName(ch.radio), stateStr());
-  } else {
-    ctx.s_detailBuf[0] = ' ';
-    ctx.s_detailBuf[1] = 0;
-  }
-  lv_label_set_text_static(ctx.s_detail, ctx.s_detailBuf);
-
-  lv_label_set_text_static(
-      ctx.s_hint, ctx.s_scanning
-                      ? "1-8/0 SLIST S1 BLACK L5 ADD\nU/D PAUSE M>STOP M>VFO E>VFO"
-                      : "U/D SEL #EDIT S1 BLACK L5 ADD\n0>DEL 9>BL M>SCAN M>VFO E>VFO");
 
   ctx.s_dirty = false;
 }
 
 static void refreshForm(void) {
+  graphHide();
   const CH *c = &ctx.s_draft;
   char ms[16];
   snprintf(ctx.s_titleBuf, sizeof(ctx.s_titleBuf), "EDIT %-7.7s #%u",
            c->name[0] ? c->name : "CH", (unsigned)(ctx.s_draftStore + 1));
+  lv_obj_set_style_text_align(ctx.s_title, LV_TEXT_ALIGN_LEFT, LV_PART_MAIN);
   lv_label_set_text_static(ctx.s_title, ctx.s_titleBuf);
-  lv_obj_clear_flag(ctx.s_title, LV_OBJ_FLAG_HIDDEN);
-  if (ctx.s_nameLbl) {
-    lv_obj_add_flag(ctx.s_nameLbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ctx.s_freqLbl, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ctx.s_subLbl, LV_OBJ_FLAG_HIDDEN);
-  }
+  setHidden(ctx.s_title, false);
+  setHidden(ctx.s_bigFreq, true);
+  setHidden(ctx.s_infoL, true);
+  setHidden(ctx.s_infoR, true);
+  setHidden(ctx.s_cursor, true);
   lv_obj_set_pos(ctx.s_list, 4, LIST_Y);
+  setHidden(ctx.s_list, false);
+  setHidden(ctx.s_detail, false);
+  setHidden(ctx.s_hint, false);
 
   char *p = ctx.s_listBuf;
   char *end = ctx.s_listBuf + sizeof(ctx.s_listBuf);
@@ -1048,7 +1114,7 @@ static void refreshForm(void) {
   }
   lv_label_set_text_static(ctx.s_list, ctx.s_listBuf);
 
-  lv_obj_clear_flag(ctx.s_sel, LV_OBJ_FLAG_HIDDEN);
+  setHidden(ctx.s_sel, false);
   lv_obj_set_pos(ctx.s_sel, 0, listY(ctx.s_field));
 
   if (ctx.s_msg[0]) {
@@ -1171,6 +1237,8 @@ class ChannelsMode : public Mode {
 public:
   void enter() override {
     STATUSLINE_SetTitle("CHAN");
+    lv_port_set_direct_areas(true);
+    lv_port_set_spectrum_hidden(true);
     ctx.s_keep = false;
     ctx.s_menuLong = false;
     ctx.s_scanning = false;
@@ -1182,6 +1250,8 @@ public:
     ctx.s_field = FIELD_NAME;
     ctx.s_edit = EDIT_NONE;
     ctx.s_formChanged = false;
+    ctx.s_graphOn = false;
+    ctx.s_lastRssi = 0;
     NumVal_Cancel(&ctx.s_nv);
     ctx.s_saved = Vfo_Capture();
 
@@ -1195,29 +1265,44 @@ public:
                       LV_OPA_COVER);
     if (ctx.s_sel)
       lv_obj_set_style_bg_color(ctx.s_sel, selColor(), LV_PART_MAIN);
-    ctx.s_title = lvLabel(ctx.s_scr, F_M, C_YELLOW, 4, TITLE_Y, LCD_WIDTH - 8,
-                          LV_TEXT_ALIGN_LEFT);
-    ctx.s_list = lvLabel(ctx.s_scr, F_M, C_WHITE, 4, LIST_Y, LCD_WIDTH - 8,
-                         LV_TEXT_ALIGN_LEFT);
+    ctx.s_title = lvLabel(ctx.s_scr, F_M, C_YELLOW, UI_LEFT_X, TOP_Y,
+                          LCD_WIDTH - 2 * UI_LEFT_X, LV_TEXT_ALIGN_CENTER);
+    ctx.s_list =
+        lvLabel(ctx.s_scr, F_M, C_WHITE, 0, LIST_VIEW_Y, LCD_WIDTH,
+                LV_TEXT_ALIGN_LEFT);
     if (ctx.s_list)
       lv_label_set_recolor(ctx.s_list, true);
+    /* Мелкий курсор выбранной строки — вместо полноширинной подсветки:
+     * двигается на 8x16 px, а не на 240x16 px, и скан не упирается в SPI. */
+    ctx.s_cursor = lvLabel(ctx.s_scr, F_M, C_YELLOW, 0, LIST_VIEW_Y,
+                           FontW(F_M), LV_TEXT_ALIGN_LEFT);
+    if (ctx.s_cursor)
+      lv_label_set_text_static(ctx.s_cursor, ">");
     ctx.s_detail = lvLabel(ctx.s_scr, F_M, C_CYAN, 4, DETAIL_Y, LCD_WIDTH - 8,
                            LV_TEXT_ALIGN_LEFT);
     ctx.s_hint = lvLabel(ctx.s_scr, F_S, C_GRAY, 4, HINT_Y, LCD_WIDTH - 8,
                          LV_TEXT_ALIGN_LEFT);
     if (ctx.s_hint)
       lv_label_set_text_static(ctx.s_hint, "");
-    ctx.s_nameLbl = lvLabel(ctx.s_scr, F_L, C_WHITE, 4, HEADER_Y,
-                            LCD_WIDTH - 8, LV_TEXT_ALIGN_LEFT);
-    ctx.s_freqLbl = lvLabel(ctx.s_scr, F_M, C_WHITE, 4, HEADER_FREQ_Y,
-                            LCD_WIDTH - 8, LV_TEXT_ALIGN_LEFT);
-    ctx.s_subLbl = lvLabel(ctx.s_scr, F_S, C_GRAY, 4, HEADER_SUB_Y,
-                           LCD_WIDTH - 8, LV_TEXT_ALIGN_LEFT);
+    ctx.s_bigFreq = lvLabel(ctx.s_scr, F_XL, C_WHITE, 0, BIGFREQ_Y, LCD_WIDTH,
+                            LV_TEXT_ALIGN_CENTER);
+    ctx.s_infoL =
+        lvLabel(ctx.s_scr, F_S, C_WHITE, UI_LEFT_X, INFO_Y,
+                LCD_WIDTH - 2 * UI_LEFT_X, LV_TEXT_ALIGN_LEFT);
+    ctx.s_infoR =
+        lvLabel(ctx.s_scr, F_S, C_GRAY, UI_LEFT_X, INFO_Y,
+                LCD_WIDTH - 2 * UI_LEFT_X, LV_TEXT_ALIGN_RIGHT);
 
-    if (!ctx.s_scr || !ctx.s_sel || !ctx.s_title || !ctx.s_list ||
-        !ctx.s_detail || !ctx.s_nameLbl || !ctx.s_freqLbl || !ctx.s_subLbl)
+    if (!ctx.s_scr || !ctx.s_sel || !ctx.s_cursor || !ctx.s_title || !ctx.s_list ||
+        !ctx.s_detail || !ctx.s_hint || !ctx.s_bigFreq || !ctx.s_infoL ||
+        !ctx.s_infoR)
       return;
 
+    ctx.s_listVerShown = 0xFFFF;
+    ctx.s_listTopShown = 0xFFFF;
+    ctx.s_maskShown = 0xFFFF;
+    ctx.s_statusTitle = statusTitle();
+    STATUSLINE_SetTitle(ctx.s_statusTitle);
     rebuildView();
     ctx.s_selIdx = 0;
     ctx.s_top = 0;
@@ -1236,10 +1321,14 @@ public:
     ctx.s_scanning = false;
     ctx.s_hold = false;
     ctx.s_closedAt = 0;
+    LevelGraph_Hide();
+    ctx.s_graphOn = false;
+    lv_port_set_direct_areas(false);
     if (ctx.s_scr) {
       lv_obj_del(ctx.s_scr);
-      ctx.s_scr = ctx.s_sel = ctx.s_title = ctx.s_list = ctx.s_detail =
-          ctx.s_hint = ctx.s_nameLbl = ctx.s_freqLbl = ctx.s_subLbl = NULL;
+      ctx.s_scr = ctx.s_sel = ctx.s_cursor = ctx.s_title = ctx.s_list =
+          ctx.s_detail = ctx.s_hint = ctx.s_bigFreq = ctx.s_infoL = ctx.s_infoR =
+              NULL;
     }
     if (!ctx.s_keep)
       Vfo_Restore(ctx.s_saved, false);
@@ -1265,11 +1354,17 @@ public:
   }
 
   void render() override {
+    const char *title = statusTitle();
+    if (title != ctx.s_statusTitle) {
+      ctx.s_statusTitle = title;
+      STATUSLINE_SetTitle(title);
+    }
     STATUSLINE_render();
     if (!ctx.s_scr || !ctx.s_list)
       return;
     if (ctx.s_dirty)
       refresh();
+    levelTick(millis());
     if (NumVal_IsEditing(&ctx.s_nv))
       NumVal_Render(&ctx.s_nv);
   }
